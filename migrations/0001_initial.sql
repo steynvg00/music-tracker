@@ -18,9 +18,9 @@ CREATE TABLE albums (
   title TEXT NOT NULL,
   mbid TEXT UNIQUE,
   spotify_id TEXT UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (artist_id, lower(title))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX idx_albums_artist_title_lower ON albums (artist_id, lower(title));
 
 CREATE TABLE tracks (
   id BIGSERIAL PRIMARY KEY,
