@@ -47,7 +47,7 @@ class LastfmClient:
 
         raise RuntimeError(f"last.fm request failed after retries: {params}")
 
-    def fetch_recent_tracks(self, from_ts: int | None = None) -> Iterator[dict]:
+    def fetch_recent_tracks(self, from_ts: int | None = None, to_ts: int | None = None) -> Iterator[dict]:
         """Yield track dicts oldest→newest, skipping currently-playing entries."""
         page = 1
         total_pages = None
@@ -62,6 +62,8 @@ class LastfmClient:
             }
             if from_ts is not None:
                 params["from"] = from_ts
+            if to_ts is not None:
+                params["to"] = to_ts
 
             data = self._get(params)
             attr = data["recenttracks"]["@attr"]
