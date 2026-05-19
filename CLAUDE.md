@@ -41,6 +41,7 @@ uv add --dev <pkg>                   # add a dev-only dependency
 ## Migrations applied
 | # | Description | Date |
 |---|-------------|------|
+| 0001 | initial | 2026-05-19 |
 
 ## Session log
 | Date | Branch | Shipped |
