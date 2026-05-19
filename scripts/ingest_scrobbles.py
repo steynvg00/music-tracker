@@ -1,5 +1,7 @@
 import argparse
 import sys
+import time
+from datetime import datetime, timezone
 
 import psycopg
 
@@ -9,6 +11,7 @@ from lib.lastfm import LastfmClient
 
 SOURCE = "lastfm"
 COMMIT_EVERY = 500
+MAX_RETRIES = 3
 
 
 def _or_none(val: str) -> str | None:
@@ -98,6 +101,39 @@ def get_delta_ts(cur: psycopg.Cursor) -> int | None:
     return row[0] if row and row[0] is not None else None
 
 
+def get_backfill_to_ts(cur: psycopg.Cursor) -> int | None:
+    cur.execute(
+        "SELECT EXTRACT(EPOCH FROM MIN(played_at))::BIGINT FROM scrobbles WHERE source = %s",
+        (SOURCE,),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def process_track(cur: psycopg.Cursor, track: dict) -> bool:
+    artist_name = track["artist"]["#text"]
+    artist_mbid = _or_none(track["artist"].get("mbid", ""))
+    track_title = track["name"]
+    track_mbid = _or_none(track.get("mbid", ""))
+    album_title = _or_none(track["album"]["#text"])
+    album_mbid = _or_none(track["album"].get("mbid", ""))
+    played_at_ts = int(track["date"]["uts"])
+
+    artist_id = resolve_artist(cur, artist_name, artist_mbid)
+    album_id = resolve_album(cur, artist_id, album_title or "", album_mbid) if album_title else None
+    track_id = resolve_track(cur, artist_id, album_id, track_title, track_mbid)
+
+    cur.execute(
+        """
+        INSERT INTO scrobbles (track_id, played_at, source)
+        VALUES (%s, to_timestamp(%s), %s)
+        ON CONFLICT (source, played_at, track_id) DO NOTHING
+        """,
+        (track_id, played_at_ts, SOURCE),
+    )
+    return cur.rowcount == 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ingest last.fm scrobbles into Postgres")
     mode = parser.add_mutually_exclusive_group()
@@ -109,7 +145,17 @@ def main() -> None:
     conn = get_connection()
 
     from_ts: int | None = None
-    if args.delta:
+    to_ts: int | None = None
+
+    if args.backfill:
+        with conn.cursor() as cur:
+            to_ts = get_backfill_to_ts(cur)
+        if to_ts is not None:
+            iso = datetime.fromtimestamp(to_ts, tz=timezone.utc).isoformat()
+            print(f"Backfill resuming — fetching scrobbles older than {iso}")
+        else:
+            print("Full backfill from time 0")
+    elif args.delta:
         with conn.cursor() as cur:
             from_ts = get_delta_ts(cur)
         if from_ts:
@@ -118,40 +164,36 @@ def main() -> None:
             print("Delta run: no existing scrobbles found, fetching full history")
 
     processed = inserted = duplicates = 0
+    cur = conn.cursor()
 
-    with conn.cursor() as cur:
-        for track in client.fetch_recent_tracks(from_ts=from_ts):
-            artist_name = track["artist"]["#text"]
-            artist_mbid = _or_none(track["artist"].get("mbid", ""))
-            track_title = track["name"]
-            track_mbid = _or_none(track.get("mbid", ""))
-            album_title = _or_none(track["album"]["#text"])
-            album_mbid = _or_none(track["album"].get("mbid", ""))
-            played_at_ts = int(track["date"]["uts"])
+    for track in client.fetch_recent_tracks(from_ts=from_ts, to_ts=to_ts):
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                was_inserted = process_track(cur, track)
+                break
+            except psycopg.OperationalError:
+                if attempt == MAX_RETRIES:
+                    raise
+                print(f"Connection dropped, reconnecting (attempt {attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(5)
+                try:
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
+                conn = get_connection()
+                cur = conn.cursor()
 
-            artist_id = resolve_artist(cur, artist_name, artist_mbid)
-            album_id = resolve_album(cur, artist_id, album_title or "", album_mbid) if album_title else None
-            track_id = resolve_track(cur, artist_id, album_id, track_title, track_mbid)
+        processed += 1
+        inserted += int(was_inserted)
+        duplicates += int(not was_inserted)
 
-            cur.execute(
-                """
-                INSERT INTO scrobbles (track_id, played_at, source)
-                VALUES (%s, to_timestamp(%s), %s)
-                ON CONFLICT (source, played_at, track_id) DO NOTHING
-                """,
-                (track_id, played_at_ts, SOURCE),
-            )
-            was_inserted = cur.rowcount == 1
-            processed += 1
-            inserted += int(was_inserted)
-            duplicates += int(not was_inserted)
+        if processed % COMMIT_EVERY == 0:
+            conn.commit()
+            print(f"Processed {processed} scrobbles ({inserted} inserted, {duplicates} duplicates)")
 
-            if processed % COMMIT_EVERY == 0:
-                conn.commit()
-                print(f"Processed {processed} scrobbles ({inserted} inserted, {duplicates} duplicates)")
-
-        conn.commit()
-
+    conn.commit()
+    cur.close()
     conn.close()
     print(f"Done. {processed} scrobbles processed ({inserted} inserted, {duplicates} duplicates).")
 
