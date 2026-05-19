@@ -42,6 +42,7 @@ uv add --dev <pkg>                   # add a dev-only dependency
 | # | Description | Date |
 |---|-------------|------|
 | 0001 | initial | 2026-05-19 |
+| 0002 | track_spotify_searched | 2026-05-19 |
 
 ## Session log
 | Date | Branch | Shipped |
