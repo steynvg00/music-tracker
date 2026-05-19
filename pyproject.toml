@@ -8,5 +8,6 @@ dependencies = [
     "httpx>=0.28.1",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
+    "spotipy>=2.26.0",
     "streamlit>=1.57.0",
 ]
