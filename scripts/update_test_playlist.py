@@ -1,5 +1,8 @@
 """Generate/refresh the [test] 50+ plays Spotify playlist from scrobble data."""
 
+import sys
+sys.path.insert(0, ".")
+
 from lib.db import get_connection
 from lib.spotify import get_spotify_client
 from lib.playlists import (

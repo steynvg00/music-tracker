@@ -1,3 +1,5 @@
+import psycopg
+
 # Playlist helpers for music-tracker.
 #
 # SAFETY CONTRACT: modification calls (playlist_replace_items, playlist_add_items)
@@ -56,11 +58,21 @@ def ensure_track_spotify_id(sp, cur, track_id: int, artist: str, title: str) -> 
 
     if items:
         found_id = items[0]["id"]
-        cur.execute(
-            "UPDATE tracks SET spotify_id = %s, spotify_searched = TRUE WHERE id = %s",
-            (found_id, track_id),
-        )
-        return found_id
+        try:
+            cur.execute(
+                "UPDATE tracks SET spotify_id = %s, spotify_searched = TRUE WHERE id = %s",
+                (found_id, track_id),
+            )
+            return found_id
+        except psycopg.errors.UniqueViolation:
+            cur.connection.rollback()
+            cur.execute(
+                "UPDATE tracks SET spotify_searched = TRUE WHERE id = %s",
+                (track_id,),
+            )
+            cur.connection.commit()
+            print(f"Duplicate Spotify ID {found_id} for track {artist} — {title}; skipping")
+            return None
     else:
         cur.execute(
             "UPDATE tracks SET spotify_searched = TRUE WHERE id = %s",
