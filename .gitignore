@@ -218,3 +218,8 @@ __marimo__/
 
 # Project secrets
 .env
+
+# Spotify export data
+data/
+data/spotify_extended/
+*.zip
