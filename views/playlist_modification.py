@@ -142,7 +142,7 @@ with tab_make_a_playlist:
             df = pd.DataFrame(tracks)
             df_display = df[["track_name", "artist_name", "album_name", "plays", "release_year"]].copy()
             df_display.columns = ["Track", "Artist", "Album", "Plays", "Released"]
-            st.dataframe(df_display, use_container_width=True, height=400)
+            st.dataframe(df_display, width="stretch", height=400)
 
             st.divider()
             st.subheader("Create on Spotify")
