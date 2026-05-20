@@ -1,10 +1,23 @@
 """music-tracker dashboard — local Streamlit app for scrobble stats."""
 
+import os
 import sys
 sys.path.insert(0, ".")
 
 import pandas as pd
 import streamlit as st
+
+# Bridge Streamlit Cloud secrets into os.environ so lib.* modules
+# (which read from os.environ) work without modification across local,
+# GitHub Actions, and Streamlit Cloud.
+try:
+    for key in ("DATABASE_URL",):
+        if key in st.secrets:
+            os.environ[key] = st.secrets[key]
+except (FileNotFoundError, AttributeError):
+    # st.secrets raises FileNotFoundError locally if no secrets.toml exists.
+    # That's fine — .env via dotenv (loaded by lib.db) handles local.
+    pass
 
 from lib.db import get_connection
 
