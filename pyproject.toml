@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "pandas>=3.0.3",
+    "pillow",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
     "spotipy>=2.26.0",
