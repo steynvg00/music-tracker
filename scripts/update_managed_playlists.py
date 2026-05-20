@@ -9,7 +9,7 @@ import time
 from dotenv import load_dotenv
 import psycopg
 from lib.spotify import get_spotify_client
-from lib.playlists import MANAGED_PLAYLISTS, update_managed_playlist
+from lib.playlists import MANAGED_PLAYLISTS, update_managed_playlist, get_full_name
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     total = len(MANAGED_PLAYLISTS)
     start = time.time()
     for i, definition in enumerate(MANAGED_PLAYLISTS, start=1):
-        full_name = f"🤖 Auto · {definition.suffix}"
+        full_name = get_full_name(definition)
         print(f"\n[{i}/{total}] {full_name}", flush=True)
         try:
             result = update_managed_playlist(sp, conn, user_id, definition)
