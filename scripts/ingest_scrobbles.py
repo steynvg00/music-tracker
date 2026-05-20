@@ -162,6 +162,14 @@ def main() -> None:
             print(f"Delta run: fetching scrobbles after Unix timestamp {from_ts}")
         else:
             print("Delta run: no existing scrobbles found, fetching full history")
+    else:
+        with conn.cursor() as cur:
+            from_ts = get_delta_ts(cur)
+        if from_ts is not None:
+            iso = datetime.fromtimestamp(from_ts, tz=timezone.utc).isoformat()
+            print(f"Incremental ingest — fetching scrobbles newer than {iso}")
+        else:
+            print("Empty DB — fetching from beginning")
 
     processed = inserted = duplicates = 0
     cur = conn.cursor()
