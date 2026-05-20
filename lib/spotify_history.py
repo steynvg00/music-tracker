@@ -30,24 +30,46 @@ _FIELD_MAP = {
     "incognito_mode":                    "incognito_mode",
 }
 
-_INSERT_SQL = """
-    INSERT INTO spotify_plays (
-        played_at, ms_played, platform, country,
-        track_uri, track_name, artist_name, album_name,
-        episode_uri, episode_name, show_name,
-        audiobook_uri, audiobook_title, audiobook_chapter_uri, audiobook_chapter_title,
-        reason_start, reason_end,
-        shuffle, skipped, offline, offline_timestamp, incognito_mode
-    ) VALUES (
-        %(played_at)s, %(ms_played)s, %(platform)s, %(country)s,
-        %(track_uri)s, %(track_name)s, %(artist_name)s, %(album_name)s,
-        %(episode_uri)s, %(episode_name)s, %(show_name)s,
-        %(audiobook_uri)s, %(audiobook_title)s, %(audiobook_chapter_uri)s, %(audiobook_chapter_title)s,
-        %(reason_start)s, %(reason_end)s,
-        %(shuffle)s, %(skipped)s, %(offline)s, %(offline_timestamp)s, %(incognito_mode)s
-    )
-    ON CONFLICT DO NOTHING
+_COLS = (
+    "played_at", "ms_played", "platform", "country",
+    "track_uri", "track_name", "artist_name", "album_name",
+    "episode_uri", "episode_name", "show_name",
+    "audiobook_uri", "audiobook_title", "audiobook_chapter_uri", "audiobook_chapter_title",
+    "reason_start", "reason_end",
+    "shuffle", "skipped", "offline", "offline_timestamp", "incognito_mode",
+)
+
+_VALUES_PLACEHOLDER = (
+    "%(played_at)s, %(ms_played)s, %(platform)s, %(country)s, "
+    "%(track_uri)s, %(track_name)s, %(artist_name)s, %(album_name)s, "
+    "%(episode_uri)s, %(episode_name)s, %(show_name)s, "
+    "%(audiobook_uri)s, %(audiobook_title)s, %(audiobook_chapter_uri)s, %(audiobook_chapter_title)s, "
+    "%(reason_start)s, %(reason_end)s, "
+    "%(shuffle)s, %(skipped)s, %(offline)s, %(offline_timestamp)s, %(incognito_mode)s"
+)
+
+_INSERT_PREFIX = f"INSERT INTO spotify_plays ({', '.join(_COLS)}) VALUES ({_VALUES_PLACEHOLDER})"
+
+# Track plays: ON CONFLICT DO UPDATE with COALESCE so NULLs never overwrite existing values.
+_INSERT_TRACK_SQL = _INSERT_PREFIX + """
+    ON CONFLICT (played_at, track_uri) WHERE track_uri IS NOT NULL DO UPDATE SET
+        ms_played         = COALESCE(EXCLUDED.ms_played,         spotify_plays.ms_played),
+        platform          = COALESCE(EXCLUDED.platform,          spotify_plays.platform),
+        country           = COALESCE(EXCLUDED.country,           spotify_plays.country),
+        reason_start      = COALESCE(EXCLUDED.reason_start,      spotify_plays.reason_start),
+        reason_end        = COALESCE(EXCLUDED.reason_end,        spotify_plays.reason_end),
+        shuffle           = COALESCE(EXCLUDED.shuffle,           spotify_plays.shuffle),
+        skipped           = COALESCE(EXCLUDED.skipped,           spotify_plays.skipped),
+        offline           = COALESCE(EXCLUDED.offline,           spotify_plays.offline),
+        offline_timestamp = COALESCE(EXCLUDED.offline_timestamp, spotify_plays.offline_timestamp),
+        incognito_mode    = COALESCE(EXCLUDED.incognito_mode,    spotify_plays.incognito_mode),
+        track_name        = COALESCE(EXCLUDED.track_name,        spotify_plays.track_name),
+        artist_name       = COALESCE(EXCLUDED.artist_name,       spotify_plays.artist_name),
+        album_name        = COALESCE(EXCLUDED.album_name,        spotify_plays.album_name)
 """
+
+# Episodes and audiobooks: simple dedup — no upsert needed.
+_INSERT_OTHER_SQL = _INSERT_PREFIX + " ON CONFLICT DO NOTHING"
 
 
 def _normalize(raw: dict) -> dict:
@@ -81,7 +103,8 @@ def records_from_directory(directory: Path) -> Iterator[tuple[Path, list[dict]]]
 def ingest_records(conn, records: list[dict], dry_run: bool = False) -> dict:
     """Bulk-insert records into spotify_plays. Returns dict with keys: attempted, inserted, skipped.
 
-    Uses ON CONFLICT DO NOTHING on the unique indexes.
+    Track plays use ON CONFLICT DO UPDATE (COALESCE) to backfill NULL fields.
+    Episode/audiobook plays use ON CONFLICT DO NOTHING.
     """
     attempted = len(records)
     if attempted == 0:
@@ -89,9 +112,17 @@ def ingest_records(conn, records: list[dict], dry_run: bool = False) -> dict:
     if dry_run:
         return {"attempted": attempted, "inserted": attempted, "skipped": 0}
 
+    tracks = [r for r in records if r.get("track_uri")]
+    others = [r for r in records if not r.get("track_uri")]
+
+    inserted = 0
     with conn.cursor() as cur:
-        cur.executemany(_INSERT_SQL, records)
-        inserted = cur.rowcount if cur.rowcount >= 0 else 0
+        if tracks:
+            cur.executemany(_INSERT_TRACK_SQL, tracks)
+            inserted += cur.rowcount if cur.rowcount >= 0 else 0
+        if others:
+            cur.executemany(_INSERT_OTHER_SQL, others)
+            inserted += cur.rowcount if cur.rowcount >= 0 else 0
 
     conn.commit()
     skipped = attempted - inserted
