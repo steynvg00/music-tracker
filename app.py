@@ -65,8 +65,8 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_top, tab_trends, tab_onthisday = st.tabs([
-    "Overview", "Top tracks/artists", "Trends", "On this day"
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives = st.tabs([
+    "Overview", "Top tracks/artists", "Trends", "On this day", "Year in review", "Deep dives"
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -295,3 +295,275 @@ with tab_onthisday:
                 expanded=(year == onthisday_df["year"].max()),
             ):
                 st.dataframe(year_df[["artist", "track", "plays"]], hide_index=True, width='stretch')
+
+# ── Tab 5: Year in review ─────────────────────────────────────────────────────
+
+with tab_yir:
+    yir_years_df = query_df("""
+        SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr
+        FROM scrobbles
+        GROUP BY yr
+        HAVING COUNT(DISTINCT (played_at AT TIME ZONE 'Europe/Amsterdam')::date) >= 30
+        ORDER BY yr DESC
+    """)
+    yir_years = yir_years_df["yr"].tolist()
+    selected_yr = st.selectbox("Year", yir_years, index=0, key="yir_year")
+    prev_yr = selected_yr - 1
+
+    metrics_df = query_df_params("""
+        WITH filtered AS (
+            SELECT
+                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
+                a.name AS artist_name,
+                t.title AS track_title,
+                DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE source = 'lastfm'
+              AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+        )
+        SELECT
+            COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_curr,
+            COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_prev,
+            COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_curr,
+            COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_prev,
+            COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_curr,
+            COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_prev,
+            COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_curr,
+            COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_prev
+        FROM filtered
+    """, (selected_yr, prev_yr,
+          selected_yr, prev_yr,
+          selected_yr, prev_yr,
+          selected_yr, prev_yr,
+          selected_yr, prev_yr))
+
+    row = metrics_df.iloc[0]
+
+    def _delta(curr, prev):
+        return int(curr - prev) if prev > 0 else None
+
+    ycol1, ycol2, ycol3, ycol4 = st.columns(4)
+    ycol1.metric("Total scrobbles",  f"{int(row['scrobbles_curr']):,}",  delta=_delta(row['scrobbles_curr'],  row['scrobbles_prev']))
+    ycol2.metric("Unique tracks",    f"{int(row['tracks_curr']):,}",     delta=_delta(row['tracks_curr'],     row['tracks_prev']))
+    ycol3.metric("Unique artists",   f"{int(row['artists_curr']):,}",    delta=_delta(row['artists_curr'],    row['artists_prev']))
+    ycol4.metric("Listening days",   f"{int(row['days_curr']):,}",       delta=_delta(row['days_curr'],       row['days_prev']))
+
+    st.subheader("Top 10 tracks")
+    top10_tracks_df = query_df_params("""
+        SELECT a.name AS artist, t.title AS track, COUNT(*) AS plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE source = 'lastfm'
+          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        GROUP BY a.name, t.title
+        ORDER BY plays DESC
+        LIMIT 10
+    """, (selected_yr,))
+    top10_tracks_df = top10_tracks_df.rename(columns={"artist": "Artist", "track": "Track", "plays": "Plays"})
+    top10_tracks_df.insert(0, "Rank", range(1, len(top10_tracks_df) + 1))
+    st.dataframe(top10_tracks_df[["Rank", "Track", "Artist", "Plays"]], hide_index=True, width='stretch')
+
+    st.subheader("Top 10 artists")
+    top10_artists_df = query_df_params("""
+        SELECT a.name AS artist, COUNT(*) AS plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE source = 'lastfm'
+          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        GROUP BY a.name
+        ORDER BY plays DESC
+        LIMIT 10
+    """, (selected_yr,))
+    top10_artists_df = top10_artists_df.rename(columns={"artist": "Artist", "plays": "Plays"})
+    top10_artists_df.insert(0, "Rank", range(1, len(top10_artists_df) + 1))
+    st.dataframe(top10_artists_df[["Rank", "Artist", "Plays"]], hide_index=True, width='stretch')
+
+    st.subheader("Monthly distribution")
+    monthly_yr_df = query_df_params("""
+        SELECT
+            DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
+            COUNT(*) AS plays
+        FROM scrobbles
+        WHERE source = 'lastfm'
+          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        GROUP BY month_d
+        ORDER BY month_d
+    """, (selected_yr,))
+    monthly_yr_df["month_d"] = pd.to_datetime(monthly_yr_df["month_d"])
+
+    monthly_yr_chart = alt.Chart(monthly_yr_df).mark_bar().encode(
+        x=alt.X("month_d:T", title="Month"),
+        y=alt.Y("plays:Q", title="Scrobbles"),
+        tooltip=["month_d:T", "plays:Q"],
+    ).properties(height=300)
+    st.altair_chart(monthly_yr_chart, use_container_width=True)
+
+    if not monthly_yr_df.empty:
+        biggest_idx = int(monthly_yr_df["plays"].idxmax())
+        biggest_month_d = monthly_yr_df.loc[biggest_idx, "month_d"]
+        biggest_n = int(monthly_yr_df.loc[biggest_idx, "plays"])
+        biggest_month_name = pd.to_datetime(biggest_month_d).strftime("%B")
+
+        new_artists_df = query_df_params("""
+            WITH first_plays AS (
+                SELECT a.name AS artist_name,
+                       MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+                FROM scrobbles s
+                JOIN tracks t ON t.id = s.track_id
+                JOIN artists a ON a.id = t.artist_id
+                WHERE source = 'lastfm'
+                GROUP BY a.name
+            )
+            SELECT COUNT(*) AS new_artists
+            FROM first_plays
+            WHERE EXTRACT(YEAR FROM first_play) = %s
+        """, (selected_yr,))
+        new_artists_n = int(new_artists_df.iloc[0]["new_artists"])
+
+        st.caption(
+            f"Biggest month: **{biggest_month_name} {selected_yr}** ({biggest_n:,} scrobbles)"
+            f"  ·  First discoveries: **{new_artists_n:,} new artists** scrobbled for the first time this year"
+        )
+
+# ── Tab 6: Deep dives ─────────────────────────────────────────────────────────
+
+with tab_deepdives:
+    st.subheader("Artist battle")
+
+    top200_df = query_df("""
+        SELECT a.name AS artist, COUNT(*) AS plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE source = 'lastfm'
+        GROUP BY a.name
+        ORDER BY plays DESC
+        LIMIT 200
+    """)
+    artist_list = top200_df["artist"].tolist()
+
+    bcol1, bcol2 = st.columns(2)
+    with bcol1:
+        artist_a = st.selectbox("Artist A", artist_list, index=0, key="battle_artist_a")
+    with bcol2:
+        artist_b = st.selectbox("Artist B", artist_list, index=1, key="battle_artist_b")
+
+    battle_df = query_df_params("""
+        WITH monthly AS (
+            SELECT
+                a.name AS artist,
+                DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
+                COUNT(*) AS plays
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE source = 'lastfm'
+              AND a.name IN (%s, %s)
+            GROUP BY a.name, month_d
+        )
+        SELECT
+            artist,
+            month_d,
+            plays,
+            SUM(plays) OVER (PARTITION BY artist ORDER BY month_d) AS cumulative_plays
+        FROM monthly
+        ORDER BY artist, month_d
+    """, (artist_a, artist_b))
+    battle_df["month_d"] = pd.to_datetime(battle_df["month_d"])
+
+    battle_chart = alt.Chart(battle_df).mark_line(point=True).encode(
+        x=alt.X("month_d:T", title="Month"),
+        y=alt.Y("cumulative_plays:Q", title="Cumulative plays"),
+        color=alt.Color("artist:N", legend=alt.Legend(title="Artist")),
+        tooltip=["artist:N", "month_d:T", "cumulative_plays:Q"],
+    ).properties(height=350)
+    st.altair_chart(battle_chart, use_container_width=True)
+
+    artist_info_df = query_df_params("""
+        SELECT
+            a.name AS artist,
+            COUNT(*) AS plays,
+            MIN(DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS first_play_date
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE source = 'lastfm'
+          AND a.name IN (%s, %s)
+        GROUP BY a.name
+    """, (artist_a, artist_b))
+
+    info_a = artist_info_df[artist_info_df["artist"] == artist_a]
+    info_b = artist_info_df[artist_info_df["artist"] == artist_b]
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric(f"{artist_a} plays",      f"{int(info_a['plays'].iloc[0]):,}"            if not info_a.empty else "—")
+    mc2.metric(f"{artist_b} plays",      f"{int(info_b['plays'].iloc[0]):,}"            if not info_b.empty else "—")
+    mc3.metric(f"{artist_a} first play", str(info_a['first_play_date'].iloc[0])         if not info_a.empty else "—")
+    mc4.metric(f"{artist_b} first play", str(info_b['first_play_date'].iloc[0])         if not info_b.empty else "—")
+
+    st.divider()
+
+    st.subheader("Discovery rate")
+
+    discovery_df = query_df("""
+        WITH artist_firsts AS (
+            SELECT
+                a.name AS artist_name,
+                MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE source = 'lastfm'
+            GROUP BY a.name
+        ),
+        track_firsts AS (
+            SELECT
+                a.name AS artist_name,
+                t.title AS track_title,
+                MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE source = 'lastfm'
+            GROUP BY a.name, t.title
+        ),
+        artist_counts AS (
+            SELECT
+                DATE_TRUNC('month', first_play) AS month_d,
+                COUNT(*) AS cnt,
+                'New artists' AS series
+            FROM artist_firsts
+            GROUP BY month_d
+        ),
+        track_counts AS (
+            SELECT
+                DATE_TRUNC('month', first_play) AS month_d,
+                COUNT(*) AS cnt,
+                'New tracks' AS series
+            FROM track_firsts
+            GROUP BY month_d
+        )
+        SELECT month_d, cnt, series FROM artist_counts
+        UNION ALL
+        SELECT month_d, cnt, series FROM track_counts
+        ORDER BY series, month_d
+    """)
+    discovery_df["month_d"] = pd.to_datetime(discovery_df["month_d"])
+
+    discovery_chart = alt.Chart(discovery_df).mark_line(point=True).encode(
+        x=alt.X("month_d:T", title="Month"),
+        y=alt.Y("cnt:Q", title="Count"),
+        color=alt.Color("series:N", legend=alt.Legend(title="Series")),
+        tooltip=["series:N", "month_d:T", "cnt:Q"],
+    ).properties(height=350)
+    st.altair_chart(discovery_chart, use_container_width=True)
+
+    total_artists_disc = int(discovery_df[discovery_df["series"] == "New artists"]["cnt"].sum())
+    total_tracks_disc  = int(discovery_df[discovery_df["series"] == "New tracks"]["cnt"].sum())
+    st.caption(
+        f"Total artists discovered: **{total_artists_disc:,}** · Total unique tracks scrobbled: **{total_tracks_disc:,}**"
+    )
