@@ -65,9 +65,9 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_spotify = st.tabs([
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_spotify, tab_make_a_playlist = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Spotify"
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Spotify", "Make a playlist"
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1243,3 +1243,210 @@ with tab_spotify:
     )
 
     st.altair_chart((sp_reasons_chart + sp_reasons_text), use_container_width=True)
+
+# ── Tab 11: Make a playlist ───────────────────────────────────────────────────
+
+with tab_make_a_playlist:
+    st.header("Make a playlist")
+    st.caption(
+        "Create a custom one-off playlist on Spotify from your listening history. "
+        "Pick filters, preview the tracks, then create. The playlist is yours to keep "
+        "or delete — it won't refresh automatically."
+    )
+
+    from lib.temporary_playlists import (
+        list_artists,
+        query_temp_playlist_tracks,
+        create_temp_playlist,
+        build_filters_summary,
+    )
+    from lib.spotify import get_spotify_client
+
+    conn = get_connection()
+
+    @st.cache_data(ttl=300)
+    def _load_artists():
+        return list_artists(conn, limit=2000)
+
+    all_artists = _load_artists()
+    artist_names = [a[0] for a in all_artists]
+
+    st.subheader("Filters")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        selected_artists = st.multiselect(
+            "Artists (any of)",
+            options=artist_names,
+            default=[],
+            help="Match if any selected artist appears in the track's artist credit (handles collabs).",
+        )
+
+        release_year_range = st.slider(
+            "Release year range",
+            min_value=1980,
+            max_value=2026,
+            value=(1980, 2026),
+            help="Track's original release year (from track_metadata).",
+        )
+
+        discovery_year_range = st.slider(
+            "Discovery year range",
+            min_value=2017,
+            max_value=2026,
+            value=(2017, 2026),
+            help="Year you first played the track.",
+        )
+
+    with col2:
+        min_plays = st.number_input(
+            "Minimum play count",
+            min_value=1,
+            max_value=10000,
+            value=1,
+            step=1,
+        )
+
+        max_tracks = st.number_input(
+            "Maximum tracks",
+            min_value=1,
+            max_value=10000,
+            value=100,
+            step=10,
+        )
+
+        liked_only = st.checkbox(
+            "Liked songs only",
+            value=False,
+        )
+
+        sort_order = st.selectbox(
+            "Sort order",
+            options=[
+                ("plays_desc", "Most played first"),
+                ("plays_asc", "Least played first"),
+                ("first_play_asc", "First discovered first"),
+                ("first_play_desc", "Most recently discovered first"),
+                ("release_asc", "Oldest release first"),
+                ("release_desc", "Newest release first"),
+                ("random", "Random"),
+            ],
+            format_func=lambda x: x[1],
+        )[0]
+
+    release_year_min = release_year_range[0] if release_year_range[0] > 1980 else None
+    release_year_max = release_year_range[1] if release_year_range[1] < 2026 else None
+    discovery_year_min = discovery_year_range[0] if discovery_year_range[0] > 2017 else None
+    discovery_year_max = discovery_year_range[1] if discovery_year_range[1] < 2026 else None
+
+    st.divider()
+
+    if st.button("Preview matching tracks", type="primary"):
+        with st.spinner("Querying..."):
+            tracks = query_temp_playlist_tracks(
+                conn,
+                artists=selected_artists if selected_artists else None,
+                release_year_min=release_year_min,
+                release_year_max=release_year_max,
+                discovery_year_min=discovery_year_min,
+                discovery_year_max=discovery_year_max,
+                min_plays=min_plays if min_plays > 1 else None,
+                max_tracks=int(max_tracks),
+                liked_only=liked_only,
+                sort_order=sort_order,
+            )
+        st.session_state["temp_playlist_tracks"] = tracks
+        st.session_state["temp_playlist_filters"] = {
+            "artists": selected_artists,
+            "release_year_min": release_year_min,
+            "release_year_max": release_year_max,
+            "discovery_year_min": discovery_year_min,
+            "discovery_year_max": discovery_year_max,
+            "min_plays": min_plays if min_plays > 1 else None,
+            "liked_only": liked_only,
+            "sort_order": sort_order,
+        }
+
+    if "temp_playlist_tracks" in st.session_state:
+        tracks = st.session_state["temp_playlist_tracks"]
+        st.markdown(f"**{len(tracks)} tracks matching your filters**")
+
+        if tracks:
+            df = pd.DataFrame(tracks)
+            df_display = df[["track_name", "artist_name", "album_name", "plays", "release_year"]].copy()
+            df_display.columns = ["Track", "Artist", "Album", "Plays", "Released"]
+            st.dataframe(df_display, use_container_width=True, height=400)
+
+            st.divider()
+            st.subheader("Create on Spotify")
+            playlist_name = st.text_input(
+                "Playlist name (will get ' · Custom 🎧' appended)",
+                value="",
+                placeholder="e.g. 'Late night hardstyle' or 'Best of summer 2022'",
+            )
+
+            ttl_days = st.number_input(
+                "Auto-delete after (days)",
+                min_value=0,
+                max_value=365,
+                value=7,
+                step=1,
+                help="The playlist will be automatically deleted from Spotify after this many days. "
+                     "Set to 0 to make permanent (you can also change this in v0.32's Manage custom playlists view).",
+            )
+
+            if st.button("Create on Spotify", type="primary", disabled=not playlist_name.strip()):
+                with st.spinner("Creating playlist..."):
+                    from datetime import datetime, timedelta, timezone
+
+                    sp = get_spotify_client()
+                    user_id = sp.current_user()["id"]
+                    filters = st.session_state["temp_playlist_filters"]
+                    summary = build_filters_summary(
+                        filters["artists"],
+                        filters["release_year_min"],
+                        filters["release_year_max"],
+                        filters["discovery_year_min"],
+                        filters["discovery_year_max"],
+                        filters["min_plays"],
+                        filters["liked_only"],
+                        filters["sort_order"],
+                    )
+
+                    expires_at = None
+                    if ttl_days > 0:
+                        expires_at = datetime.now(timezone.utc) + timedelta(days=int(ttl_days))
+
+                    import psycopg
+                    write_conn = psycopg.connect(os.environ["DATABASE_URL"])
+                    try:
+                        result = create_temp_playlist(
+                            sp,
+                            user_id,
+                            playlist_name.strip(),
+                            [t["track_uri"] for t in tracks],
+                            summary,
+                            conn=write_conn,
+                            expires_at=expires_at,
+                        )
+                    finally:
+                        write_conn.close()
+
+                if expires_at:
+                    expiry_local = expires_at.strftime("%Y-%m-%d %H:%M UTC")
+                    st.success(
+                        f"Created **{result['name']}** with {result['track_count']} tracks. "
+                        f"Auto-deletes on **{expiry_local}**. "
+                        f"[Open on Spotify]({result['url']})"
+                    )
+                else:
+                    st.success(
+                        f"Created **{result['name']}** with {result['track_count']} tracks. "
+                        f"**Permanent** — delete manually when done. "
+                        f"[Open on Spotify]({result['url']})"
+                    )
+
+                del st.session_state["temp_playlist_tracks"]
+                del st.session_state["temp_playlist_filters"]
+        else:
+            st.info("No tracks match these filters. Try widening the criteria.")

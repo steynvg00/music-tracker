@@ -6,6 +6,7 @@ on:
     - cron: "*/30 * * * *"  # Every 30 minutes — Spotify recently-played
     - cron: "0 3 * * *"    # Daily 03:00 UTC — Spotify liked songs sync
     - cron: "30 3 * * *"  # Daily 03:30 UTC — Spotify track metadata enrichment
+    - cron: "0 4 * * *"   # Daily 04:00 UTC — sweep expired custom playlists
   workflow_dispatch:
 
 permissions:
@@ -116,6 +117,29 @@ jobs:
 
       - name: Enrich track metadata
         run: uv run python scripts/enrich_track_metadata.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  sweep-expired-custom-playlists:
+    name: Sweep expired custom playlists
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 4 * * *'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Sweep expired custom playlists
+        run: uv run python scripts/sweep_expired_custom_playlists.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
