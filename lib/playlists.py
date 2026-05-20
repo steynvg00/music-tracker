@@ -156,6 +156,40 @@ def query_top_all_time(limit: int):
 
 # ── Query helpers (dynamic) ───────────────────────────────────────────────────
 
+def query_year_released_tracks(release_bucket: str):
+    """Returns a query function for liked tracks in the given release bucket.
+
+    release_bucket is either 'Pre-2013' (all tracks with release_year < 2013) or a
+    year string like '2024' (tracks with release_year = that year).
+    """
+    def fn(conn):
+        cur = conn.cursor()
+        if release_bucket == "Pre-2013":
+            cur.execute(
+                """
+                SELECT ls.track_uri
+                FROM liked_songs ls
+                INNER JOIN track_metadata tm ON tm.track_uri = ls.track_uri
+                WHERE tm.release_year IS NOT NULL
+                  AND tm.release_year < 2013
+                ORDER BY tm.release_date ASC NULLS LAST, ls.liked_at ASC
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT ls.track_uri
+                FROM liked_songs ls
+                INNER JOIN track_metadata tm ON tm.track_uri = ls.track_uri
+                WHERE tm.release_year = %s
+                ORDER BY tm.release_date ASC NULLS LAST, ls.liked_at ASC
+                """,
+                (int(release_bucket),),
+            )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
 def query_year_discovered_tracks(discovered_year: str):
     """Returns a query function for liked tracks first discovered in the given year (or 'Undefined').
 
@@ -354,6 +388,61 @@ def year_discovered_playlists(conn) -> list[PlaylistDefinition]:
     return definitions
 
 
+def year_released_playlists(conn) -> list[PlaylistDefinition]:
+    """Generate one PlaylistDefinition per release-year bucket for liked songs.
+
+    Years < 2013 collapse into a single 'Pre-2013' bucket. Years >= 2013 get per-year
+    playlists. Excludes future-dated tracks (release_year > current year). Skips empty
+    buckets (HAVING > 0). Returns newest year first, then 'Pre-2013' at the end.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        WITH classified AS (
+            SELECT
+                CASE
+                    WHEN tm.release_year < 2013 THEN 'Pre-2013'
+                    ELSE tm.release_year::text
+                END AS release_bucket
+            FROM liked_songs ls
+            INNER JOIN track_metadata tm ON tm.track_uri = ls.track_uri
+            WHERE tm.release_year IS NOT NULL
+              AND tm.release_year <= EXTRACT(YEAR FROM NOW())::int
+        )
+        SELECT release_bucket, COUNT(*) AS cnt
+        FROM classified
+        GROUP BY release_bucket
+        HAVING COUNT(*) > 0
+        ORDER BY
+            CASE WHEN release_bucket = 'Pre-2013' THEN 1 ELSE 0 END,
+            release_bucket DESC
+        """
+    )
+    rows = cur.fetchall()
+
+    definitions = []
+    for release_bucket, _count in rows:
+        suffix = f"{release_bucket} · Released"
+        if release_bucket == "Pre-2013":
+            description = (
+                "Liked tracks released before 2013, ordered by release date."
+            )
+        else:
+            description = (
+                f"Liked tracks released in {release_bucket}, ordered by release date within the year."
+            )
+        definitions.append(
+            PlaylistDefinition(
+                suffix=suffix,
+                description=description,
+                query_fn=query_year_released_tracks(release_bucket),
+                kind="updating",
+            )
+        )
+
+    return definitions
+
+
 def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     """Return all managed playlist definitions (static + dynamic).
 
@@ -362,6 +451,7 @@ def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     """
     dynamic = []
     dynamic.extend(year_discovered_playlists(conn))
+    dynamic.extend(year_released_playlists(conn))
     return STATIC_PLAYLISTS + dynamic
 
 
