@@ -14,15 +14,25 @@ MANAGED_PLAYLIST_NAME = "[test] music-tracker — 50+ plays"
 
 def find_or_create_managed_playlist(sp, user_id: str) -> str:
     """Return the id of the managed playlist, creating it if it doesn't exist."""
+    print("[playlists] Listing user playlists (paginated)...", flush=True)
     offset = 0
+    target_id = None
+    n = 0
     while True:
         page = sp.current_user_playlists(limit=50, offset=offset)
-        for pl in page["items"]:
+        items = page["items"]
+        print(f"[playlists]   page {n}: {len(items)} playlists fetched", flush=True)
+        for pl in items:
             if pl["name"] == MANAGED_PLAYLIST_NAME and pl["owner"]["id"] == user_id:
-                return pl["id"]
-        if page["next"] is None:
+                target_id = pl["id"]
+                break
+        if target_id or page["next"] is None:
             break
         offset += 50
+        n += 1
+    print("[playlists] Found existing managed playlist." if target_id else "[playlists] No existing playlist, will create new.", flush=True)
+    if target_id:
+        return target_id
 
     new = sp.user_playlist_create(
         user=user_id,
@@ -83,10 +93,16 @@ def ensure_track_spotify_id(sp, cur, track_id: int, artist: str, title: str) -> 
 
 def replace_playlist_tracks(sp, playlist_id: str, uris: list[str]) -> None:
     """Replace the playlist's tracks with the given URIs."""
+    print(f"[playlists] Replacing playlist contents with {len(uris)} tracks...", flush=True)
     if not uris:
         sp.playlist_replace_items(playlist_id, [])
+        print("[playlists] Replace complete.", flush=True)
         return
 
     sp.playlist_replace_items(playlist_id, uris[:100])
     for i in range(100, len(uris), 100):
-        sp.playlist_add_items(playlist_id, uris[i : i + 100])
+        batch = uris[i : i + 100]
+        print(f"[playlists]   Adding batch of {len(batch)} tracks...", flush=True)
+        sp.playlist_add_items(playlist_id, batch)
+        print("[playlists]   Batch added.", flush=True)
+    print("[playlists] Replace complete.", flush=True)
