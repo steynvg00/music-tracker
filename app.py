@@ -10,7 +10,7 @@ import streamlit as st
 # (which read from os.environ) work without modification across local,
 # GitHub Actions, and Streamlit Cloud.
 try:
-    for key in ("DATABASE_URL",):
+    for key in ("DATABASE_URL", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_REFRESH_TOKEN"):
         if key in st.secrets:
             os.environ[key] = st.secrets[key]
 except (FileNotFoundError, AttributeError):
