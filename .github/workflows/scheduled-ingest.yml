@@ -2,19 +2,21 @@ name: Scheduled ingest
 
 on:
   schedule:
-    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"     # Mondays 06:00 UTC — last.fm weekly ingest
+    - cron: "*/30 * * * *"  # Every 30 minutes — Spotify recently-played
   workflow_dispatch:
-
-concurrency:
-  group: scheduled-ingest
-  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   ingest:
+    name: last.fm weekly ingest
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * 1'
     runs-on: ubuntu-latest
+    concurrency:
+      group: scheduled-ingest
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen
 
       - name: Ingest scrobbles
         run: uv run python scripts/ingest_scrobbles.py
@@ -36,6 +38,30 @@ jobs:
       - name: Refresh playlist
         if: success()
         run: uv run python scripts/update_test_playlist.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  spotify-recent:
+    name: Spotify recently-played ingest
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/30 * * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: spotify-recent
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      - run: uv run python scripts/ingest_spotify_recent.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}

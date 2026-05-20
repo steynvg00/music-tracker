@@ -76,16 +76,16 @@ with tab_overview:
     col1, col2, col3, col4 = st.columns(4)
 
     total_scrobbles = query_df(
-        "SELECT COUNT(*) AS n FROM scrobbles WHERE source = 'lastfm'"
+        "SELECT COUNT(*) AS n FROM unified_plays"
     ).iloc[0]["n"]
     unique_tracks = query_df(
-        "SELECT COUNT(DISTINCT track_id) AS n FROM scrobbles WHERE source = 'lastfm'"
+        "SELECT COUNT(DISTINCT track) AS n FROM unified_plays"
     ).iloc[0]["n"]
     unique_artists = query_df(
-        "SELECT COUNT(DISTINCT t.artist_id) AS n FROM scrobbles s JOIN tracks t ON t.id = s.track_id WHERE source = 'lastfm'"
+        "SELECT COUNT(DISTINCT artist) AS n FROM unified_plays"
     ).iloc[0]["n"]
     date_range_df = query_df(
-        "SELECT MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first, MAX(played_at AT TIME ZONE 'Europe/Amsterdam') AS last FROM scrobbles WHERE source = 'lastfm'"
+        "SELECT MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first, MAX(played_at AT TIME ZONE 'Europe/Amsterdam') AS last FROM unified_plays"
     )
     first_date = date_range_df.iloc[0]["first"]
     last_date = date_range_df.iloc[0]["last"]
@@ -104,13 +104,13 @@ with tab_overview:
     col5, col6, col7, col8 = st.columns(4)
 
     days_listening = query_df(
-        "SELECT COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS n FROM scrobbles WHERE source = 'lastfm'"
+        "SELECT COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS n FROM unified_plays"
     ).iloc[0]["n"]
 
     current_streak_df = query_df("""
         WITH days AS (
             SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
-            FROM scrobbles WHERE source = 'lastfm'
+            FROM unified_plays
         ),
         groups AS (
             SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
@@ -127,7 +127,7 @@ with tab_overview:
     longest_streak_df = query_df("""
         WITH days AS (
             SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
-            FROM scrobbles WHERE source = 'lastfm'
+            FROM unified_plays
         ),
         groups AS (
             SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
@@ -152,7 +152,7 @@ with tab_overview:
     monthly_df = query_df("""
         SELECT TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS month,
                COUNT(*) AS plays
-        FROM scrobbles WHERE source = 'lastfm'
+        FROM unified_plays
         GROUP BY month ORDER BY month
     """)
     st.bar_chart(monthly_df.set_index("month"))
@@ -175,12 +175,10 @@ with tab_top:
     }[period]
 
     top_tracks_sql = f"""
-        SELECT a.name AS artist, t.title AS track, COUNT(s.id) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm' {period_filter}
-        GROUP BY a.name, t.title
+        SELECT artist, track, COUNT(*) AS plays
+        FROM unified_plays
+        WHERE TRUE {period_filter}
+        GROUP BY artist, track
         ORDER BY plays DESC
         LIMIT 50
     """
@@ -190,12 +188,10 @@ with tab_top:
     st.divider()
 
     top_artists_sql = f"""
-        SELECT a.name AS artist, COUNT(s.id) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm' {period_filter}
-        GROUP BY a.name
+        SELECT artist, COUNT(*) AS plays
+        FROM unified_plays
+        WHERE TRUE {period_filter}
+        GROUP BY artist
         ORDER BY plays DESC
         LIMIT 50
     """
@@ -206,7 +202,7 @@ with tab_top:
 
 with tab_trends:
     years_df = query_df(
-        "SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS y FROM scrobbles WHERE source = 'lastfm' ORDER BY y DESC"
+        "SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS y FROM unified_plays ORDER BY y DESC"
     )
     years = years_df["y"].tolist()
     selected_year = st.selectbox("Year", years, index=0)
@@ -216,9 +212,8 @@ with tab_trends:
     cal_df = query_df_params(
         """
         SELECT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS day, COUNT(*) AS plays
-        FROM scrobbles
-        WHERE source = 'lastfm'
-          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        FROM unified_plays
+        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
         GROUP BY day
         """,
         (selected_year,),
@@ -252,7 +247,7 @@ with tab_trends:
         SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow,
                EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour,
                COUNT(*) AS plays
-        FROM scrobbles WHERE source = 'lastfm'
+        FROM unified_plays
         GROUP BY dow, hour
         ORDER BY dow, hour
     """)
@@ -275,12 +270,9 @@ with tab_onthisday:
 
     onthisday_df = query_df("""
         SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year,
-               a.name AS artist, t.title AS track, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm'
-          AND EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(MONTH FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
+               artist, track, COUNT(*) AS plays
+        FROM unified_plays
+        WHERE EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(MONTH FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
           AND EXTRACT(DAY FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(DAY FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
         GROUP BY year, artist, track
         ORDER BY year DESC, plays DESC
@@ -302,7 +294,7 @@ with tab_onthisday:
 with tab_yir:
     yir_years_df = query_df("""
         SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr
-        FROM scrobbles
+        FROM unified_plays
         GROUP BY yr
         HAVING COUNT(DISTINCT (played_at AT TIME ZONE 'Europe/Amsterdam')::date) >= 30
         ORDER BY yr DESC
@@ -315,14 +307,11 @@ with tab_yir:
         WITH filtered AS (
             SELECT
                 EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
-                a.name AS artist_name,
-                t.title AS track_title,
+                artist AS artist_name,
+                track AS track_title,
                 DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE source = 'lastfm'
-              AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+            FROM unified_plays
+            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
         )
         SELECT
             COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_curr,
@@ -353,13 +342,10 @@ with tab_yir:
 
     st.subheader("Top 10 tracks")
     top10_tracks_df = query_df_params("""
-        SELECT a.name AS artist, t.title AS track, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE source = 'lastfm'
-          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY a.name, t.title
+        SELECT artist, track, COUNT(*) AS plays
+        FROM unified_plays
+        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        GROUP BY artist, track
         ORDER BY plays DESC
         LIMIT 10
     """, (selected_yr,))
@@ -369,13 +355,10 @@ with tab_yir:
 
     st.subheader("Top 10 artists")
     top10_artists_df = query_df_params("""
-        SELECT a.name AS artist, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE source = 'lastfm'
-          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY a.name
+        SELECT artist, COUNT(*) AS plays
+        FROM unified_plays
+        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        GROUP BY artist
         ORDER BY plays DESC
         LIMIT 10
     """, (selected_yr,))
@@ -388,9 +371,8 @@ with tab_yir:
         SELECT
             DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
             COUNT(*) AS plays
-        FROM scrobbles
-        WHERE source = 'lastfm'
-          AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+        FROM unified_plays
+        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
         GROUP BY month_d
         ORDER BY month_d
     """, (selected_yr,))
@@ -411,13 +393,10 @@ with tab_yir:
 
         new_artists_df = query_df_params("""
             WITH first_plays AS (
-                SELECT a.name AS artist_name,
+                SELECT artist AS artist_name,
                        MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-                FROM scrobbles s
-                JOIN tracks t ON t.id = s.track_id
-                JOIN artists a ON a.id = t.artist_id
-                WHERE source = 'lastfm'
-                GROUP BY a.name
+                FROM unified_plays
+                GROUP BY artist
             )
             SELECT COUNT(*) AS new_artists
             FROM first_plays
@@ -436,12 +415,9 @@ with tab_deepdives:
     st.subheader("Artist battle")
 
     top200_df = query_df("""
-        SELECT a.name AS artist, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE source = 'lastfm'
-        GROUP BY a.name
+        SELECT artist, COUNT(*) AS plays
+        FROM unified_plays
+        GROUP BY artist
         ORDER BY plays DESC
         LIMIT 200
     """)
@@ -456,15 +432,12 @@ with tab_deepdives:
     battle_df = query_df_params("""
         WITH monthly AS (
             SELECT
-                a.name AS artist,
+                artist,
                 DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
                 COUNT(*) AS plays
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE source = 'lastfm'
-              AND a.name IN (%s, %s)
-            GROUP BY a.name, month_d
+            FROM unified_plays
+            WHERE artist IN (%s, %s)
+            GROUP BY artist, month_d
         )
         SELECT
             artist,
@@ -486,15 +459,12 @@ with tab_deepdives:
 
     artist_info_df = query_df_params("""
         SELECT
-            a.name AS artist,
+            artist,
             COUNT(*) AS plays,
             MIN(DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS first_play_date
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE source = 'lastfm'
-          AND a.name IN (%s, %s)
-        GROUP BY a.name
+        FROM unified_plays
+        WHERE artist IN (%s, %s)
+        GROUP BY artist
     """, (artist_a, artist_b))
 
     info_a = artist_info_df[artist_info_df["artist"] == artist_a]
@@ -513,24 +483,18 @@ with tab_deepdives:
     discovery_df = query_df("""
         WITH artist_firsts AS (
             SELECT
-                a.name AS artist_name,
+                artist AS artist_name,
                 MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE source = 'lastfm'
-            GROUP BY a.name
+            FROM unified_plays
+            GROUP BY artist
         ),
         track_firsts AS (
             SELECT
-                a.name AS artist_name,
-                t.title AS track_title,
+                artist AS artist_name,
+                track AS track_title,
                 MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE source = 'lastfm'
-            GROUP BY a.name, t.title
+            FROM unified_plays
+            GROUP BY artist, track
         ),
         artist_counts AS (
             SELECT
@@ -578,17 +542,13 @@ with tab_personality:
 
     album_depth_df = query_df("""
         SELECT
-            al.title AS album,
-            a.name AS artist,
-            COUNT(DISTINCT t.title) AS unique_tracks,
+            album,
+            artist,
+            COUNT(DISTINCT track) AS unique_tracks,
             COUNT(*) AS total_plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        LEFT JOIN albums al ON al.id = t.album_id
-        WHERE s.source = 'lastfm'
-          AND al.title IS NOT NULL AND al.title <> ''
-        GROUP BY al.title, a.name
+        FROM unified_plays
+        WHERE album IS NOT NULL AND album <> ''
+        GROUP BY album, artist
         ORDER BY unique_tracks DESC, total_plays DESC
         LIMIT 20
     """)
@@ -608,15 +568,12 @@ with tab_personality:
     dow_split_df = query_df("""
         WITH labeled AS (
             SELECT
-                a.name AS artist,
+                artist,
                 CASE
                     WHEN EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
                     ELSE 'weekday'
                 END AS day_type
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
+            FROM unified_plays
         ),
         ranked AS (
             SELECT
@@ -658,19 +615,18 @@ with tab_personality:
             SELECT
                 COUNT(*) AS total_plays,
                 COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS total_days
-            FROM scrobbles
-            WHERE source = 'lastfm'
+            FROM unified_plays
         ),
         hour_top AS (
             SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d
-            FROM scrobbles WHERE source = 'lastfm'
+            FROM unified_plays
             GROUP BY hour_d
             ORDER BY COUNT(*) DESC
             LIMIT 1
         ),
         dow_top AS (
             SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow_d
-            FROM scrobbles WHERE source = 'lastfm'
+            FROM unified_plays
             GROUP BY dow_d
             ORDER BY COUNT(*) DESC
             LIMIT 1
@@ -704,8 +660,7 @@ with tab_records:
             SELECT
                 (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d,
                 COUNT(*) AS plays
-            FROM scrobbles
-            WHERE source = 'lastfm'
+            FROM unified_plays
             GROUP BY day_d
         )
         SELECT day_d, plays FROM daily ORDER BY plays DESC LIMIT 1
@@ -722,13 +677,10 @@ with tab_records:
             st.metric("Scrobbles",  f"{bd_plays:,}")
         with bd_col2:
             top5_df = query_df_params("""
-                SELECT t.title AS track, a.name AS artist, COUNT(*) AS plays
-                FROM scrobbles s
-                JOIN tracks t ON t.id = s.track_id
-                JOIN artists a ON a.id = t.artist_id
-                WHERE s.source = 'lastfm'
-                  AND (played_at AT TIME ZONE 'Europe/Amsterdam')::date = %s
-                GROUP BY t.title, a.name
+                SELECT track, artist, COUNT(*) AS plays
+                FROM unified_plays
+                WHERE (played_at AT TIME ZONE 'Europe/Amsterdam')::date = %s
+                GROUP BY track, artist
                 ORDER BY plays DESC
                 LIMIT 5
             """, (bd["day_d"],))
@@ -746,16 +698,13 @@ with tab_records:
         WITH gaps AS (
             SELECT
                 played_at,
-                a.name AS artist,
-                t.title AS track,
+                artist,
+                track,
                 LAG(played_at) OVER (ORDER BY played_at) AS prev_played,
-                LAG(a.name)    OVER (ORDER BY played_at) AS prev_artist,
-                LAG(t.title)   OVER (ORDER BY played_at) AS prev_track,
+                LAG(artist)    OVER (ORDER BY played_at) AS prev_artist,
+                LAG(track)     OVER (ORDER BY played_at) AS prev_track,
                 played_at - LAG(played_at) OVER (ORDER BY played_at) AS gap_duration
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
+            FROM unified_plays
         )
         SELECT played_at, artist, track, prev_played, prev_artist, prev_track, gap_duration
         FROM gaps
@@ -798,12 +747,9 @@ with tab_records:
             SELECT
                 ROW_NUMBER() OVER (ORDER BY played_at) AS n,
                 played_at,
-                a.name AS artist,
-                t.title AS track
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
+                artist,
+                track
+            FROM unified_plays
         )
         SELECT n, played_at, artist, track
         FROM numbered
@@ -826,17 +772,14 @@ with tab_records:
         WITH yearly AS (
             SELECT
                 EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-                a.name AS artist,
+                artist,
                 COUNT(*) AS plays,
                 ROW_NUMBER() OVER (
                     PARTITION BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int
                     ORDER BY COUNT(*) DESC
                 ) AS rnk
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
-            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, a.name
+            FROM unified_plays
+            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
         )
         SELECT year_d AS "Year", artist AS "Top artist", plays AS "Plays"
         FROM yearly
@@ -856,13 +799,13 @@ with tab_highlights:
 
     hl_years_df = query_df(
         "SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS y "
-        "FROM scrobbles WHERE source = 'lastfm' ORDER BY y DESC"
+        "FROM unified_plays ORDER BY y DESC"
     )
     hl_years = hl_years_df["y"].tolist()
 
     hl_months_df = query_df(
         "SELECT DISTINCT TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS m "
-        "FROM scrobbles WHERE source = 'lastfm' ORDER BY m DESC"
+        "FROM unified_plays ORDER BY m DESC"
     )
     hl_months = hl_months_df["m"].tolist()
 
@@ -878,14 +821,11 @@ with tab_highlights:
             WITH filtered AS (
                 SELECT
                     EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS period_key,
-                    a.name AS artist_name,
-                    t.title AS track_title,
+                    artist AS artist_name,
+                    track AS track_title,
                     DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-                FROM scrobbles s
-                JOIN tracks t ON t.id = s.track_id
-                JOIN artists a ON a.id = t.artist_id
-                WHERE s.source = 'lastfm'
-                  AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+                FROM unified_plays
+                WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
             )
             SELECT
                 COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
@@ -908,14 +848,11 @@ with tab_highlights:
             WITH filtered AS (
                 SELECT
                     TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS period_key,
-                    a.name AS artist_name,
-                    t.title AS track_title,
+                    artist AS artist_name,
+                    track AS track_title,
                     DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-                FROM scrobbles s
-                JOIN tracks t ON t.id = s.track_id
-                JOIN artists a ON a.id = t.artist_id
-                WHERE s.source = 'lastfm'
-                  AND TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') IN (%s, %s)
+                FROM unified_plays
+                WHERE TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') IN (%s, %s)
             )
             SELECT
                 COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
@@ -945,17 +882,14 @@ with tab_highlights:
 
     ach_first = query_df("""
         SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS first_d,
-               a.name AS artist, t.title AS track
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm'
+               artist, track
+        FROM unified_plays
         ORDER BY played_at ASC LIMIT 1
     """)
     ach_streak = query_df("""
         WITH days AS (
             SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
-            FROM scrobbles WHERE source = 'lastfm'
+            FROM unified_plays
         ),
         grps AS (
             SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
@@ -967,46 +901,37 @@ with tab_highlights:
     """)
     ach_marathon = query_df("""
         SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d, COUNT(*) AS plays
-        FROM scrobbles WHERE source = 'lastfm'
+        FROM unified_plays
         GROUP BY day_d ORDER BY plays DESC LIMIT 1
     """)
     ach_top_artist = query_df("""
-        SELECT a.name AS artist, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm'
-        GROUP BY a.name ORDER BY plays DESC LIMIT 1
+        SELECT artist, COUNT(*) AS plays
+        FROM unified_plays
+        GROUP BY artist ORDER BY plays DESC LIMIT 1
     """)
     ach_top_track = query_df("""
-        SELECT a.name AS artist, t.title AS track, COUNT(*) AS plays
-        FROM scrobbles s
-        JOIN tracks t ON t.id = s.track_id
-        JOIN artists a ON a.id = t.artist_id
-        WHERE s.source = 'lastfm'
-        GROUP BY a.name, t.title ORDER BY plays DESC LIMIT 1
+        SELECT artist, track, COUNT(*) AS plays
+        FROM unified_plays
+        GROUP BY artist, track ORDER BY plays DESC LIMIT 1
     """)
     ach_best_year = query_df("""
         SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d, COUNT(*) AS plays
-        FROM scrobbles WHERE source = 'lastfm'
+        FROM unified_plays
         GROUP BY year_d ORDER BY plays DESC LIMIT 1
     """)
     ach_discovery = query_df("""
         WITH firsts AS (
-            SELECT a.name AS artist_name,
+            SELECT artist AS artist_name,
                    EXTRACT(YEAR FROM MIN(played_at AT TIME ZONE 'Europe/Amsterdam'))::int AS first_yr
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
-            GROUP BY a.name
+            FROM unified_plays
+            GROUP BY artist
         )
         SELECT first_yr AS year_d, COUNT(*) AS new_artists
         FROM firsts GROUP BY first_yr ORDER BY new_artists DESC LIMIT 1
     """)
     ach_peak_hour = query_df("""
         SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d, COUNT(*) AS plays
-        FROM scrobbles WHERE source = 'lastfm'
+        FROM unified_plays
         GROUP BY hour_d ORDER BY plays DESC LIMIT 1
     """)
 
@@ -1071,13 +996,10 @@ with tab_highlights:
         WITH yearly AS (
             SELECT
                 EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-                a.name AS artist,
+                artist,
                 COUNT(*) AS plays
-            FROM scrobbles s
-            JOIN tracks t ON t.id = s.track_id
-            JOIN artists a ON a.id = t.artist_id
-            WHERE s.source = 'lastfm'
-            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, a.name
+            FROM unified_plays
+            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
         ),
         ranked_all AS (
             SELECT year_d, artist, plays,

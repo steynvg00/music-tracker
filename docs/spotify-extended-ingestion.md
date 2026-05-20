@@ -63,6 +63,14 @@ You can also point `--path` at a single file instead of the whole directory.
 
 ## 6. Re-running
 
-The ingest is **idempotent**. If Spotify sends you a fresh export (e.g. six months later), you can re-run the same command — records already in the DB will be skipped via `ON CONFLICT DO NOTHING`. Only new plays since your last export will be inserted.
+The ingest is **idempotent**. When you re-import a fresh Extended export, records are upserted via `ON CONFLICT DO UPDATE` with COALESCE — non-NULL fields from the export fill in any NULLs left by the recently-played cron, and existing rich-field values are never overwritten by NULL.
 
-The "Skipped (already in DB)" count in the summary tells you how many duplicates were detected.
+The "Skipped (already in DB)" count in the summary tells you how many rows had no new fields to merge.
+
+## 7. Ongoing capture via Spotify Web API
+
+A GitHub Actions cron job runs every 30 minutes and pulls the last 50 plays from Spotify's `/me/player/recently-played` endpoint, inserting them into `spotify_plays` via `ON CONFLICT DO NOTHING`. This keeps the dashboard current without waiting for a full Extended export.
+
+Rows inserted by the cron have `ms_played`, `reason_end`, `shuffle`, `skipped`, and all other rich fields set to NULL — the API endpoint does not return them.
+
+To backfill those fields, re-request the Extended export every 1–4 times per year and re-run `scripts/ingest_spotify_history.py`. The `ON CONFLICT DO UPDATE SET … COALESCE(EXCLUDED.x, spotify_plays.x)` logic will fill in NULLs from the export without touching values already present, so re-running is always safe.
