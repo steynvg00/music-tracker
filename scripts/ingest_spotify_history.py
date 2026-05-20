@@ -47,11 +47,17 @@ def main() -> None:
     duration = time.monotonic() - start
 
     print()
+    if args.dry_run:
+        print("Note: 'would' counts assume an empty DB. Actual run may skip more if rows already exist.")
     print("=== Spotify Extended ingestion complete ===")
     print(f"Files processed:           {result['files_processed']}")
     print(f"Records attempted:         {result['attempted']}")
-    print(f"Inserted:                  {result['inserted']}")
-    print(f"Skipped (already in DB):   {result['skipped']}")
+    if args.dry_run:
+        print(f"Would insert:              {result['inserted']}")
+        print(f"Would skip (already in DB):{result['skipped']}")
+    else:
+        print(f"Inserted:                  {result['inserted']}")
+        print(f"Skipped (already in DB):   {result['skipped']}")
     print(f"Duration:                  {duration:.0f}s")
 
 

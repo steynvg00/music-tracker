@@ -84,8 +84,10 @@ def ingest_records(conn, records: list[dict], dry_run: bool = False) -> dict:
     Uses ON CONFLICT DO NOTHING on the unique indexes.
     """
     attempted = len(records)
-    if dry_run or attempted == 0:
-        return {"attempted": attempted, "inserted": 0, "skipped": attempted}
+    if attempted == 0:
+        return {"attempted": 0, "inserted": 0, "skipped": 0}
+    if dry_run:
+        return {"attempted": attempted, "inserted": attempted, "skipped": 0}
 
     with conn.cursor() as cur:
         cur.executemany(_INSERT_SQL, records)
