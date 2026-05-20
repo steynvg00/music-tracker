@@ -154,9 +154,65 @@ def query_top_all_time(limit: int):
     return fn
 
 
+# ── Query helpers (dynamic) ───────────────────────────────────────────────────
+
+def query_year_discovered_tracks(discovered_year: str):
+    """Returns a query function for liked tracks first discovered in the given year (or 'Undefined').
+
+    'Discovered' = first play in spotify_plays for that track.
+    'Undefined' = first played within 30 days of data start (can't tell if discovered then or earlier).
+    """
+    def fn(conn):
+        cur = conn.cursor()
+        if discovered_year == "Undefined":
+            cur.execute(
+                """
+                WITH first_plays AS (
+                    SELECT track_uri, MIN(played_at) AS first_played_at
+                    FROM spotify_plays
+                    WHERE track_uri IS NOT NULL
+                    GROUP BY track_uri
+                ),
+                data_start AS (
+                    SELECT MIN(played_at) + INTERVAL '30 days' AS cutoff FROM spotify_plays
+                )
+                SELECT fp.track_uri
+                FROM first_plays fp
+                INNER JOIN liked_songs ls ON ls.track_uri = fp.track_uri
+                CROSS JOIN data_start ds
+                WHERE fp.first_played_at < ds.cutoff
+                ORDER BY fp.first_played_at ASC
+                """
+            )
+        else:
+            cur.execute(
+                """
+                WITH first_plays AS (
+                    SELECT track_uri, MIN(played_at) AS first_played_at
+                    FROM spotify_plays
+                    WHERE track_uri IS NOT NULL
+                    GROUP BY track_uri
+                ),
+                data_start AS (
+                    SELECT MIN(played_at) + INTERVAL '30 days' AS cutoff FROM spotify_plays
+                )
+                SELECT fp.track_uri
+                FROM first_plays fp
+                INNER JOIN liked_songs ls ON ls.track_uri = fp.track_uri
+                CROSS JOIN data_start ds
+                WHERE fp.first_played_at >= ds.cutoff
+                  AND EXTRACT(YEAR FROM fp.first_played_at AT TIME ZONE 'Europe/Amsterdam')::text = %s
+                ORDER BY fp.first_played_at ASC
+                """,
+                (discovered_year,),
+            )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
-MANAGED_PLAYLISTS: list[PlaylistDefinition] = [
+STATIC_PLAYLISTS: list[PlaylistDefinition] = [
     PlaylistDefinition(
         suffix="20-49 plays",
         description="Tracks you've heard 20-49 times — the 'still figuring out' tier.",
@@ -228,6 +284,85 @@ MANAGED_PLAYLISTS: list[PlaylistDefinition] = [
         legacy_names=["🤖 Auto · Top 100 all-time"],
     ),
 ]
+
+
+def year_discovered_playlists(conn) -> list[PlaylistDefinition]:
+    """Generate one PlaylistDefinition per discovery year for liked songs.
+
+    Returns 'Undefined' first (for tracks already in library at data start), then years ascending.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        WITH first_plays AS (
+            SELECT track_uri, MIN(played_at) AS first_played_at
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY track_uri
+        ),
+        data_start AS (
+            SELECT MIN(played_at) + INTERVAL '30 days' AS cutoff FROM spotify_plays
+        ),
+        liked_first_plays AS (
+            SELECT fp.track_uri, fp.first_played_at, ds.cutoff
+            FROM first_plays fp
+            INNER JOIN liked_songs ls ON ls.track_uri = fp.track_uri
+            CROSS JOIN data_start ds
+        ),
+        classified AS (
+            SELECT
+                CASE
+                    WHEN first_played_at < cutoff THEN 'Undefined'
+                    ELSE EXTRACT(YEAR FROM first_played_at AT TIME ZONE 'Europe/Amsterdam')::text
+                END AS discovered_year
+            FROM liked_first_plays
+        )
+        SELECT discovered_year, COUNT(*) AS cnt
+        FROM classified
+        GROUP BY discovered_year
+        HAVING COUNT(*) > 0
+        ORDER BY
+            CASE WHEN discovered_year = 'Undefined' THEN 0 ELSE 1 END,
+            discovered_year
+        """
+    )
+    rows = cur.fetchall()
+
+    definitions = []
+    for discovered_year, _count in rows:
+        suffix = f"{discovered_year} · Discovered"
+        if discovered_year == "Undefined":
+            description = (
+                "Liked tracks already in your library when data collection started "
+                "(Feb 2017) — exact discovery year unknown."
+            )
+        else:
+            description = (
+                f"Liked tracks you discovered in {discovered_year} — first heard that year, "
+                "ordered by first-play date."
+            )
+
+        definitions.append(
+            PlaylistDefinition(
+                suffix=suffix,
+                description=description,
+                query_fn=query_year_discovered_tracks(discovered_year),
+                kind="updating",
+            )
+        )
+
+    return definitions
+
+
+def get_managed_playlists(conn) -> list[PlaylistDefinition]:
+    """Return all managed playlist definitions (static + dynamic).
+
+    Static playlists are constants. Dynamic playlists are generated from current data
+    by factory functions that take a DB connection.
+    """
+    dynamic = []
+    dynamic.extend(year_discovered_playlists(conn))
+    return STATIC_PLAYLISTS + dynamic
 
 
 # ── Core playlist management ───────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-"""Refresh all managed auto-playlists in lib.playlists.MANAGED_PLAYLISTS."""
+"""Refresh all managed auto-playlists via lib.playlists.get_managed_playlists."""
 import sys
 from pathlib import Path
 
@@ -9,7 +9,7 @@ import time
 from dotenv import load_dotenv
 import psycopg
 from lib.spotify import get_spotify_client
-from lib.playlists import MANAGED_PLAYLISTS, update_managed_playlist, get_full_name
+from lib.playlists import get_managed_playlists, update_managed_playlist, get_full_name
 
 
 def main():
@@ -24,9 +24,10 @@ def main():
     print("[playlists] Opening DB connection...", flush=True)
     conn = psycopg.connect(db_url)
 
-    total = len(MANAGED_PLAYLISTS)
+    definitions = get_managed_playlists(conn)
+    total = len(definitions)
     start = time.time()
-    for i, definition in enumerate(MANAGED_PLAYLISTS, start=1):
+    for i, definition in enumerate(definitions, start=1):
         full_name = get_full_name(definition)
         print(f"\n[{i}/{total}] {full_name}", flush=True)
         try:
