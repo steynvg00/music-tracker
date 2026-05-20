@@ -115,11 +115,11 @@ with tab_overview:
             SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
         ),
         streaks AS (
-            SELECT grp, MIN(d) AS start, MAX(d) AS end, COUNT(*) AS len FROM groups GROUP BY grp
+            SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
         )
         SELECT len FROM streaks
-        WHERE end >= (CURRENT_DATE AT TIME ZONE 'Europe/Amsterdam')::date - INTERVAL '1 day'
-        ORDER BY end DESC LIMIT 1
+        WHERE end_d >= (CURRENT_DATE AT TIME ZONE 'Europe/Amsterdam')::date - INTERVAL '1 day'
+        ORDER BY end_d DESC LIMIT 1
     """)
     current_streak = int(current_streak_df.iloc[0]["len"]) if not current_streak_df.empty else 0
 
@@ -132,7 +132,7 @@ with tab_overview:
             SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
         ),
         streaks AS (
-            SELECT grp, MIN(d) AS start, MAX(d) AS end, COUNT(*) AS len FROM groups GROUP BY grp
+            SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
         )
         SELECT MAX(len) AS len FROM streaks
     """)
