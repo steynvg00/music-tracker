@@ -65,9 +65,9 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights = st.tabs([
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_spotify = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records", "Highlights"
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Spotify"
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1106,3 +1106,218 @@ with tab_highlights:
             tooltip=["year_d:O", "artist:N", "rnk:Q", "plays:Q"],
         ).properties(height=400)
         st.altair_chart(race_chart, use_container_width=True)
+
+# ── Tab 10: Spotify ───────────────────────────────────────────────────────────
+
+with tab_spotify:
+    # ── Section 1: Overview metrics row ──────────────────────────────────────
+    sp_overview_df = query_df("""
+        SELECT
+            COUNT(*) AS total_plays,
+            ROUND(SUM(ms_played) / 3600000.0, 1) AS total_hours,
+            MIN((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS first_d,
+            MAX((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS last_d,
+            COUNT(DISTINCT track_uri) AS distinct_tracks
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+    """)
+
+    sp_row = sp_overview_df.iloc[0]
+    sp_date_range = (
+        f"{sp_row['first_d']} → {sp_row['last_d']}"
+        if sp_row["first_d"] and sp_row["last_d"]
+        else "—"
+    )
+
+    sp_c1, sp_c2, sp_c3, sp_c4 = st.columns(4)
+    sp_c1.metric("Total plays",      f"{int(sp_row['total_plays']):,}")
+    sp_c2.metric("Total hours",      f"{float(sp_row['total_hours']):.1f} hrs")
+    sp_c3.metric("Date range",       sp_date_range)
+    sp_c4.metric("Distinct tracks",  f"{int(sp_row['distinct_tracks']):,}")
+
+    st.divider()
+
+    # ── Section 2: Listening time ─────────────────────────────────────────────
+    st.subheader("Listening time")
+    st.caption("Hours of music listened to, by year.")
+
+    sp_hours_df = query_df("""
+        SELECT
+            EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+            ROUND(SUM(ms_played) / 3600000.0, 1) AS hours
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+        GROUP BY year_d
+        ORDER BY year_d
+    """)
+
+    sp_hours_chart = alt.Chart(sp_hours_df).mark_bar().encode(
+        x=alt.X("year_d:O", title="Year"),
+        y=alt.Y("hours:Q", title="Hours"),
+        tooltip=["year_d:O", "hours:Q"],
+    ).properties(height=300)
+    st.altair_chart(sp_hours_chart, use_container_width=True)
+
+    st.divider()
+
+    # ── Section 3: Skip analysis ──────────────────────────────────────────────
+    st.subheader("Skip analysis")
+    st.caption("Skip rate and the tracks you skipped most often.")
+
+    sp_skip_rate_df = query_df("""
+        SELECT
+            ROUND(100.0 * COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') / COUNT(*), 1) AS skip_rate_pct
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+    """)
+    sp_skip_rate = float(sp_skip_rate_df.iloc[0]["skip_rate_pct"])
+    st.metric("Overall skip rate", f"{sp_skip_rate:.1f}%")
+
+    sp_skipped_df = query_df("""
+        WITH t AS (
+            SELECT
+                track_uri,
+                MAX(track_name) AS track_name,
+                MAX(artist_name) AS artist_name,
+                COUNT(*) AS plays,
+                COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') AS skips
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY track_uri
+            HAVING COUNT(*) >= 10
+        )
+        SELECT
+            track_name,
+            artist_name,
+            plays,
+            skips,
+            ROUND(100.0 * skips / plays, 1) AS skip_rate_pct
+        FROM t
+        WHERE skips > 0
+        ORDER BY skip_rate_pct DESC, skips DESC
+        LIMIT 20
+    """)
+    sp_skipped_df = sp_skipped_df.rename(columns={
+        "track_name": "Track", "artist_name": "Artist",
+        "plays": "Plays", "skips": "Skips", "skip_rate_pct": "Skip rate %",
+    })
+    sp_skipped_df.insert(0, "Rank", range(1, len(sp_skipped_df) + 1))
+    st.dataframe(sp_skipped_df[["Rank", "Track", "Artist", "Plays", "Skips", "Skip rate %"]], hide_index=True)
+
+    st.divider()
+
+    # ── Section 4: Platform breakdown ─────────────────────────────────────────
+    st.subheader("Platform breakdown")
+    st.caption("Where you listen — by device family.")
+
+    sp_platform_df = query_df("""
+        SELECT
+            CASE
+                WHEN platform LIKE '%OS X%' OR platform LIKE '%Mac OS%' OR platform LIKE '%macOS%' THEN 'Mac'
+                WHEN platform LIKE '%iOS%' OR platform LIKE '%iPhone%' OR platform LIKE '%iPad%' THEN 'iOS'
+                WHEN platform LIKE '%Android%' THEN 'Android'
+                WHEN platform LIKE '%Windows%' THEN 'Windows'
+                WHEN platform LIKE '%WebPlayer%' OR platform ILIKE '%web%' THEN 'Web'
+                WHEN platform IS NULL OR platform = '' THEN 'Unknown'
+                ELSE 'Other'
+            END AS platform_family,
+            COUNT(*) AS plays
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+        GROUP BY platform_family
+        ORDER BY plays DESC
+    """)
+
+    sp_platform_total = sp_platform_df["plays"].sum()
+    sp_platform_df["pct"] = (sp_platform_df["plays"] / sp_platform_total * 100).round(1)
+    sp_platform_df["tooltip_label"] = (
+        sp_platform_df["platform_family"]
+        + ": "
+        + sp_platform_df["plays"].apply(lambda x: f"{x:,}")
+        + " ("
+        + sp_platform_df["pct"].apply(lambda x: f"{x:.1f}%")
+        + ")"
+    )
+
+    sp_donut = alt.Chart(sp_platform_df).mark_arc(innerRadius=60).encode(
+        theta=alt.Theta("plays:Q"),
+        color=alt.Color("platform_family:N", legend=alt.Legend(title="Platform")),
+        tooltip=["platform_family:N", "plays:Q", "pct:Q"],
+    ).properties(height=300)
+    st.altair_chart(sp_donut, use_container_width=True)
+
+    sp_pct_parts = " · ".join(
+        f"{row['platform_family']}: {row['pct']:.1f}%"
+        for _, row in sp_platform_df.iterrows()
+    )
+    st.caption(sp_pct_parts)
+
+    st.divider()
+
+    # ── Section 5: Shuffle behavior ───────────────────────────────────────────
+    st.subheader("Shuffle behavior")
+    st.caption("How often you let Spotify pick the order versus choosing yourself.")
+
+    sp_shuffle_df = query_df("""
+        SELECT
+            EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+        GROUP BY year_d
+        ORDER BY year_d
+    """)
+
+    sp_shuffle_overall_df = query_df("""
+        SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+    """)
+    sp_shuffle_overall = float(sp_shuffle_overall_df.iloc[0]["shuffle_rate_pct"])
+    st.metric("Shuffle rate", f"{sp_shuffle_overall:.1f}%")
+
+    sp_shuffle_chart = alt.Chart(sp_shuffle_df).mark_line(point=True).encode(
+        x=alt.X("year_d:O", title="Year"),
+        y=alt.Y("shuffle_rate_pct:Q", title="Shuffle rate (%)",
+                scale=alt.Scale(domain=[0, 100])),
+        tooltip=["year_d:O", "shuffle_rate_pct:Q"],
+    ).properties(height=300)
+    st.altair_chart(sp_shuffle_chart, use_container_width=True)
+
+    st.divider()
+
+    # ── Section 6: End-of-play reasons ───────────────────────────────────────
+    st.subheader("End-of-play reasons")
+    st.caption("Why each play ended — finished naturally, skipped, paused, app closed.")
+
+    sp_reasons_df = query_df("""
+        WITH r AS (
+            SELECT
+                COALESCE(reason_end, '(null)') AS reason,
+                COUNT(*) AS plays
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY reason_end
+        )
+        SELECT
+            reason,
+            plays,
+            ROUND(100.0 * plays / SUM(plays) OVER (), 1) AS pct
+        FROM r
+        ORDER BY plays DESC
+        LIMIT 10
+    """)
+
+    sp_reasons_chart = alt.Chart(sp_reasons_df).mark_bar().encode(
+        y=alt.Y("reason:N", title="Reason", sort="-x"),
+        x=alt.X("plays:Q", title="Plays"),
+        tooltip=["reason:N", "plays:Q", "pct:Q"],
+    ).properties(height=350)
+
+    sp_reasons_text = alt.Chart(sp_reasons_df).mark_text(align="left", dx=4).encode(
+        y=alt.Y("reason:N", sort="-x"),
+        x=alt.X("plays:Q"),
+        text=alt.Text("plays:Q", format=","),
+    )
+
+    st.altair_chart((sp_reasons_chart + sp_reasons_text), use_container_width=True)
