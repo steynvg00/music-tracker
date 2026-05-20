@@ -65,8 +65,9 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives = st.tabs([
-    "Overview", "Top tracks/artists", "Trends", "On this day", "Year in review", "Deep dives"
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records = st.tabs([
+    "Overview", "Top tracks/artists", "Trends", "On this day",
+    "Year in review", "Deep dives", "Personality", "Records"
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -567,3 +568,279 @@ with tab_deepdives:
     st.caption(
         f"Total artists discovered: **{total_artists_disc:,}** · Total unique tracks scrobbled: **{total_tracks_disc:,}**"
     )
+
+# ── Tab 7: Personality ────────────────────────────────────────────────────────
+
+with tab_personality:
+    # ── Section A: Album depth ────────────────────────────────────────────────
+    st.subheader("Album depth")
+    st.caption("Top 20 albums by number of unique tracks you've scrobbled. Reveals which albums you've genuinely explored vs the ones where you only play the hits.")
+
+    album_depth_df = query_df("""
+        SELECT
+            al.title AS album,
+            a.name AS artist,
+            COUNT(DISTINCT t.title) AS unique_tracks,
+            COUNT(*) AS total_plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        LEFT JOIN albums al ON al.id = t.album_id
+        WHERE s.source = 'lastfm'
+          AND al.title IS NOT NULL AND al.title <> ''
+        GROUP BY al.title, a.name
+        ORDER BY unique_tracks DESC, total_plays DESC
+        LIMIT 20
+    """)
+    album_depth_df = album_depth_df.rename(columns={
+        "album": "Album", "artist": "Artist",
+        "unique_tracks": "Unique tracks", "total_plays": "Total plays",
+    })
+    album_depth_df.insert(0, "Rank", range(1, len(album_depth_df) + 1))
+    st.dataframe(album_depth_df[["Rank", "Album", "Artist", "Unique tracks", "Total plays"]], hide_index=True, width='stretch')
+
+    st.divider()
+
+    # ── Section B: Weekend vs weekday ─────────────────────────────────────────
+    st.subheader("Weekend vs weekday")
+    st.caption("Top 10 artists for weekend days (Sat–Sun) and weekday days (Mon–Fri), side by side.")
+
+    dow_split_df = query_df("""
+        WITH labeled AS (
+            SELECT
+                a.name AS artist,
+                CASE
+                    WHEN EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
+                    ELSE 'weekday'
+                END AS day_type
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+        ),
+        ranked AS (
+            SELECT
+                day_type, artist,
+                COUNT(*) AS plays,
+                ROW_NUMBER() OVER (PARTITION BY day_type ORDER BY COUNT(*) DESC) AS rnk
+            FROM labeled
+            GROUP BY day_type, artist
+        )
+        SELECT day_type, rnk, artist, plays
+        FROM ranked
+        WHERE rnk <= 10
+        ORDER BY day_type, rnk
+    """)
+
+    wknd_df = dow_split_df[dow_split_df["day_type"] == "weekend"][["rnk", "artist", "plays"]].rename(
+        columns={"rnk": "Rank", "artist": "Artist", "plays": "Plays"}
+    )
+    wkdy_df = dow_split_df[dow_split_df["day_type"] == "weekday"][["rnk", "artist", "plays"]].rename(
+        columns={"rnk": "Rank", "artist": "Artist", "plays": "Plays"}
+    )
+
+    dow_col1, dow_col2 = st.columns(2)
+    with dow_col1:
+        st.markdown("**Weekend (Sat–Sun)**")
+        st.dataframe(wknd_df, hide_index=True, width='stretch')
+    with dow_col2:
+        st.markdown("**Weekday (Mon–Fri)**")
+        st.dataframe(wkdy_df, hide_index=True, width='stretch')
+
+    st.divider()
+
+    # ── Section C: Listening fingerprint ─────────────────────────────────────
+    st.subheader("Listening fingerprint")
+    st.caption("Your characteristic listening signature.")
+
+    fingerprint_df = query_df("""
+        WITH totals AS (
+            SELECT
+                COUNT(*) AS total_plays,
+                COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS total_days
+            FROM scrobbles
+            WHERE source = 'lastfm'
+        ),
+        hour_top AS (
+            SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d
+            FROM scrobbles WHERE source = 'lastfm'
+            GROUP BY hour_d
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+        ),
+        dow_top AS (
+            SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow_d
+            FROM scrobbles WHERE source = 'lastfm'
+            GROUP BY dow_d
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+        )
+        SELECT t.total_plays, t.total_days, h.hour_d AS peak_hour_d, d.dow_d AS peak_dow_d
+        FROM totals t, hour_top h, dow_top d
+    """)
+
+    fp = fingerprint_df.iloc[0]
+    DOW_NAMES = {0: "Sunday", 1: "Monday", 2: "Tuesday", 3: "Wednesday",
+                 4: "Thursday", 5: "Friday", 6: "Saturday"}
+    peak_hour_str = f"{int(fp['peak_hour_d']):02d}:00"
+    peak_dow_str  = DOW_NAMES[int(fp["peak_dow_d"])]
+    avg_day_str   = f"{float(fp['total_plays']) / float(fp['total_days']):.1f}" if fp["total_days"] > 0 else "—"
+    listen_days_str = f"{int(fp['total_days']):,}"
+
+    fp_col1, fp_col2, fp_col3, fp_col4 = st.columns(4)
+    fp_col1.metric("Peak hour",             peak_hour_str)
+    fp_col2.metric("Peak weekday",          peak_dow_str)
+    fp_col3.metric("Avg per listening day", avg_day_str)
+    fp_col4.metric("Listening days",        listen_days_str)
+
+# ── Tab 8: Records ────────────────────────────────────────────────────────────
+
+with tab_records:
+    # ── Section A: Biggest single day ─────────────────────────────────────────
+    st.subheader("Biggest single day")
+
+    biggest_day_df = query_df("""
+        WITH daily AS (
+            SELECT
+                (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d,
+                COUNT(*) AS plays
+            FROM scrobbles
+            WHERE source = 'lastfm'
+            GROUP BY day_d
+        )
+        SELECT day_d, plays FROM daily ORDER BY plays DESC LIMIT 1
+    """)
+
+    if not biggest_day_df.empty:
+        bd = biggest_day_df.iloc[0]
+        bd_date_str = pd.to_datetime(bd["day_d"]).strftime("%A, %-d %B %Y")
+        bd_plays    = int(bd["plays"])
+
+        bd_col1, bd_col2 = st.columns(2)
+        with bd_col1:
+            st.metric("Date",       bd_date_str)
+            st.metric("Scrobbles",  f"{bd_plays:,}")
+        with bd_col2:
+            top5_df = query_df_params("""
+                SELECT t.title AS track, a.name AS artist, COUNT(*) AS plays
+                FROM scrobbles s
+                JOIN tracks t ON t.id = s.track_id
+                JOIN artists a ON a.id = t.artist_id
+                WHERE s.source = 'lastfm'
+                  AND (played_at AT TIME ZONE 'Europe/Amsterdam')::date = %s
+                GROUP BY t.title, a.name
+                ORDER BY plays DESC
+                LIMIT 5
+            """, (bd["day_d"],))
+            top5_df = top5_df.rename(columns={"track": "Track", "artist": "Artist", "plays": "Plays"})
+            top5_df.insert(0, "Rank", range(1, len(top5_df) + 1))
+            st.dataframe(top5_df[["Rank", "Track", "Artist", "Plays"]], hide_index=True, width='stretch')
+
+    st.divider()
+
+    # ── Section B: Longest gap ────────────────────────────────────────────────
+    st.subheader("Longest gap")
+    st.caption("Your longest silence between scrobbles.")
+
+    gap_df = query_df("""
+        WITH gaps AS (
+            SELECT
+                played_at,
+                a.name AS artist,
+                t.title AS track,
+                LAG(played_at) OVER (ORDER BY played_at) AS prev_played,
+                LAG(a.name)    OVER (ORDER BY played_at) AS prev_artist,
+                LAG(t.title)   OVER (ORDER BY played_at) AS prev_track,
+                played_at - LAG(played_at) OVER (ORDER BY played_at) AS gap_duration
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+        )
+        SELECT played_at, artist, track, prev_played, prev_artist, prev_track, gap_duration
+        FROM gaps
+        WHERE prev_played IS NOT NULL
+        ORDER BY gap_duration DESC
+        LIMIT 1
+    """)
+
+    if not gap_df.empty:
+        gr       = gap_df.iloc[0]
+        gap_td   = pd.Timedelta(gr["gap_duration"])
+        gap_str  = f"{gap_td.days:,} days, {gap_td.seconds // 3600} hours"
+        prev_dt  = pd.to_datetime(gr["prev_played"]).strftime("%Y-%m-%d")
+        after_dt = pd.to_datetime(gr["played_at"]).strftime("%Y-%m-%d")
+
+        gc1, gc2, gc3 = st.columns(3)
+        with gc1:
+            st.metric("Last before gap", prev_dt)
+            st.caption(f"{gr['prev_track']} — {gr['prev_artist']}")
+        with gc2:
+            st.metric("Gap duration", gap_str)
+        with gc3:
+            st.metric("First after gap", after_dt)
+            st.caption(f"{gr['track']} — {gr['artist']}")
+
+    st.divider()
+
+    # ── Section C: Scrobble milestones ────────────────────────────────────────
+    st.subheader("Scrobble milestones")
+    st.caption("The scrobble that marked each landmark on your listening history.")
+
+    _MILESTONE_NS = (1, 1000, 5000, 10000, 25000, 50000, 100000)
+    _ORDINALS = {
+        1: "1st", 1000: "1,000th", 5000: "5,000th", 10000: "10,000th",
+        25000: "25,000th", 50000: "50,000th", 100000: "100,000th",
+    }
+
+    milestones_df = query_df(f"""
+        WITH numbered AS (
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY played_at) AS n,
+                played_at,
+                a.name AS artist,
+                t.title AS track
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+        )
+        SELECT n, played_at, artist, track
+        FROM numbered
+        WHERE n IN ({', '.join(str(x) for x in _MILESTONE_NS)})
+        ORDER BY n
+    """)
+
+    if not milestones_df.empty:
+        milestones_df["N"]    = milestones_df["n"].apply(lambda x: _ORDINALS.get(int(x), f"{int(x):,}th"))
+        milestones_df["Date"] = pd.to_datetime(milestones_df["played_at"]).dt.strftime("%Y-%m-%d")
+        milestones_df = milestones_df.rename(columns={"track": "Track", "artist": "Artist"})
+        st.dataframe(milestones_df[["N", "Date", "Track", "Artist"]], hide_index=True, width='stretch')
+
+    st.divider()
+
+    # ── Section D: Top artist of each year ────────────────────────────────────
+    st.subheader("Top artist of each year")
+
+    top_by_year_df = query_df("""
+        WITH yearly AS (
+            SELECT
+                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                a.name AS artist,
+                COUNT(*) AS plays,
+                ROW_NUMBER() OVER (
+                    PARTITION BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int
+                    ORDER BY COUNT(*) DESC
+                ) AS rnk
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, a.name
+        )
+        SELECT year_d AS "Year", artist AS "Top artist", plays AS "Plays"
+        FROM yearly
+        WHERE rnk = 1
+        ORDER BY year_d DESC
+    """)
+    st.dataframe(top_by_year_df, hide_index=True, width='stretch')
