@@ -20,6 +20,20 @@ def main():
     user_id = sp.current_user()["id"]
     print(f"[playlists] Logged in as {user_id}.", flush=True)
 
+    print("[playlists] Building playlist library cache...", flush=True)
+    playlist_cache: dict[str, str] = {}
+    offset = 0
+    while True:
+        page = sp.current_user_playlists(limit=50, offset=offset)
+        items = page.get("items", []) or []
+        for p in items:
+            if p and p.get("name"):
+                playlist_cache[p["name"]] = p["id"]
+        if len(items) < 50:
+            break
+        offset += 50
+    print(f"[playlists] Cached {len(playlist_cache)} existing playlists.", flush=True)
+
     db_url = os.environ["DATABASE_URL"]
     print("[playlists] Opening DB connection...", flush=True)
     conn = psycopg.connect(db_url)
@@ -31,7 +45,7 @@ def main():
         full_name = get_full_name(definition)
         print(f"\n[{i}/{total}] {full_name}", flush=True)
         try:
-            result = update_managed_playlist(sp, conn, user_id, definition)
+            result = update_managed_playlist(sp, conn, user_id, definition, playlist_cache)
             print(f"    {result['track_count']} tracks → {result['action']}", flush=True)
         except Exception as e:
             print(f"    FAILED: {e}", flush=True)
