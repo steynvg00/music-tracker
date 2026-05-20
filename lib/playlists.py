@@ -25,8 +25,6 @@ def _ensure_playlist_metadata(sp, playlist_id, name):
         name=name,
         description=AUTO_PLAYLIST_DESCRIPTION,
     )
-    from lib.playlist_cover import generate_auto_playlist_cover
-    sp.playlist_upload_cover_image(playlist_id, generate_auto_playlist_cover())
 
 
 def find_or_create_managed_playlist(sp, user_id: str) -> str:
