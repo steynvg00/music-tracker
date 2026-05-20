@@ -1,6 +1,10 @@
 import psycopg
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
+
+TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
 # Playlist helpers for music-tracker.
 #
@@ -149,6 +153,97 @@ def query_top_all_time(limit: int):
             LIMIT %s
             """,
             (limit,),
+        )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
+def query_top_in_month(year: int, month: int, limit: int):
+    """Top tracks by plays in a specific (year, month) — Europe/Amsterdam timezone."""
+    def fn(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT track_uri
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s
+              AND EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s
+            GROUP BY track_uri
+            ORDER BY COUNT(*) DESC
+            LIMIT %s
+            """,
+            (year, month, limit),
+        )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
+def query_top_in_date_range(start_date_local: date, end_date_local_inclusive: date, limit: int):
+    """Top tracks in a date range (inclusive), interpreted in Europe/Amsterdam."""
+    start_dt = datetime.combine(start_date_local, datetime.min.time(), TZ_AMSTERDAM)
+    end_dt = datetime.combine(
+        end_date_local_inclusive + timedelta(days=1),
+        datetime.min.time(),
+        TZ_AMSTERDAM,
+    )
+
+    def fn(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT track_uri
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND played_at >= %s
+              AND played_at < %s
+            GROUP BY track_uri
+            ORDER BY COUNT(*) DESC
+            LIMIT %s
+            """,
+            (start_dt, end_dt, limit),
+        )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
+def query_top_in_year(year: int, limit: int):
+    """Top tracks by plays in a specific year — Europe/Amsterdam timezone."""
+    def fn(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT track_uri
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s
+            GROUP BY track_uri
+            ORDER BY COUNT(*) DESC
+            LIMIT %s
+            """,
+            (year, limit),
+        )
+        return [row[0] for row in cur.fetchall()]
+    return fn
+
+
+def query_top_through_year_end(year: int, limit: int):
+    """All-time top tracks considering only plays through Dec 31 of given year."""
+    end_dt = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=TZ_AMSTERDAM)
+
+    def fn(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT track_uri
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND played_at < %s
+            GROUP BY track_uri
+            ORDER BY COUNT(*) DESC
+            LIMIT %s
+            """,
+            (end_dt, limit),
         )
         return [row[0] for row in cur.fetchall()]
     return fn
@@ -443,15 +538,185 @@ def year_released_playlists(conn) -> list[PlaylistDefinition]:
     return definitions
 
 
-def get_managed_playlists(conn) -> list[PlaylistDefinition]:
-    """Return all managed playlist definitions (static + dynamic).
+def monthly_top_snapshots(conn) -> list[PlaylistDefinition]:
+    """One snapshot per COMPLETED month with plays. Skips current month."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
+            EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS mo
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+        GROUP BY yr, mo
+        HAVING COUNT(*) > 0
+        ORDER BY yr DESC, mo DESC
+        """
+    )
+    rows = cur.fetchall()
 
-    Static playlists are constants. Dynamic playlists are generated from current data
-    by factory functions that take a DB connection.
+    now_local = datetime.now(TZ_AMSTERDAM)
+    current_year, current_month = now_local.year, now_local.month
+
+    MONTH_NAMES = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+
+    definitions = []
+    for yr, mo in rows:
+        if (yr, mo) >= (current_year, current_month):
+            continue
+        month_name = MONTH_NAMES[mo - 1]
+        suffix = f"Top 25 · {month_name} {yr}"
+        description = f"Your 25 most-played tracks in {month_name} {yr}."
+        definitions.append(
+            PlaylistDefinition(
+                suffix=suffix,
+                description=description,
+                query_fn=query_top_in_month(yr, mo, limit=25),
+                kind="snapshot",
+                max_tracks=25,
+            )
+        )
+    return definitions
+
+
+def seasonal_top_snapshots(conn) -> list[PlaylistDefinition]:
+    """One snapshot per COMPLETED astronomical season fully covered by our data.
+
+    NL astronomical seasons:
+      Winter: Dec 21 (year N-1) – Mar 20 (year N), NAMED BY END YEAR.
+      Spring: Mar 21 – Jun 20, named by year.
+      Summer: Jun 21 – Sep 22, named by year.
+      Autumn: Sep 23 – Dec 20, named by year.
     """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT MIN(played_at AT TIME ZONE 'Europe/Amsterdam')::date AS data_start,
+               MAX(played_at AT TIME ZONE 'Europe/Amsterdam')::date AS data_end
+        FROM spotify_plays
+        """
+    )
+    data_start, _data_end = cur.fetchone()
+
+    now_local = datetime.now(TZ_AMSTERDAM).date()
+
+    # (name, start_month, start_day, end_month, end_day, winter_end_year_offset)
+    SEASONS = [
+        ("Winter", 12, 21, 3, 20, True),    # spans year boundary
+        ("Spring", 3, 21, 6, 20, False),
+        ("Summer", 6, 21, 9, 22, False),
+        ("Autumn", 9, 23, 12, 20, False),
+    ]
+
+    definitions = []
+
+    for year in range(data_start.year, now_local.year + 1):
+        for name, sm, sd, em, ed, wraps_year in SEASONS:
+            if wraps_year:
+                # Winter "year N" = Dec 21 of (N-1) to Mar 20 of N
+                start = date(year - 1, sm, sd)
+                end = date(year, em, ed)
+            else:
+                start = date(year, sm, sd)
+                end = date(year, em, ed)
+
+            # Must be fully completed (end <= today)
+            if end > now_local:
+                continue
+            # Must be fully within data range (start >= data_start)
+            if start < data_start:
+                continue
+
+            suffix = f"Top 50 · {name} {year}"
+            description = f"Your 50 most-played tracks during {name} {year}."
+            definitions.append(
+                PlaylistDefinition(
+                    suffix=suffix,
+                    description=description,
+                    query_fn=query_top_in_date_range(start, end, limit=50),
+                    kind="snapshot",
+                    max_tracks=50,
+                )
+            )
+
+    # Sort newest first
+    definitions.sort(key=lambda d: d.suffix, reverse=True)
+    return definitions
+
+
+def yearly_top_snapshots(conn) -> list[PlaylistDefinition]:
+    """One Top 100 snapshot per COMPLETED year. Includes partial first year."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT EXTRACT(YEAR FROM MIN(played_at) AT TIME ZONE 'Europe/Amsterdam')::int
+        FROM spotify_plays
+        """
+    )
+    first_year = cur.fetchone()[0]
+
+    current_year = datetime.now(TZ_AMSTERDAM).year
+
+    definitions = []
+    for year in range(current_year - 1, first_year - 1, -1):  # newest first
+        suffix = f"Top 100 · {year}"
+        description = f"Your 100 most-played tracks in {year}."
+        definitions.append(
+            PlaylistDefinition(
+                suffix=suffix,
+                description=description,
+                query_fn=query_top_in_year(year, limit=100),
+                kind="snapshot",
+                max_tracks=100,
+            )
+        )
+    return definitions
+
+
+def all_time_top_yearly_snapshots(conn) -> list[PlaylistDefinition]:
+    """One all-time Top 100 snapshot per COMPLETED year-end.
+
+    'Top 100 · All-Time · 2018' = top 100 considering only plays through Dec 31, 2018.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT EXTRACT(YEAR FROM MIN(played_at) AT TIME ZONE 'Europe/Amsterdam')::int
+        FROM spotify_plays
+        """
+    )
+    first_year = cur.fetchone()[0]
+
+    current_year = datetime.now(TZ_AMSTERDAM).year
+
+    definitions = []
+    for year in range(current_year - 1, first_year - 1, -1):  # newest first
+        suffix = f"Top 100 · All-Time · {year}"
+        description = f"Your 100 most-played tracks all-time as of end of {year}."
+        definitions.append(
+            PlaylistDefinition(
+                suffix=suffix,
+                description=description,
+                query_fn=query_top_through_year_end(year, limit=100),
+                kind="snapshot",
+                max_tracks=100,
+            )
+        )
+    return definitions
+
+
+def get_managed_playlists(conn) -> list[PlaylistDefinition]:
+    """Return all managed playlist definitions (static + dynamic)."""
     dynamic = []
     dynamic.extend(year_discovered_playlists(conn))
     dynamic.extend(year_released_playlists(conn))
+    dynamic.extend(monthly_top_snapshots(conn))
+    dynamic.extend(seasonal_top_snapshots(conn))
+    dynamic.extend(yearly_top_snapshots(conn))
+    dynamic.extend(all_time_top_yearly_snapshots(conn))
     return STATIC_PLAYLISTS + dynamic
 
 
@@ -466,12 +731,53 @@ def _ensure_playlist_metadata(sp, playlist_id: str, name: str, description: str)
     )
 
 
-def find_or_create_managed_playlist(sp, user_id: str, definition: PlaylistDefinition) -> str:
-    """Find an existing playlist matching the definition's full name, falling back to legacy_names,
-    or create it. Returns the playlist ID. Applies metadata (name + description) idempotently."""
+def find_or_create_managed_playlist(
+    sp,
+    user_id: str,
+    definition: PlaylistDefinition,
+    playlist_cache: dict[str, str] | None = None,
+) -> tuple[str, bool]:
+    """Find an existing playlist by name (or legacy_names), or create it.
+
+    Returns (playlist_id, was_created). was_created is True only when this call
+    created the playlist; False if it was found by name or legacy_name.
+
+    If playlist_cache is provided (dict mapping name -> playlist_id), use it as
+    the source of truth instead of paginating the user's playlists. The cache
+    is built once per script run and avoids redundant API calls.
+    """
     full_name = get_full_name(definition)
     full_description = get_full_description(definition)
 
+    if playlist_cache is not None:
+        # Cache path
+        playlist_id = playlist_cache.get(full_name)
+        if playlist_id:
+            print(f"[playlists] Cache hit for '{full_name}'.", flush=True)
+            _ensure_playlist_metadata(sp, playlist_id, full_name, full_description)
+            return (playlist_id, False)
+
+        for legacy_name in definition.legacy_names:
+            legacy_id = playlist_cache.get(legacy_name)
+            if legacy_id:
+                print(f"[playlists] Cache hit for legacy '{legacy_name}'. Renaming...", flush=True)
+                _ensure_playlist_metadata(sp, legacy_id, full_name, full_description)
+                print(f"[playlists] Renamed to '{full_name}'.", flush=True)
+                return (legacy_id, False)
+
+        print(f"[playlists] Cache miss — creating '{full_name}'.", flush=True)
+        new = sp.user_playlist_create(
+            user=user_id,
+            name=full_name,
+            public=True,
+            description=full_description,
+        )
+        _ensure_playlist_metadata(sp, new["id"], full_name, full_description)
+        playlist_cache[full_name] = new["id"]
+        print(f"[playlists] Created '{full_name}'.", flush=True)
+        return (new["id"], True)
+
+    # Legacy path: paginate user's playlists
     print(f"[playlists] Searching for '{full_name}'...", flush=True)
     offset = 0
     current_id = None
@@ -502,13 +808,13 @@ def find_or_create_managed_playlist(sp, user_id: str, definition: PlaylistDefini
     if current_id:
         print(f"[playlists] Found '{full_name}'. Refreshing metadata...", flush=True)
         _ensure_playlist_metadata(sp, current_id, full_name, full_description)
-        return current_id
+        return (current_id, False)
 
     if legacy_id:
         print(f"[playlists] Found legacy '{legacy_matched_name}'. Renaming...", flush=True)
         _ensure_playlist_metadata(sp, legacy_id, full_name, full_description)
         print(f"[playlists] Renamed to '{full_name}'.", flush=True)
-        return legacy_id
+        return (legacy_id, False)
 
     print(f"[playlists] Not found. Creating '{full_name}'...", flush=True)
     new = sp.user_playlist_create(
@@ -519,23 +825,39 @@ def find_or_create_managed_playlist(sp, user_id: str, definition: PlaylistDefini
     )
     _ensure_playlist_metadata(sp, new["id"], full_name, full_description)
     print(f"[playlists] Created '{full_name}'.", flush=True)
-    return new["id"]
+    return (new["id"], True)
 
 
-def update_managed_playlist(sp, conn, user_id: str, definition: PlaylistDefinition) -> dict:
+def update_managed_playlist(
+    sp,
+    conn,
+    user_id: str,
+    definition: PlaylistDefinition,
+    playlist_cache: dict[str, str] | None = None,
+) -> dict:
     """Refresh one managed playlist: find/create, run query, replace tracks.
-    Returns {'name': str, 'playlist_id': str, 'track_count': int, 'action': 'created'|'updated'}."""
+    Returns {'name': str, 'playlist_id': str, 'track_count': int, 'action': str}."""
     full_name = get_full_name(definition)
-    playlist_id = find_or_create_managed_playlist(sp, user_id, definition)
-    track_uris = definition.query_fn(conn)[:definition.max_tracks]
-    spotify_uris = [f"spotify:track:{uri}" if not uri.startswith("spotify:") else uri
-                    for uri in track_uris]
-    replace_playlist_tracks(sp, playlist_id, spotify_uris)
+    playlist_id, was_created = find_or_create_managed_playlist(
+        sp, user_id, definition, playlist_cache
+    )
+
+    if definition.kind == "snapshot" and not was_created:
+        return {
+            "name": full_name,
+            "playlist_id": playlist_id,
+            "track_count": 0,
+            "action": "skipped (snapshot exists)",
+        }
+
+    track_uris = definition.query_fn(conn)[: definition.max_tracks]
+    replace_playlist_tracks(sp, playlist_id, track_uris)
+
     return {
         "name": full_name,
         "playlist_id": playlist_id,
-        "track_count": len(spotify_uris),
-        "action": "updated",
+        "track_count": len(track_uris),
+        "action": "created" if was_created else "updated",
     }
 
 
