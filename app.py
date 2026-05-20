@@ -65,9 +65,9 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records = st.tabs([
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records"
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights"
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -844,3 +844,265 @@ with tab_records:
         ORDER BY year_d DESC
     """)
     st.dataframe(top_by_year_df, hide_index=True, width='stretch')
+
+# ── Tab 9: Highlights ─────────────────────────────────────────────────────────
+
+with tab_highlights:
+    # ── Section A: Period comparison ──────────────────────────────────────────
+    st.subheader("Period comparison")
+    st.caption("Compare any two years or months head-to-head.")
+
+    hl_mode = st.radio("Compare by", ["Year", "Month"], horizontal=True, key="hl_mode")
+
+    hl_years_df = query_df(
+        "SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS y "
+        "FROM scrobbles WHERE source = 'lastfm' ORDER BY y DESC"
+    )
+    hl_years = hl_years_df["y"].tolist()
+
+    hl_months_df = query_df(
+        "SELECT DISTINCT TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS m "
+        "FROM scrobbles WHERE source = 'lastfm' ORDER BY m DESC"
+    )
+    hl_months = hl_months_df["m"].tolist()
+
+    hl_col_a, hl_col_b = st.columns(2)
+
+    if hl_mode == "Year":
+        with hl_col_a:
+            hl_a = st.selectbox("Period A", hl_years, index=0, key="hl_year_a")
+        with hl_col_b:
+            hl_b = st.selectbox("Period B", hl_years, index=min(1, len(hl_years) - 1), key="hl_year_b")
+
+        cmp_df = query_df_params("""
+            WITH filtered AS (
+                SELECT
+                    EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS period_key,
+                    a.name AS artist_name,
+                    t.title AS track_title,
+                    DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+                FROM scrobbles s
+                JOIN tracks t ON t.id = s.track_id
+                JOIN artists a ON a.id = t.artist_id
+                WHERE s.source = 'lastfm'
+                  AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
+                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
+                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
+                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
+                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
+                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
+            FROM filtered
+        """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+    else:
+        with hl_col_a:
+            hl_a = st.selectbox("Period A", hl_months, index=0, key="hl_month_a")
+        with hl_col_b:
+            hl_b = st.selectbox("Period B", hl_months, index=min(1, len(hl_months) - 1), key="hl_month_b")
+
+        cmp_df = query_df_params("""
+            WITH filtered AS (
+                SELECT
+                    TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS period_key,
+                    a.name AS artist_name,
+                    t.title AS track_title,
+                    DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+                FROM scrobbles s
+                JOIN tracks t ON t.id = s.track_id
+                JOIN artists a ON a.id = t.artist_id
+                WHERE s.source = 'lastfm'
+                  AND TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') IN (%s, %s)
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
+                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
+                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
+                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
+                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
+                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
+            FROM filtered
+        """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+
+    if not cmp_df.empty:
+        cmp_row = cmp_df.iloc[0]
+        cmp_c1, cmp_c2, cmp_c3, cmp_c4 = st.columns(4)
+        cmp_c1.metric("Scrobbles",      f"{int(cmp_row['scrobbles_a']):,}", delta=int(cmp_row['scrobbles_a'] - cmp_row['scrobbles_b']))
+        cmp_c2.metric("Unique tracks",  f"{int(cmp_row['tracks_a']):,}",   delta=int(cmp_row['tracks_a']   - cmp_row['tracks_b']))
+        cmp_c3.metric("Unique artists", f"{int(cmp_row['artists_a']):,}",  delta=int(cmp_row['artists_a']  - cmp_row['artists_b']))
+        cmp_c4.metric("Listening days", f"{int(cmp_row['days_a']):,}",     delta=int(cmp_row['days_a']     - cmp_row['days_b']))
+        st.caption(f"Period A: **{hl_a}** · Period B: **{hl_b}** · delta = A − B")
+
+    st.divider()
+
+    # ── Section B: Achievements ───────────────────────────────────────────────
+    st.subheader("Achievements")
+
+    ach_first = query_df("""
+        SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS first_d,
+               a.name AS artist, t.title AS track
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE s.source = 'lastfm'
+        ORDER BY played_at ASC LIMIT 1
+    """)
+    ach_streak = query_df("""
+        WITH days AS (
+            SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
+            FROM scrobbles WHERE source = 'lastfm'
+        ),
+        grps AS (
+            SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
+        ),
+        streaks AS (
+            SELECT MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM grps GROUP BY grp
+        )
+        SELECT len, start_d, end_d FROM streaks ORDER BY len DESC LIMIT 1
+    """)
+    ach_marathon = query_df("""
+        SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d, COUNT(*) AS plays
+        FROM scrobbles WHERE source = 'lastfm'
+        GROUP BY day_d ORDER BY plays DESC LIMIT 1
+    """)
+    ach_top_artist = query_df("""
+        SELECT a.name AS artist, COUNT(*) AS plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE s.source = 'lastfm'
+        GROUP BY a.name ORDER BY plays DESC LIMIT 1
+    """)
+    ach_top_track = query_df("""
+        SELECT a.name AS artist, t.title AS track, COUNT(*) AS plays
+        FROM scrobbles s
+        JOIN tracks t ON t.id = s.track_id
+        JOIN artists a ON a.id = t.artist_id
+        WHERE s.source = 'lastfm'
+        GROUP BY a.name, t.title ORDER BY plays DESC LIMIT 1
+    """)
+    ach_best_year = query_df("""
+        SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d, COUNT(*) AS plays
+        FROM scrobbles WHERE source = 'lastfm'
+        GROUP BY year_d ORDER BY plays DESC LIMIT 1
+    """)
+    ach_discovery = query_df("""
+        WITH firsts AS (
+            SELECT a.name AS artist_name,
+                   EXTRACT(YEAR FROM MIN(played_at AT TIME ZONE 'Europe/Amsterdam'))::int AS first_yr
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+            GROUP BY a.name
+        )
+        SELECT first_yr AS year_d, COUNT(*) AS new_artists
+        FROM firsts GROUP BY first_yr ORDER BY new_artists DESC LIMIT 1
+    """)
+    ach_peak_hour = query_df("""
+        SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d, COUNT(*) AS plays
+        FROM scrobbles WHERE source = 'lastfm'
+        GROUP BY hour_d ORDER BY plays DESC LIMIT 1
+    """)
+
+    def _ach_card(col, emoji, name, value, detail):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"**{emoji} {name}**")
+                st.markdown(f"### {value}")
+                st.caption(detail)
+
+    row1_cols = st.columns(4)
+    row2_cols = st.columns(4)
+
+    _ach_card(
+        row1_cols[0], "🎵", "First scrobble",
+        str(ach_first.iloc[0]["first_d"]) if not ach_first.empty else "—",
+        f"{ach_first.iloc[0]['track']} — {ach_first.iloc[0]['artist']}" if not ach_first.empty else "",
+    )
+    _ach_card(
+        row1_cols[1], "🔥", "Longest streak",
+        f"{int(ach_streak.iloc[0]['len']):,} days" if not ach_streak.empty else "—",
+        f"{ach_streak.iloc[0]['start_d']} → {ach_streak.iloc[0]['end_d']}" if not ach_streak.empty else "",
+    )
+    _ach_card(
+        row1_cols[2], "🎧", "Marathon day",
+        f"{int(ach_marathon.iloc[0]['plays']):,} plays" if not ach_marathon.empty else "—",
+        str(ach_marathon.iloc[0]["day_d"]) if not ach_marathon.empty else "",
+    )
+    _ach_card(
+        row1_cols[3], "🏆", "Top artist",
+        ach_top_artist.iloc[0]["artist"] if not ach_top_artist.empty else "—",
+        f"{int(ach_top_artist.iloc[0]['plays']):,} plays" if not ach_top_artist.empty else "",
+    )
+    _ach_card(
+        row2_cols[0], "🎶", "Top track",
+        ach_top_track.iloc[0]["track"] if not ach_top_track.empty else "—",
+        f"{ach_top_track.iloc[0]['artist']} · {int(ach_top_track.iloc[0]['plays']):,} plays" if not ach_top_track.empty else "",
+    )
+    _ach_card(
+        row2_cols[1], "📅", "Best year",
+        str(int(ach_best_year.iloc[0]["year_d"])) if not ach_best_year.empty else "—",
+        f"{int(ach_best_year.iloc[0]['plays']):,} scrobbles" if not ach_best_year.empty else "",
+    )
+    _ach_card(
+        row2_cols[2], "🔭", "Discovery year",
+        str(int(ach_discovery.iloc[0]["year_d"])) if not ach_discovery.empty else "—",
+        f"{int(ach_discovery.iloc[0]['new_artists']):,} new artists" if not ach_discovery.empty else "",
+    )
+    _ach_card(
+        row2_cols[3], "🕛", "Peak hour",
+        f"{int(ach_peak_hour.iloc[0]['hour_d']):02d}:00" if not ach_peak_hour.empty else "—",
+        f"{int(ach_peak_hour.iloc[0]['plays']):,} plays" if not ach_peak_hour.empty else "",
+    )
+
+    st.divider()
+
+    # ── Section C: Artist rank race ───────────────────────────────────────────
+    st.subheader("Artist rank race")
+    st.caption("Where your top 10 all-time artists ranked each year.")
+
+    race_df = query_df("""
+        WITH yearly AS (
+            SELECT
+                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                a.name AS artist,
+                COUNT(*) AS plays
+            FROM scrobbles s
+            JOIN tracks t ON t.id = s.track_id
+            JOIN artists a ON a.id = t.artist_id
+            WHERE s.source = 'lastfm'
+            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, a.name
+        ),
+        ranked_all AS (
+            SELECT year_d, artist, plays,
+                   ROW_NUMBER() OVER (PARTITION BY year_d ORDER BY plays DESC) AS rnk
+            FROM yearly
+        ),
+        top10 AS (
+            SELECT artist FROM (
+                SELECT artist, SUM(plays) AS total_plays
+                FROM yearly GROUP BY artist ORDER BY total_plays DESC LIMIT 10
+            ) sub
+        )
+        SELECT r.year_d, r.artist, r.plays, r.rnk
+        FROM ranked_all r
+        JOIN top10 t ON t.artist = r.artist
+        ORDER BY r.year_d, r.rnk
+    """)
+
+    if not race_df.empty:
+        race_chart = alt.Chart(race_df).mark_line(point=True).encode(
+            x=alt.X("year_d:O", title="Year"),
+            y=alt.Y("rnk:Q", title="Rank",
+                    scale=alt.Scale(domain=[1, 50], reverse=True),
+                    axis=alt.Axis(tickMinStep=1)),
+            color=alt.Color("artist:N", legend=alt.Legend(title="Artist")),
+            tooltip=["year_d:O", "artist:N", "rnk:Q", "plays:Q"],
+        ).properties(height=400)
+        st.altair_chart(race_chart, use_container_width=True)
