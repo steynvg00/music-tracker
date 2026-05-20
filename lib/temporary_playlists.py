@@ -244,6 +244,27 @@ def create_temp_playlist(
     }
 
 
+def delete_custom_playlist(sp, conn, playlist_id: str) -> bool:
+    """Unfollow a custom playlist on Spotify and remove its row from custom_playlists.
+
+    Commits conn after the DB delete. Returns True if Spotify deletion succeeded.
+    Always removes the DB row so the sweep does not retry forever.
+    """
+    spotify_ok = True
+    try:
+        # Spotify "delete" = unfollow your own playlist, removing it from your library
+        sp.current_user_unfollow_playlist(playlist_id)
+    except Exception:
+        spotify_ok = False
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM custom_playlists WHERE playlist_id = %s",
+        (playlist_id,),
+    )
+    conn.commit()
+    return spotify_ok
+
+
 def delete_expired_custom_playlists(sp, conn) -> dict:
     """Find and delete expired custom playlists from both Spotify and the DB.
 
@@ -269,22 +290,14 @@ def delete_expired_custom_playlists(sp, conn) -> dict:
 
     for playlist_id, name, expires_at in expired:
         print(f"[sweep] Deleting '{name}' (expired {expires_at})...", flush=True)
-        try:
-            # Spotify "delete" is current_user_unfollow_playlist (you don't truly delete,
-            # you unfollow your own playlist, which removes it from your library)
-            sp.current_user_unfollow_playlist(playlist_id)
+        ok = delete_custom_playlist(sp, conn, playlist_id)
+        if ok:
             deleted_spotify += 1
-        except Exception as e:
-            print(f"[sweep]   FAILED to delete on Spotify: {e}", flush=True)
+        else:
+            print(f"[sweep]   FAILED to delete on Spotify", flush=True)
             failed += 1
-            # Still remove from DB so we don't retry forever
-        cur.execute(
-            "DELETE FROM custom_playlists WHERE playlist_id = %s",
-            (playlist_id,),
-        )
         deleted_db += 1
 
-    conn.commit()
     return {
         "expired": len(expired),
         "deleted_spotify": deleted_spotify,
