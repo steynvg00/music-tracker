@@ -5,6 +5,7 @@ on:
     - cron: "0 6 * * 1"     # Mondays 06:00 UTC — last.fm weekly ingest
     - cron: "*/30 * * * *"  # Every 30 minutes — Spotify recently-played
     - cron: "0 3 * * *"    # Daily 03:00 UTC — Spotify liked songs sync
+    - cron: "30 3 * * *"  # Daily 03:30 UTC — Spotify track metadata enrichment
   workflow_dispatch:
 
 permissions:
@@ -89,6 +90,32 @@ jobs:
 
       - name: Sync liked songs
         run: uv run python scripts/sync_liked_songs.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  enrich-track-metadata:
+    name: Spotify track metadata enrichment
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 3 * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: enrich-track-metadata
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Enrich track metadata
+        run: uv run python scripts/enrich_track_metadata.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
