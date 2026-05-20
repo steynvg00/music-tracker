@@ -65,7 +65,7 @@ GROUP BY a.name, t.title
 ORDER BY plays DESC
 LIMIT 50
 """
-st.dataframe(query_df(top_tracks_sql), hide_index=True, use_container_width=True)
+st.dataframe(query_df(top_tracks_sql), hide_index=True, width='stretch')
 
 # ── Top 50 artists ────────────────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ GROUP BY a.name
 ORDER BY plays DESC
 LIMIT 50
 """
-st.dataframe(query_df(top_artists_sql), hide_index=True, use_container_width=True)
+st.dataframe(query_df(top_artists_sql), hide_index=True, width='stretch')
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 

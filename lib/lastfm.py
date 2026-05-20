@@ -20,7 +20,7 @@ class LastfmClient:
             raise RuntimeError("LASTFM_API_KEY environment variable is not set")
         if not self.username:
             raise RuntimeError("LASTFM_USERNAME environment variable is not set")
-        self._client = httpx.Client(timeout=30)
+        self._client = httpx.Client(timeout=httpx.Timeout(30.0))
         self._last_request_at: float = 0.0
 
     def _get(self, params: dict) -> dict:
@@ -65,7 +65,17 @@ class LastfmClient:
             if to_ts is not None:
                 params["to"] = to_ts
 
-            data = self._get(params)
+            last_exc: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    data = self._get(params)
+                    break
+                except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
+                    last_exc = exc
+                    print(f"last.fm request failed ({type(exc).__name__}), retrying in 5s (attempt {attempt}/3)...")
+                    time.sleep(5)
+            else:
+                raise last_exc  # type: ignore[misc]
             attr = data["recenttracks"]["@attr"]
             total_pages = int(attr["totalPages"])
 
