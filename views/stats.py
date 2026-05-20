@@ -210,7 +210,7 @@ with tab_trends:
         color=alt.Color("plays:Q", title="Scrobbles", scale=alt.Scale(scheme="greens")),
         tooltip=["day:T", "plays:Q"],
     ).properties(height=200)
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     st.subheader("When you listen")
 
@@ -231,7 +231,7 @@ with tab_trends:
         color=alt.Color("plays:Q", title="Scrobbles", scale=alt.Scale(scheme="blues")),
         tooltip=["dow:O", "hour:O", "plays:Q"],
     ).properties(height=220)
-    st.altair_chart(hour_chart, use_container_width=True)
+    st.altair_chart(hour_chart, width="stretch")
 
 # ── Tab 4: On this day ────────────────────────────────────────────────────────
 
@@ -354,7 +354,7 @@ with tab_yir:
         y=alt.Y("plays:Q", title="Scrobbles"),
         tooltip=["month_d:T", "plays:Q"],
     ).properties(height=300)
-    st.altair_chart(monthly_yr_chart, use_container_width=True)
+    st.altair_chart(monthly_yr_chart, width="stretch")
 
     if not monthly_yr_df.empty:
         biggest_idx = int(monthly_yr_df["plays"].idxmax())
@@ -426,7 +426,7 @@ with tab_deepdives:
         color=alt.Color("artist:N", legend=alt.Legend(title="Artist")),
         tooltip=["artist:N", "month_d:T", "cumulative_plays:Q"],
     ).properties(height=350)
-    st.altair_chart(battle_chart, use_container_width=True)
+    st.altair_chart(battle_chart, width="stretch")
 
     artist_info_df = query_df_params("""
         SELECT
@@ -496,7 +496,7 @@ with tab_deepdives:
         color=alt.Color("series:N", legend=alt.Legend(title="Series")),
         tooltip=["series:N", "month_d:T", "cnt:Q"],
     ).properties(height=350)
-    st.altair_chart(discovery_chart, use_container_width=True)
+    st.altair_chart(discovery_chart, width="stretch")
 
     total_artists_disc = int(discovery_df[discovery_df["series"] == "New artists"]["cnt"].sum())
     total_tracks_disc  = int(discovery_df[discovery_df["series"] == "New tracks"]["cnt"].sum())
@@ -998,7 +998,7 @@ with tab_highlights:
             color=alt.Color("artist:N", legend=alt.Legend(title="Artist")),
             tooltip=["year_d:O", "artist:N", "rnk:Q", "plays:Q"],
         ).properties(height=400)
-        st.altair_chart(race_chart, use_container_width=True)
+        st.altair_chart(race_chart, width="stretch")
 
 # ── Tab 10: Spotify ───────────────────────────────────────────────────────────
 
@@ -1049,7 +1049,7 @@ with tab_spotify:
         y=alt.Y("hours:Q", title="Hours"),
         tooltip=["year_d:O", "hours:Q"],
     ).properties(height=300)
-    st.altair_chart(sp_hours_chart, use_container_width=True)
+    st.altair_chart(sp_hours_chart, width="stretch")
 
     st.divider()
 
@@ -1137,7 +1137,7 @@ with tab_spotify:
         color=alt.Color("platform_family:N", legend=alt.Legend(title="Platform")),
         tooltip=["platform_family:N", "plays:Q", "pct:Q"],
     ).properties(height=300)
-    st.altair_chart(sp_donut, use_container_width=True)
+    st.altair_chart(sp_donut, width="stretch")
 
     sp_pct_parts = " · ".join(
         f"{row['platform_family']}: {row['pct']:.1f}%"
@@ -1175,7 +1175,7 @@ with tab_spotify:
                 scale=alt.Scale(domain=[0, 100])),
         tooltip=["year_d:O", "shuffle_rate_pct:Q"],
     ).properties(height=300)
-    st.altair_chart(sp_shuffle_chart, use_container_width=True)
+    st.altair_chart(sp_shuffle_chart, width="stretch")
 
     st.divider()
 
@@ -1213,4 +1213,4 @@ with tab_spotify:
         text=alt.Text("plays:Q", format=","),
     )
 
-    st.altair_chart((sp_reasons_chart + sp_reasons_text), use_container_width=True)
+    st.altair_chart((sp_reasons_chart + sp_reasons_text), width="stretch")
