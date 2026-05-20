@@ -25,12 +25,21 @@ TOP_TRACKS_SQL = """
 
 
 def main() -> None:
+    print("[playlist] Getting Spotify client...", flush=True)
     sp = get_spotify_client()
-    user_id = sp.current_user()["id"]
+    print("[playlist] Spotify client ready.", flush=True)
 
+    print("[playlist] Fetching current user...", flush=True)
+    me = sp.current_user()
+    print(f"[playlist] Logged in as {me['display_name']}.", flush=True)
+    user_id = me["id"]
+
+    print("[playlist] Opening DB connection...", flush=True)
     conn = get_connection()
+    print("[playlist] DB connected.", flush=True)
     try:
         with conn.cursor() as cur:
+            print("[playlist] Querying top tracks...", flush=True)
             cur.execute(TOP_TRACKS_SQL)
             candidates = cur.fetchall()
 

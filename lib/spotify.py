@@ -30,6 +30,7 @@ def get_spotify_client() -> spotipy.Spotify:
             "then paste SPOTIFY_REFRESH_TOKEN into .env."
         )
 
+    print("[spotify] Building OAuth client...", flush=True)
     auth_manager = spotipy.oauth2.SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
@@ -37,6 +38,9 @@ def get_spotify_client() -> spotipy.Spotify:
         scope=SPOTIFY_SCOPES,
         cache_path=None,
     )
+    print("[spotify] Refreshing access token...", flush=True)
     auth_manager.refresh_access_token(refresh_token)
+    print("[spotify] Access token refreshed.", flush=True)
 
-    return spotipy.Spotify(auth_manager=auth_manager)
+    print("[spotify] Creating Spotify client...", flush=True)
+    return spotipy.Spotify(auth_manager=auth_manager, requests_timeout=30)
