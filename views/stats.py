@@ -630,26 +630,72 @@ with tab_personality:
     st.subheader("Album depth")
     st.caption("Top 20 albums by number of unique tracks you've scrobbled. Reveals which albums you've genuinely explored vs the ones where you only play the hits.")
 
-    with skeleton_placeholder("table") as ph_pe1:
-        album_depth_df = query_df("""
-            SELECT
-                album,
-                artist,
-                COUNT(DISTINCT track) AS unique_tracks,
-                COUNT(*) AS total_plays
-            FROM unified_plays
-            WHERE album IS NOT NULL AND album <> ''
-            GROUP BY album, artist
-            ORDER BY total_plays DESC, unique_tracks DESC
-            LIMIT 20
-        """)
-    ph_pe1.empty()
-    album_depth_df = album_depth_df.rename(columns={
-        "album": "Album", "artist": "Artist",
-        "unique_tracks": "Unique tracks", "total_plays": "Total plays",
-    })
-    album_depth_df.insert(0, "Rank", range(1, len(album_depth_df) + 1))
-    st.dataframe(album_depth_df[["Rank", "Album", "Artist", "Unique tracks", "Total plays"]], hide_index=True, width='stretch')
+    _ALBUM_RANK_OPTIONS = {
+        "Total plays": "total_plays",
+        "Plays per track": "plays_per_track",
+    }
+    album_rank_by = st.radio(
+        "Rank albums by",
+        list(_ALBUM_RANK_OPTIONS.keys()),
+        horizontal=True,
+        key="album_depth_ranking",
+    )
+
+    if album_rank_by == "Plays per track":
+        st.caption(
+            "Note: track counts include album and single versions as separate entries. "
+            "Albums with songs also released as singles may appear with inflated track counts "
+            "(and deflated plays-per-track). A future reconciliation step will canonicalize "
+            "same-song-different-version tracks."
+        )
+
+    if album_rank_by == "Total plays":
+        with skeleton_placeholder("table") as ph_pe1:
+            album_depth_df = query_df("""
+                SELECT
+                    album,
+                    artist,
+                    COUNT(DISTINCT track) AS unique_tracks,
+                    COUNT(*) AS total_plays
+                FROM unified_plays
+                WHERE album IS NOT NULL AND album <> ''
+                GROUP BY album, artist
+                ORDER BY total_plays DESC, unique_tracks DESC
+                LIMIT 20
+            """)
+        ph_pe1.empty()
+        album_depth_df = album_depth_df.rename(columns={
+            "album": "Album", "artist": "Artist",
+            "unique_tracks": "Unique tracks", "total_plays": "Total plays",
+        })
+        album_depth_df.insert(0, "Rank", range(1, len(album_depth_df) + 1))
+        st.dataframe(album_depth_df[["Rank", "Album", "Artist", "Unique tracks", "Total plays"]], hide_index=True, width='stretch')
+    else:
+        with skeleton_placeholder("table") as ph_pe1:
+            album_depth_df = query_df("""
+                SELECT
+                    album_name,
+                    artist_name,
+                    COUNT(DISTINCT track_uri) AS unique_tracks,
+                    COUNT(*) AS total_plays,
+                    ROUND(COUNT(*)::numeric / NULLIF(COUNT(DISTINCT track_uri), 0), 2) AS plays_per_track
+                FROM spotify_plays
+                WHERE album_name IS NOT NULL
+                  AND artist_name IS NOT NULL
+                  AND track_uri IS NOT NULL
+                GROUP BY album_name, artist_name
+                HAVING COUNT(DISTINCT track_uri) >= 3
+                ORDER BY plays_per_track DESC
+                LIMIT 50
+            """)
+        ph_pe1.empty()
+        album_depth_df = album_depth_df.rename(columns={
+            "album_name": "Album", "artist_name": "Artist",
+            "unique_tracks": "Unique tracks", "total_plays": "Total plays",
+            "plays_per_track": "Plays per track",
+        })
+        album_depth_df.insert(0, "Rank", range(1, len(album_depth_df) + 1))
+        st.dataframe(album_depth_df[["Rank", "Album", "Artist", "Unique tracks", "Total plays", "Plays per track"]], hide_index=True, width='stretch')
 
     st.divider()
 
