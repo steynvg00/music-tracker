@@ -801,6 +801,54 @@ def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
     ]
 
 
+_FORGOTTEN_FAVORITES_MIN_PLAYS = 50
+_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS = 365
+
+
+def forgotten_favorites_playlist(conn) -> list[PlaylistDefinition]:
+    """One PlaylistDefinition — liked tracks with 50+ plays not played in 365 days,
+    ordered by play count DESC. Full refresh every run.
+    """
+    min_plays = _FORGOTTEN_FAVORITES_MIN_PLAYS
+    days = _FORGOTTEN_FAVORITES_UNTOUCHED_DAYS
+
+    def query_fn(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            WITH play_stats AS (
+                SELECT
+                    track_uri,
+                    COUNT(*) AS plays,
+                    MAX(played_at) AS last_played_at
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                GROUP BY track_uri
+            )
+            SELECT ps.track_uri
+            FROM play_stats ps
+            JOIN liked_songs ls ON ls.track_uri = ps.track_uri
+            WHERE ps.plays >= %s
+              AND ps.last_played_at < NOW() - make_interval(days => %s)
+            ORDER BY ps.plays DESC
+            """,
+            (min_plays, days),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+    return [
+        PlaylistDefinition(
+            suffix="Forgotten favorites",
+            description=(
+                f"Auto-managed by music-tracker. Tracks with {min_plays}+ plays you haven't "
+                f"returned to in {days} days. Re-discovery candidates."
+            ),
+            query_fn=query_fn,
+            kind="updating",
+        )
+    ]
+
+
 def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     """Return all managed playlist definitions (static + dynamic)."""
     dynamic = []
@@ -812,6 +860,7 @@ def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     dynamic.extend(all_time_top_yearly_snapshots(conn))
     dynamic.extend(month_number_one_playlists(conn))
     dynamic.extend(rolling_monthly_number_one_playlist(conn))
+    dynamic.extend(forgotten_favorites_playlist(conn))
     return STATIC_PLAYLISTS + dynamic
 
 
