@@ -9,6 +9,19 @@ from datetime import datetime, timedelta, timezone
 
 from lib.db import get_connection
 from lib.spotify import get_spotify_client
+from lib.playlists import (
+    get_snapshot_definitions,
+    get_updating_definitions,
+    get_full_name,
+    SNAPSHOT_NAME_SUFFIX,
+    UPDATING_NAME_SUFFIX,
+)
+from lib.playlist_settings import (
+    ORDER_PREF_OPTIONS,
+    get_all_settings_by_name,
+    request_force_refresh,
+    upsert_order_pref,
+)
 from lib.temporary_playlists import (
     list_artists,
     query_temp_playlist_tracks,
@@ -17,7 +30,9 @@ from lib.temporary_playlists import (
     delete_custom_playlist,
 )
 
-tab_make_a_playlist, tab_manage = st.tabs(["Make a playlist", "Manage custom playlists"])
+tab_make_a_playlist, tab_manage, tab_snapshot, tab_updating = st.tabs([
+    "Make a playlist", "Manage custom playlists", "Manage snapshot", "Manage updating",
+])
 
 # ── Tab 1: Make a playlist ────────────────────────────────────────────────────
 
@@ -292,3 +307,173 @@ with tab_manage:
                         if st.button("Delete now", key=f"del_{key_suffix}"):
                             st.session_state[confirm_key] = True
                             st.rerun()
+
+# ── Shared helpers for Manage snapshot / Manage updating ─────────────────────
+
+_CRON_CAPTION = (
+    "Changes apply at the next playlist refresh. "
+    "To trigger immediately, run `uv run python scripts/update_managed_playlists.py` "
+    "locally or trigger the GitHub Actions workflow manually."
+)
+
+
+def _get_playlist_id_for_write(full_name: str, settings_by_name: dict) -> str | None:
+    """Return the Spotify playlist_id for a managed playlist.
+
+    Checks playlist_settings first (populated by cron runs). Falls back to a
+    paginated Spotify search when the settings table is empty (e.g. first use
+    after migration, before the cron has run).
+    """
+    row = settings_by_name.get(full_name)
+    if row and row.get("playlist_id"):
+        return row["playlist_id"]
+    # Fallback: paginate user's Spotify library
+    sp = get_spotify_client()
+    user_id = sp.current_user()["id"]
+    offset = 0
+    while True:
+        page = sp.current_user_playlists(limit=50, offset=offset)
+        items = page.get("items") or []
+        for p in items:
+            if p and p.get("owner", {}).get("id") == user_id and p.get("name") == full_name:
+                return p["id"]
+        if len(items) < 50:
+            break
+        offset += 50
+    return None
+
+
+def _categorize_snapshot(suffix: str) -> str:
+    if suffix.startswith("Top 25"):
+        return "Monthly Top 25"
+    if suffix.startswith("Top 50"):
+        return "Seasonal Top 50"
+    if "All-Time" in suffix:
+        return "All-Time Top 100"
+    if suffix.startswith("Top 100"):
+        return "Yearly Top 100"
+    return "Other"
+
+
+def _categorize_updating(suffix: str) -> str:
+    if suffix.endswith("plays"):
+        return "Threshold tiers"
+    if suffix.startswith("Top "):
+        return "Top N"
+    if "Discovered" in suffix:
+        return "Year Discovered"
+    if "Released" in suffix:
+        return "Year Released"
+    if suffix.startswith("My "):
+        return "Monthly #1"
+    return "Misc"
+
+
+# ── Tab 3: Manage snapshot ────────────────────────────────────────────────────
+
+with tab_snapshot:
+    st.header("Manage snapshot playlists")
+    st.caption(_CRON_CAPTION)
+
+    snap_conn = get_connection()
+    snap_defs = get_snapshot_definitions(snap_conn)
+    snap_settings = get_all_settings_by_name(snap_conn)
+
+    # Group definitions by snapshot category
+    snap_groups: dict[str, list] = {}
+    for defn in snap_defs:
+        cat = _categorize_snapshot(defn.suffix)
+        snap_groups.setdefault(cat, []).append(defn)
+
+    group_order = ["Monthly Top 25", "Seasonal Top 50", "Yearly Top 100", "All-Time Top 100", "Other"]
+    for group_name in group_order:
+        group_defs = snap_groups.get(group_name)
+        if not group_defs:
+            continue
+        with st.expander(f"{group_name} ({len(group_defs)})", expanded=False):
+            for defn in group_defs:
+                full_name = get_full_name(defn)
+                row_settings = snap_settings.get(full_name)
+                force_at = row_settings.get("force_refresh_requested_at") if row_settings else None
+                done_at = row_settings.get("force_refresh_completed_at") if row_settings else None
+                force_pending = force_at is not None and (done_at is None or force_at > done_at)
+
+                col_name, col_status, col_btn = st.columns([4, 3, 2])
+                with col_name:
+                    st.markdown(f"**{defn.suffix}**")
+                with col_status:
+                    if force_pending:
+                        st.caption(f"⏳ Pending — {force_at.strftime('%Y-%m-%d %H:%M') if force_at else ''}")
+                    elif done_at:
+                        st.caption(f"✅ Last refreshed: {done_at.strftime('%Y-%m-%d %H:%M')}")
+                    else:
+                        st.caption("Never force-refreshed")
+                with col_btn:
+                    btn_key = f"snap_refresh_{hash(full_name)}"
+                    if st.button("Force refresh", key=btn_key, disabled=force_pending):
+                        playlist_id = _get_playlist_id_for_write(full_name, snap_settings)
+                        if playlist_id:
+                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
+                            try:
+                                request_force_refresh(write_conn, playlist_id, full_name)
+                            finally:
+                                write_conn.close()
+                            st.rerun()
+                        else:
+                            st.error(f"Playlist not found in Spotify: {full_name}")
+
+# ── Tab 4: Manage updating ────────────────────────────────────────────────────
+
+with tab_updating:
+    st.header("Manage updating playlists")
+    st.caption(_CRON_CAPTION)
+
+    upd_conn = get_connection()
+    upd_defs = get_updating_definitions(upd_conn)
+    upd_settings = get_all_settings_by_name(upd_conn)
+
+    order_labels = list(ORDER_PREF_OPTIONS.values())
+    order_keys = list(ORDER_PREF_OPTIONS.keys())
+
+    # Group definitions by category
+    upd_groups: dict[str, list] = {}
+    for defn in upd_defs:
+        cat = _categorize_updating(defn.suffix)
+        upd_groups.setdefault(cat, []).append(defn)
+
+    group_order_upd = ["Threshold tiers", "Top N", "Year Discovered", "Year Released", "Monthly #1", "Misc"]
+    for group_name in group_order_upd:
+        group_defs = upd_groups.get(group_name)
+        if not group_defs:
+            continue
+        with st.expander(f"{group_name} ({len(group_defs)})", expanded=False):
+            for defn in group_defs:
+                full_name = get_full_name(defn)
+                row_settings = upd_settings.get(full_name)
+                current_pref = row_settings.get("order_pref", "default") if row_settings else "default"
+                current_label = ORDER_PREF_OPTIONS.get(current_pref, ORDER_PREF_OPTIONS["default"])
+
+                col_name, col_select = st.columns([4, 4])
+                with col_name:
+                    st.markdown(f"**{defn.suffix}**")
+                with col_select:
+                    select_key = f"order_{hash(full_name)}"
+                    new_label = st.selectbox(
+                        "Order",
+                        options=order_labels,
+                        index=order_labels.index(current_label),
+                        key=select_key,
+                        label_visibility="collapsed",
+                    )
+                    new_pref = order_keys[order_labels.index(new_label)]
+                    if new_pref != current_pref:
+                        playlist_id = _get_playlist_id_for_write(full_name, upd_settings)
+                        if playlist_id:
+                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
+                            try:
+                                upsert_order_pref(write_conn, playlist_id, full_name, new_pref)
+                            finally:
+                                write_conn.close()
+                            st.rerun()
+                        else:
+                            st.error(f"Playlist not found in Spotify: {full_name}")
