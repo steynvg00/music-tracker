@@ -97,6 +97,51 @@ def _get_artist_popularity_scores(artist_name: str) -> dict | None:
 
 
 @st.cache_data(ttl=60)
+def _track_skip_rate(track_uri: str) -> pd.DataFrame:
+    return _run_query(
+        """
+        SELECT
+            reason_end,
+            COUNT(*) AS play_count,
+            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percentage
+        FROM spotify_plays
+        WHERE track_uri = %s
+          AND reason_end IS NOT NULL
+        GROUP BY reason_end
+        ORDER BY play_count DESC
+        """,
+        (track_uri,),
+    )
+
+
+@st.cache_data(ttl=60)
+def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataFrame:
+    return _run_query(
+        """
+        WITH target_plays AS (
+            SELECT played_at FROM spotify_plays
+            WHERE track_uri = %s
+        )
+        SELECT
+            sp.artist_name AS companion_artist,
+            sp.track_name AS companion_track,
+            sp.track_uri AS companion_uri,
+            COUNT(*) AS co_occurrences
+        FROM spotify_plays sp, target_plays tp
+        WHERE sp.played_at BETWEEN tp.played_at - (INTERVAL '1 minute' * %s)
+                               AND tp.played_at + (INTERVAL '1 minute' * %s)
+          AND sp.track_uri != %s
+          AND sp.track_uri IS NOT NULL
+          AND sp.artist_name IS NOT NULL
+        GROUP BY sp.track_uri, sp.artist_name, sp.track_name
+        ORDER BY co_occurrences DESC
+        LIMIT 10
+        """,
+        (track_uri, window_minutes, window_minutes, track_uri),
+    )
+
+
+@st.cache_data(ttl=60)
 def _more_from_artist(artist_name: str, track_uri: str) -> pd.DataFrame:
     return _run_query(
         """
@@ -205,6 +250,55 @@ def render_track_lookup_tab() -> None:
         st.line_chart(ppm_df.set_index("month")["plays"])
     else:
         st.info("No monthly play data available.")
+
+    st.divider()
+
+    # ── Listening completion ──────────────────────────────────────────────────
+    st.subheader("Listening completion")
+    ph_skip = st.empty()
+    with ph_skip.container():
+        skeleton_metric_row(1)
+        skeleton_table(5)
+    skip_df = _track_skip_rate(track_uri)
+    ph_skip.empty()
+
+    if not skip_df.empty:
+        trackdone_rows = skip_df[skip_df["reason_end"] == "trackdone"]
+        completion_pct = float(trackdone_rows["percentage"].iloc[0]) if not trackdone_rows.empty else 0.0
+        st.metric("Completion rate", f"{completion_pct:.1f}%")
+        disp_skip = skip_df.rename(columns={"reason_end": "Reason", "play_count": "Plays", "percentage": "%"})
+        disp_skip["%"] = disp_skip["%"].map(lambda x: f"{float(x):.1f}%")
+        st.dataframe(disp_skip, hide_index=True)
+        st.caption(
+            "Completion rate is the fraction of plays that ran to the end. "
+            "Lower values mean you tend to skip this track."
+        )
+    else:
+        st.info("No reason_end data available for this track.")
+
+    st.divider()
+
+    # ── Heard alongside ───────────────────────────────────────────────────────
+    st.subheader("Heard alongside")
+    ph_alongside = st.empty()
+    with ph_alongside.container():
+        skeleton_table(10)
+    alongside_df = _track_heard_alongside(track_uri)
+    ph_alongside.empty()
+
+    if not alongside_df.empty:
+        disp_alongside = alongside_df.rename(columns={
+            "companion_artist": "Artist",
+            "companion_track": "Track",
+            "co_occurrences": "Times together",
+        })[["Artist", "Track", "Times together"]]
+        st.dataframe(disp_alongside, hide_index=True)
+        st.caption(
+            "Tracks most frequently played within 30 minutes of this one. "
+            "Hints at the session/playlist context this track lives in."
+        )
+    else:
+        st.info("No co-play data found for this track.")
 
     st.divider()
 
