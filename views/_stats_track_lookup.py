@@ -9,6 +9,20 @@ from lib.track_popularity import get_scores as get_track_scores
 from views._skeleton import skeleton_chart, skeleton_metric_row, skeleton_table
 
 
+_REASON_END_LABELS = {
+    "trackdone": "Played to end",
+    "fwdbtn": "Skipped forward",
+    "endplay": "Started another track",
+    "backbtn": "Went back",
+    "unexpected-exit-while-paused": "App closed (paused)",
+    "unexpected-exit": "App closed (playing)",
+    "remote": "Switched device",
+    "logout": "Logged out",
+    "trackerror": "Track error",
+    "unknown": "Unknown",
+}
+
+
 def _run_query(sql: str, params: tuple) -> pd.DataFrame:
     conn = get_connection()
     cur = conn.cursor()
@@ -266,9 +280,11 @@ def render_track_lookup_tab() -> None:
         trackdone_rows = skip_df[skip_df["reason_end"] == "trackdone"]
         completion_pct = float(trackdone_rows["percentage"].iloc[0]) if not trackdone_rows.empty else 0.0
         st.metric("Completion rate", f"{completion_pct:.1f}%")
-        disp_skip = skip_df.rename(columns={"reason_end": "Reason", "play_count": "Plays", "percentage": "%"})
+        disp_skip = skip_df.copy()
+        disp_skip["Reason"] = disp_skip["reason_end"].map(lambda r: _REASON_END_LABELS.get(r, r))
+        disp_skip = disp_skip.rename(columns={"play_count": "Plays", "percentage": "%"})
         disp_skip["%"] = disp_skip["%"].map(lambda x: f"{float(x):.1f}%")
-        st.dataframe(disp_skip, hide_index=True)
+        st.dataframe(disp_skip[["Reason", "Plays", "%"]], hide_index=True)
         st.caption(
             "Completion rate is the fraction of plays that ran to the end. "
             "Lower values mean you tend to skip this track."
