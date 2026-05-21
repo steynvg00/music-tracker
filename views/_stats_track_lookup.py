@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from lib.db import get_connection
+from lib.track_popularity import get_scores
 from views._skeleton import skeleton_chart, skeleton_metric_row, skeleton_table
 
 
@@ -82,6 +83,11 @@ def _plays_per_month(track_uri: str) -> pd.DataFrame:
         """,
         (track_uri,),
     )
+
+
+@st.cache_data(ttl=60)
+def _get_popularity_scores(track_uri: str) -> dict | None:
+    return get_scores(get_connection(), track_uri)
 
 
 @st.cache_data(ttl=60)
@@ -210,3 +216,28 @@ def render_track_lookup_tab() -> None:
         st.dataframe(more_df[["Rank", "Track", "Plays"]], hide_index=True, width="stretch")
     else:
         st.info("No other tracks found for this artist.")
+
+    st.divider()
+
+    # ── Popularity scores ─────────────────────────────────────────────────────
+    st.subheader("Popularity scores")
+    ph_pop = st.empty()
+    with ph_pop.container():
+        skeleton_metric_row(5)
+    scores = _get_popularity_scores(track_uri)
+    ph_pop.empty()
+
+    if scores is None:
+        st.caption("Not enough plays for popularity scoring (need 20+).")
+    else:
+        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+        pc1.metric("Composite",    f"{float(scores['composite_score']) * 100:.0f}%")
+        pc2.metric("Sticky",       f"{float(scores['sticky_pct']) * 100:.0f}th pct")
+        pc3.metric("Evergreen",    f"{float(scores['evergreen_pct']) * 100:.0f}th pct")
+        pc4.metric("Flash hit",    f"{float(scores['flash_hit_pct']) * 100:.0f}th pct")
+        pc5.metric("Session loop", f"{float(scores['session_loop_pct']) * 100:.0f}th pct")
+        st.caption(
+            "Composite blends raw plays (40%), sticky and evergreen (20% each), "
+            "flash hit and session loop (10% each). "
+            "All sub-scores are percentile ranks against tracks with 20+ plays."
+        )

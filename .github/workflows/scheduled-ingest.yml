@@ -6,6 +6,7 @@ on:
     - cron: "*/30 * * * *"  # Every 30 minutes — Spotify recently-played
     - cron: "0 3 * * *"    # Daily 03:00 UTC — Spotify liked songs sync
     - cron: "30 3 * * *"  # Daily 03:30 UTC — Spotify track metadata enrichment
+    - cron: "50 3 * * *"  # Daily 03:50 UTC — track popularity score computation
     - cron: "0 4 * * *"   # Daily 04:00 UTC — sweep expired custom playlists
   workflow_dispatch:
 
@@ -115,6 +116,29 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  compute-track-popularity:
+    name: Track popularity score computation
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '50 3 * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: compute-track-popularity
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Compute track popularity scores
+        run: uv run python scripts/compute_track_popularity_scores.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
   sweep-expired-custom-playlists:
     name: Sweep expired custom playlists
