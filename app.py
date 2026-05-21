@@ -18,7 +18,11 @@ except (FileNotFoundError, AttributeError):
     # That's fine — .env via dotenv (loaded by lib.db) handles local.
     pass
 
+from views._skeleton import inject_skeleton_css
+
 st.set_page_config(page_title="music-tracker", page_icon="🎵", layout="wide")
+
+inject_skeleton_css()
 
 with st.sidebar:
     if st.button("Refresh data"):
