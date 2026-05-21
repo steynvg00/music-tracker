@@ -14,6 +14,7 @@ from views._skeleton import (
     skeleton_placeholder,
     skeleton_table,
 )
+from views._stats_phantom_plays import render_phantom_plays_tab
 from views._stats_track_lookup import render_track_lookup_tab
 
 
@@ -45,9 +46,9 @@ st.caption("Personal scrobble stats, threshold playlists, and listening patterns
 
 today = datetime.now().date()
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_tracklookup, tab_spotify = st.tabs([
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_tracklookup, tab_spotify, tab_phantom = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Track lookup", "Spotify",
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Track lookup", "Spotify", "Phantom plays",
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1374,3 +1375,8 @@ with tab_spotify:
     )
 
     st.altair_chart((sp_reasons_chart + sp_reasons_text), width="stretch")
+
+# ── Tab 12: Phantom plays ─────────────────────────────────────────────────────
+
+with tab_phantom:
+    render_phantom_plays_tab()
