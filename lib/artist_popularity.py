@@ -2,9 +2,16 @@
 
 import time
 
-MIN_PLAYS_FOR_ARTIST_SCORING = 100
+from lib.popularity_config import (
+    ARTIST_COMPOSITE_WEIGHTS,
+    ARTIST_DEPTH_MIN_PLAYS_PER_TRACK,
+    ARTIST_STICKY_WINDOW_DAYS,
+    MIN_PLAYS_FOR_ARTIST_SCORING,
+)
 
-_UPSERT_SQL = """
+_W = ARTIST_COMPOSITE_WEIGHTS
+
+_UPSERT_SQL = f"""
 WITH artist_basics AS (
     SELECT artist_name,
            COUNT(*) AS total_plays,
@@ -12,11 +19,11 @@ WITH artist_basics AS (
     FROM spotify_plays
     WHERE artist_name IS NOT NULL AND track_uri IS NOT NULL
     GROUP BY artist_name
-    HAVING COUNT(*) >= 100
+    HAVING COUNT(*) >= {MIN_PLAYS_FOR_ARTIST_SCORING}
 ),
 sticky_calc AS (
     SELECT ab.artist_name, ab.total_plays,
-           COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '90 days')::FLOAT / NULLIF(ab.total_plays, 0) AS sticky_raw
+           COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '{ARTIST_STICKY_WINDOW_DAYS} days')::FLOAT / NULLIF(ab.total_plays, 0) AS sticky_raw
     FROM artist_basics ab
     JOIN spotify_plays sp USING (artist_name)
     WHERE sp.track_uri IS NOT NULL
@@ -39,7 +46,7 @@ track_plays_per_artist AS (
 ),
 depth_calc AS (
     SELECT artist_name,
-           COUNT(*) FILTER (WHERE plays >= 5) AS depth_raw
+           COUNT(*) FILTER (WHERE plays >= {ARTIST_DEPTH_MIN_PLAYS_PER_TRACK}) AS depth_raw
     FROM track_plays_per_artist
     GROUP BY artist_name
 ),
@@ -99,12 +106,12 @@ SELECT
     depth_raw, depth_pct,
     devotion_raw, devotion_pct,
     saved_count_raw, saved_count_pct,
-    0.30 * plays_log_pct
-    + 0.20 * COALESCE(sticky_pct, 0)
-    + 0.20 * COALESCE(evergreen_pct, 0)
-    + 0.10 * COALESCE(depth_pct, 0)
-    + 0.10 * COALESCE(saved_count_pct, 0)
-    + 0.10 * (1.0 - COALESCE(devotion_pct, 0))
+    {_W['plays_log_pct']} * plays_log_pct
+    + {_W['sticky']} * COALESCE(sticky_pct, 0)
+    + {_W['evergreen']} * COALESCE(evergreen_pct, 0)
+    + {_W['depth']} * COALESCE(depth_pct, 0)
+    + {_W['saved']} * COALESCE(saved_count_pct, 0)
+    + {_W['devotion']} * (1.0 - COALESCE(devotion_pct, 0))
         AS composite_score,
     NOW()
 FROM percentile_ranks
