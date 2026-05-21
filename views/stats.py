@@ -6,6 +6,14 @@ import streamlit as st
 from datetime import datetime
 
 from lib.db import get_connection
+from views._skeleton import (
+    skeleton_chart,
+    skeleton_lines,
+    skeleton_metric,
+    skeleton_metric_row,
+    skeleton_placeholder,
+    skeleton_table,
+)
 
 
 @st.cache_data(ttl=60)
@@ -44,74 +52,74 @@ tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_pe
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
 
 with tab_overview:
+    # ── Metrics row 1 ────────────────────────────────────────────────────────
+    with skeleton_placeholder("metric_row") as ph_ov1:
+        total_scrobbles = query_df(
+            "SELECT COUNT(*) AS n FROM unified_plays"
+        ).iloc[0]["n"]
+        unique_tracks = query_df(
+            "SELECT COUNT(DISTINCT track) AS n FROM unified_plays"
+        ).iloc[0]["n"]
+        unique_artists = query_df(
+            "SELECT COUNT(DISTINCT artist) AS n FROM unified_plays"
+        ).iloc[0]["n"]
+        date_range_df = query_df(
+            "SELECT MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first, MAX(played_at AT TIME ZONE 'Europe/Amsterdam') AS last FROM unified_plays"
+        )
+        first_date = date_range_df.iloc[0]["first"]
+        last_date = date_range_df.iloc[0]["last"]
+        date_range_str = (
+            f"{first_date:%Y-%m-%d} → {last_date:%Y-%m-%d}"
+            if first_date and last_date
+            else "—"
+        )
+    ph_ov1.empty()
     col1, col2, col3, col4 = st.columns(4)
-
-    total_scrobbles = query_df(
-        "SELECT COUNT(*) AS n FROM unified_plays"
-    ).iloc[0]["n"]
-    unique_tracks = query_df(
-        "SELECT COUNT(DISTINCT track) AS n FROM unified_plays"
-    ).iloc[0]["n"]
-    unique_artists = query_df(
-        "SELECT COUNT(DISTINCT artist) AS n FROM unified_plays"
-    ).iloc[0]["n"]
-    date_range_df = query_df(
-        "SELECT MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first, MAX(played_at AT TIME ZONE 'Europe/Amsterdam') AS last FROM unified_plays"
-    )
-    first_date = date_range_df.iloc[0]["first"]
-    last_date = date_range_df.iloc[0]["last"]
-    date_range_str = (
-        f"{first_date:%Y-%m-%d} → {last_date:%Y-%m-%d}"
-        if first_date and last_date
-        else "—"
-    )
-
     col1.metric("Total scrobbles", f"{total_scrobbles:,}")
     col2.metric("Unique tracks", f"{unique_tracks:,}")
     col3.metric("Unique artists", f"{unique_artists:,}")
     col4.metric("Date range", date_range_str)
 
-    # Metrics row 2
+    # ── Metrics row 2 ────────────────────────────────────────────────────────
+    with skeleton_placeholder("metric_row") as ph_ov2:
+        days_listening = query_df(
+            "SELECT COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS n FROM unified_plays"
+        ).iloc[0]["n"]
+
+        current_streak_df = query_df("""
+            WITH days AS (
+                SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
+                FROM unified_plays
+            ),
+            groups AS (
+                SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
+            ),
+            streaks AS (
+                SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
+            )
+            SELECT len FROM streaks
+            WHERE end_d >= (CURRENT_DATE AT TIME ZONE 'Europe/Amsterdam')::date - INTERVAL '1 day'
+            ORDER BY end_d DESC LIMIT 1
+        """)
+        current_streak = int(current_streak_df.iloc[0]["len"]) if not current_streak_df.empty else 0
+
+        longest_streak_df = query_df("""
+            WITH days AS (
+                SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
+                FROM unified_plays
+            ),
+            groups AS (
+                SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
+            ),
+            streaks AS (
+                SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
+            )
+            SELECT MAX(len) AS len FROM streaks
+        """)
+        longest_streak = int(longest_streak_df.iloc[0]["len"] or 0)
+        avg_per_day = int(total_scrobbles / days_listening) if days_listening > 0 else 0
+    ph_ov2.empty()
     col5, col6, col7, col8 = st.columns(4)
-
-    days_listening = query_df(
-        "SELECT COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS n FROM unified_plays"
-    ).iloc[0]["n"]
-
-    current_streak_df = query_df("""
-        WITH days AS (
-            SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
-            FROM unified_plays
-        ),
-        groups AS (
-            SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
-        ),
-        streaks AS (
-            SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
-        )
-        SELECT len FROM streaks
-        WHERE end_d >= (CURRENT_DATE AT TIME ZONE 'Europe/Amsterdam')::date - INTERVAL '1 day'
-        ORDER BY end_d DESC LIMIT 1
-    """)
-    current_streak = int(current_streak_df.iloc[0]["len"]) if not current_streak_df.empty else 0
-
-    longest_streak_df = query_df("""
-        WITH days AS (
-            SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
-            FROM unified_plays
-        ),
-        groups AS (
-            SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
-        ),
-        streaks AS (
-            SELECT grp, MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM groups GROUP BY grp
-        )
-        SELECT MAX(len) AS len FROM streaks
-    """)
-    longest_streak = int(longest_streak_df.iloc[0]["len"] or 0)
-
-    avg_per_day = int(total_scrobbles / days_listening) if days_listening > 0 else 0
-
     col5.metric("Days listening", f"{days_listening:,}")
     col6.metric("Current streak", f"{current_streak:,} days")
     col7.metric("Longest streak", f"{longest_streak:,} days")
@@ -120,12 +128,14 @@ with tab_overview:
     st.divider()
     st.subheader("Monthly scrobbles")
 
-    monthly_df = query_df("""
-        SELECT TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS month,
-               COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY month ORDER BY month
-    """)
+    with skeleton_placeholder("chart") as ph_ov3:
+        monthly_df = query_df("""
+            SELECT TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS month,
+                   COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY month ORDER BY month
+        """)
+    ph_ov3.empty()
     st.bar_chart(monthly_df.set_index("month"))
 
 # ── Tab 2: Top tracks/artists ─────────────────────────────────────────────────
@@ -154,7 +164,10 @@ with tab_top:
         LIMIT 50
     """
     st.subheader("Top 50 tracks")
-    st.dataframe(query_df(top_tracks_sql), hide_index=True, width='stretch')
+    with skeleton_placeholder("table") as ph_top1:
+        top_tracks_df = query_df(top_tracks_sql)
+    ph_top1.empty()
+    st.dataframe(top_tracks_df, hide_index=True, width='stretch')
 
     st.divider()
 
@@ -167,7 +180,10 @@ with tab_top:
         LIMIT 50
     """
     st.subheader("Top 50 artists")
-    st.dataframe(query_df(top_artists_sql), hide_index=True, width='stretch')
+    with skeleton_placeholder("table") as ph_top2:
+        top_artists_df = query_df(top_artists_sql)
+    ph_top2.empty()
+    st.dataframe(top_artists_df, hide_index=True, width='stretch')
 
 # ── Tab 3: Trends ─────────────────────────────────────────────────────────────
 
@@ -180,15 +196,17 @@ with tab_trends:
 
     st.subheader("Daily scrobbles")
 
-    cal_df = query_df_params(
-        """
-        SELECT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS day, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY day
-        """,
-        (selected_year,),
-    )
+    with skeleton_placeholder("chart") as ph_tr1:
+        cal_df = query_df_params(
+            """
+            SELECT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS day, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+            GROUP BY day
+            """,
+            (selected_year,),
+        )
+    ph_tr1.empty()
 
     year_start = datetime(selected_year, 1, 1).date()
     year_end = datetime(selected_year, 12, 31).date() if selected_year < today.year else today
@@ -214,14 +232,16 @@ with tab_trends:
 
     st.subheader("When you listen")
 
-    hour_dow_df = query_df("""
-        SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow,
-               EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour,
-               COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY dow, hour
-        ORDER BY dow, hour
-    """)
+    with skeleton_placeholder("chart") as ph_tr2:
+        hour_dow_df = query_df("""
+            SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow,
+                   EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour,
+                   COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY dow, hour
+            ORDER BY dow, hour
+        """)
+    ph_tr2.empty()
     hour_dow_df["dow"] = (hour_dow_df["dow"] - 1) % 7  # Sun=0..Sat=6 → Mon=0..Sun=6
 
     hour_chart = alt.Chart(hour_dow_df).mark_rect().encode(
@@ -239,15 +259,17 @@ with tab_onthisday:
     st.subheader("Listened on this date in past years")
     st.caption(f"What you played on this day ({today.strftime('%B %-d')}, in any year).")
 
-    onthisday_df = query_df("""
-        SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year,
-               artist, track, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(MONTH FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
-          AND EXTRACT(DAY FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(DAY FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
-        GROUP BY year, artist, track
-        ORDER BY year DESC, plays DESC
-    """)
+    with skeleton_placeholder("table") as ph_otd:
+        onthisday_df = query_df("""
+            SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year,
+                   artist, track, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(MONTH FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
+              AND EXTRACT(DAY FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(DAY FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))
+            GROUP BY year, artist, track
+            ORDER BY year DESC, plays DESC
+        """)
+    ph_otd.empty()
 
     if onthisday_df.empty:
         st.info("No scrobbles on this date in any prior year.")
@@ -274,31 +296,34 @@ with tab_yir:
     selected_yr = st.selectbox("Year", yir_years, index=0, key="yir_year")
     prev_yr = selected_yr - 1
 
-    metrics_df = query_df_params("""
-        WITH filtered AS (
+    # ── 4 headline metrics ────────────────────────────────────────────────────
+    with skeleton_placeholder("metric_row") as ph_yir1:
+        metrics_df = query_df_params("""
+            WITH filtered AS (
+                SELECT
+                    EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
+                    artist AS artist_name,
+                    track AS track_title,
+                    DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+                FROM unified_plays
+                WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+            )
             SELECT
-                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
-                artist AS artist_name,
-                track AS track_title,
-                DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-            FROM unified_plays
-            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
-        )
-        SELECT
-            COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_curr,
-            COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_prev,
-            COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_curr,
-            COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_prev,
-            COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_curr,
-            COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_prev,
-            COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_curr,
-            COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_prev
-        FROM filtered
-    """, (selected_yr, prev_yr,
-          selected_yr, prev_yr,
-          selected_yr, prev_yr,
-          selected_yr, prev_yr,
-          selected_yr, prev_yr))
+                COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_curr,
+                COUNT(*) FILTER (WHERE yr = %s)                                        AS scrobbles_prev,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_curr,
+                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE yr = %s) AS tracks_prev,
+                COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_curr,
+                COUNT(DISTINCT artist_name) FILTER (WHERE yr = %s)                     AS artists_prev,
+                COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_curr,
+                COUNT(DISTINCT play_date) FILTER (WHERE yr = %s)                       AS days_prev
+            FROM filtered
+        """, (selected_yr, prev_yr,
+              selected_yr, prev_yr,
+              selected_yr, prev_yr,
+              selected_yr, prev_yr,
+              selected_yr, prev_yr))
+    ph_yir1.empty()
 
     row = metrics_df.iloc[0]
 
@@ -311,44 +336,73 @@ with tab_yir:
     ycol3.metric("Unique artists",   f"{int(row['artists_curr']):,}",    delta=_delta(row['artists_curr'],    row['artists_prev']))
     ycol4.metric("Listening days",   f"{int(row['days_curr']):,}",       delta=_delta(row['days_curr'],       row['days_prev']))
 
+    # ── Top 10 tracks ─────────────────────────────────────────────────────────
     st.subheader("Top 10 tracks")
-    top10_tracks_df = query_df_params("""
-        SELECT artist, track, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY artist, track
-        ORDER BY plays DESC
-        LIMIT 10
-    """, (selected_yr,))
+    with skeleton_placeholder("table") as ph_yir2:
+        top10_tracks_df = query_df_params("""
+            SELECT artist, track, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+            GROUP BY artist, track
+            ORDER BY plays DESC
+            LIMIT 10
+        """, (selected_yr,))
+    ph_yir2.empty()
     top10_tracks_df = top10_tracks_df.rename(columns={"artist": "Artist", "track": "Track", "plays": "Plays"})
     top10_tracks_df.insert(0, "Rank", range(1, len(top10_tracks_df) + 1))
     st.dataframe(top10_tracks_df[["Rank", "Track", "Artist", "Plays"]], hide_index=True, width='stretch')
 
+    # ── Top 10 artists ────────────────────────────────────────────────────────
     st.subheader("Top 10 artists")
-    top10_artists_df = query_df_params("""
-        SELECT artist, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY artist
-        ORDER BY plays DESC
-        LIMIT 10
-    """, (selected_yr,))
+    with skeleton_placeholder("table") as ph_yir3:
+        top10_artists_df = query_df_params("""
+            SELECT artist, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+            GROUP BY artist
+            ORDER BY plays DESC
+            LIMIT 10
+        """, (selected_yr,))
+    ph_yir3.empty()
     top10_artists_df = top10_artists_df.rename(columns={"artist": "Artist", "plays": "Plays"})
     top10_artists_df.insert(0, "Rank", range(1, len(top10_artists_df) + 1))
     st.dataframe(top10_artists_df[["Rank", "Artist", "Plays"]], hide_index=True, width='stretch')
 
+    # ── Monthly distribution ──────────────────────────────────────────────────
     st.subheader("Monthly distribution")
-    monthly_yr_df = query_df_params("""
-        SELECT
-            DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
-            COUNT(*) AS plays
-        FROM unified_plays
-        WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
-        GROUP BY month_d
-        ORDER BY month_d
-    """, (selected_yr,))
-    monthly_yr_df["month_d"] = pd.to_datetime(monthly_yr_df["month_d"])
+    with skeleton_placeholder("chart") as ph_yir4:
+        monthly_yr_df = query_df_params("""
+            SELECT
+                DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
+                COUNT(*) AS plays
+            FROM unified_plays
+            WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = %s
+            GROUP BY month_d
+            ORDER BY month_d
+        """, (selected_yr,))
+        # Compute new-artists count while inside the placeholder
+        if not monthly_yr_df.empty:
+            biggest_idx_yir = int(monthly_yr_df["plays"].idxmax())
+            biggest_month_d_yir = monthly_yr_df.loc[biggest_idx_yir, "month_d"]
+            biggest_n_yir = int(monthly_yr_df.loc[biggest_idx_yir, "plays"])
+            biggest_month_name_yir = pd.to_datetime(biggest_month_d_yir).strftime("%B")
+            new_artists_df = query_df_params("""
+                WITH first_plays AS (
+                    SELECT artist AS artist_name,
+                           MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+                    FROM unified_plays
+                    GROUP BY artist
+                )
+                SELECT COUNT(*) AS new_artists
+                FROM first_plays
+                WHERE EXTRACT(YEAR FROM first_play) = %s
+            """, (selected_yr,))
+            new_artists_n_yir = int(new_artists_df.iloc[0]["new_artists"])
+        else:
+            new_artists_n_yir = None
+    ph_yir4.empty()
 
+    monthly_yr_df["month_d"] = pd.to_datetime(monthly_yr_df["month_d"])
     monthly_yr_chart = alt.Chart(monthly_yr_df).mark_bar().encode(
         x=alt.X("month_d:T", title="Month"),
         y=alt.Y("plays:Q", title="Scrobbles"),
@@ -356,28 +410,10 @@ with tab_yir:
     ).properties(height=300)
     st.altair_chart(monthly_yr_chart, width="stretch")
 
-    if not monthly_yr_df.empty:
-        biggest_idx = int(monthly_yr_df["plays"].idxmax())
-        biggest_month_d = monthly_yr_df.loc[biggest_idx, "month_d"]
-        biggest_n = int(monthly_yr_df.loc[biggest_idx, "plays"])
-        biggest_month_name = pd.to_datetime(biggest_month_d).strftime("%B")
-
-        new_artists_df = query_df_params("""
-            WITH first_plays AS (
-                SELECT artist AS artist_name,
-                       MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-                FROM unified_plays
-                GROUP BY artist
-            )
-            SELECT COUNT(*) AS new_artists
-            FROM first_plays
-            WHERE EXTRACT(YEAR FROM first_play) = %s
-        """, (selected_yr,))
-        new_artists_n = int(new_artists_df.iloc[0]["new_artists"])
-
+    if not monthly_yr_df.empty and new_artists_n_yir is not None:
         st.caption(
-            f"Biggest month: **{biggest_month_name} {selected_yr}** ({biggest_n:,} scrobbles)"
-            f"  ·  First discoveries: **{new_artists_n:,} new artists** scrobbled for the first time this year"
+            f"Biggest month: **{biggest_month_name_yir} {selected_yr}** ({biggest_n_yir:,} scrobbles)"
+            f"  ·  First discoveries: **{new_artists_n_yir:,} new artists** scrobbled for the first time this year"
         )
 
 # ── Tab 6: Deep dives ─────────────────────────────────────────────────────────
@@ -400,24 +436,26 @@ with tab_deepdives:
     with bcol2:
         artist_b = st.selectbox("Artist B", artist_list, index=1, key="battle_artist_b")
 
-    battle_df = query_df_params("""
-        WITH monthly AS (
+    with skeleton_placeholder("chart") as ph_dd1:
+        battle_df = query_df_params("""
+            WITH monthly AS (
+                SELECT
+                    artist,
+                    DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
+                    COUNT(*) AS plays
+                FROM unified_plays
+                WHERE artist IN (%s, %s)
+                GROUP BY artist, month_d
+            )
             SELECT
                 artist,
-                DATE_TRUNC('month', played_at AT TIME ZONE 'Europe/Amsterdam') AS month_d,
-                COUNT(*) AS plays
-            FROM unified_plays
-            WHERE artist IN (%s, %s)
-            GROUP BY artist, month_d
-        )
-        SELECT
-            artist,
-            month_d,
-            plays,
-            SUM(plays) OVER (PARTITION BY artist ORDER BY month_d) AS cumulative_plays
-        FROM monthly
-        ORDER BY artist, month_d
-    """, (artist_a, artist_b))
+                month_d,
+                plays,
+                SUM(plays) OVER (PARTITION BY artist ORDER BY month_d) AS cumulative_plays
+            FROM monthly
+            ORDER BY artist, month_d
+        """, (artist_a, artist_b))
+    ph_dd1.empty()
     battle_df["month_d"] = pd.to_datetime(battle_df["month_d"])
 
     battle_chart = alt.Chart(battle_df).mark_line(point=True).encode(
@@ -428,15 +466,17 @@ with tab_deepdives:
     ).properties(height=350)
     st.altair_chart(battle_chart, width="stretch")
 
-    artist_info_df = query_df_params("""
-        SELECT
-            artist,
-            COUNT(*) AS plays,
-            MIN(DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS first_play_date
-        FROM unified_plays
-        WHERE artist IN (%s, %s)
-        GROUP BY artist
-    """, (artist_a, artist_b))
+    with skeleton_placeholder("metric_row") as ph_dd2:
+        artist_info_df = query_df_params("""
+            SELECT
+                artist,
+                COUNT(*) AS plays,
+                MIN(DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS first_play_date
+            FROM unified_plays
+            WHERE artist IN (%s, %s)
+            GROUP BY artist
+        """, (artist_a, artist_b))
+    ph_dd2.empty()
 
     info_a = artist_info_df[artist_info_df["artist"] == artist_a]
     info_b = artist_info_df[artist_info_df["artist"] == artist_b]
@@ -451,43 +491,45 @@ with tab_deepdives:
 
     st.subheader("Discovery rate")
 
-    discovery_df = query_df("""
-        WITH artist_firsts AS (
-            SELECT
-                artist AS artist_name,
-                MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-            FROM unified_plays
-            GROUP BY artist
-        ),
-        track_firsts AS (
-            SELECT
-                artist AS artist_name,
-                track AS track_title,
-                MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
-            FROM unified_plays
-            GROUP BY artist, track
-        ),
-        artist_counts AS (
-            SELECT
-                DATE_TRUNC('month', first_play) AS month_d,
-                COUNT(*) AS cnt,
-                'New artists' AS series
-            FROM artist_firsts
-            GROUP BY month_d
-        ),
-        track_counts AS (
-            SELECT
-                DATE_TRUNC('month', first_play) AS month_d,
-                COUNT(*) AS cnt,
-                'New tracks' AS series
-            FROM track_firsts
-            GROUP BY month_d
-        )
-        SELECT month_d, cnt, series FROM artist_counts
-        UNION ALL
-        SELECT month_d, cnt, series FROM track_counts
-        ORDER BY series, month_d
-    """)
+    with skeleton_placeholder("chart") as ph_dd3:
+        discovery_df = query_df("""
+            WITH artist_firsts AS (
+                SELECT
+                    artist AS artist_name,
+                    MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+                FROM unified_plays
+                GROUP BY artist
+            ),
+            track_firsts AS (
+                SELECT
+                    artist AS artist_name,
+                    track AS track_title,
+                    MIN(played_at AT TIME ZONE 'Europe/Amsterdam') AS first_play
+                FROM unified_plays
+                GROUP BY artist, track
+            ),
+            artist_counts AS (
+                SELECT
+                    DATE_TRUNC('month', first_play) AS month_d,
+                    COUNT(*) AS cnt,
+                    'New artists' AS series
+                FROM artist_firsts
+                GROUP BY month_d
+            ),
+            track_counts AS (
+                SELECT
+                    DATE_TRUNC('month', first_play) AS month_d,
+                    COUNT(*) AS cnt,
+                    'New tracks' AS series
+                FROM track_firsts
+                GROUP BY month_d
+            )
+            SELECT month_d, cnt, series FROM artist_counts
+            UNION ALL
+            SELECT month_d, cnt, series FROM track_counts
+            ORDER BY series, month_d
+        """)
+    ph_dd3.empty()
     discovery_df["month_d"] = pd.to_datetime(discovery_df["month_d"])
 
     discovery_chart = alt.Chart(discovery_df).mark_line(point=True).encode(
@@ -511,18 +553,20 @@ with tab_personality:
     st.subheader("Album depth")
     st.caption("Top 20 albums by number of unique tracks you've scrobbled. Reveals which albums you've genuinely explored vs the ones where you only play the hits.")
 
-    album_depth_df = query_df("""
-        SELECT
-            album,
-            artist,
-            COUNT(DISTINCT track) AS unique_tracks,
-            COUNT(*) AS total_plays
-        FROM unified_plays
-        WHERE album IS NOT NULL AND album <> ''
-        GROUP BY album, artist
-        ORDER BY unique_tracks DESC, total_plays DESC
-        LIMIT 20
-    """)
+    with skeleton_placeholder("table") as ph_pe1:
+        album_depth_df = query_df("""
+            SELECT
+                album,
+                artist,
+                COUNT(DISTINCT track) AS unique_tracks,
+                COUNT(*) AS total_plays
+            FROM unified_plays
+            WHERE album IS NOT NULL AND album <> ''
+            GROUP BY album, artist
+            ORDER BY unique_tracks DESC, total_plays DESC
+            LIMIT 20
+        """)
+    ph_pe1.empty()
     album_depth_df = album_depth_df.rename(columns={
         "album": "Album", "artist": "Artist",
         "unique_tracks": "Unique tracks", "total_plays": "Total plays",
@@ -536,29 +580,31 @@ with tab_personality:
     st.subheader("Weekend vs weekday")
     st.caption("Top 10 artists for weekend days (Sat–Sun) and weekday days (Mon–Fri), side by side.")
 
-    dow_split_df = query_df("""
-        WITH labeled AS (
-            SELECT
-                artist,
-                CASE
-                    WHEN EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
-                    ELSE 'weekday'
-                END AS day_type
-            FROM unified_plays
-        ),
-        ranked AS (
-            SELECT
-                day_type, artist,
-                COUNT(*) AS plays,
-                ROW_NUMBER() OVER (PARTITION BY day_type ORDER BY COUNT(*) DESC) AS rnk
-            FROM labeled
-            GROUP BY day_type, artist
-        )
-        SELECT day_type, rnk, artist, plays
-        FROM ranked
-        WHERE rnk <= 10
-        ORDER BY day_type, rnk
-    """)
+    with skeleton_placeholder("table") as ph_pe2:
+        dow_split_df = query_df("""
+            WITH labeled AS (
+                SELECT
+                    artist,
+                    CASE
+                        WHEN EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
+                        ELSE 'weekday'
+                    END AS day_type
+                FROM unified_plays
+            ),
+            ranked AS (
+                SELECT
+                    day_type, artist,
+                    COUNT(*) AS plays,
+                    ROW_NUMBER() OVER (PARTITION BY day_type ORDER BY COUNT(*) DESC) AS rnk
+                FROM labeled
+                GROUP BY day_type, artist
+            )
+            SELECT day_type, rnk, artist, plays
+            FROM ranked
+            WHERE rnk <= 10
+            ORDER BY day_type, rnk
+        """)
+    ph_pe2.empty()
 
     wknd_df = dow_split_df[dow_split_df["day_type"] == "weekend"][["rnk", "artist", "plays"]].rename(
         columns={"rnk": "Rank", "artist": "Artist", "plays": "Plays"}
@@ -581,30 +627,32 @@ with tab_personality:
     st.subheader("Listening fingerprint")
     st.caption("Your characteristic listening signature.")
 
-    fingerprint_df = query_df("""
-        WITH totals AS (
-            SELECT
-                COUNT(*) AS total_plays,
-                COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS total_days
-            FROM unified_plays
-        ),
-        hour_top AS (
-            SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d
-            FROM unified_plays
-            GROUP BY hour_d
-            ORDER BY COUNT(*) DESC
-            LIMIT 1
-        ),
-        dow_top AS (
-            SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow_d
-            FROM unified_plays
-            GROUP BY dow_d
-            ORDER BY COUNT(*) DESC
-            LIMIT 1
-        )
-        SELECT t.total_plays, t.total_days, h.hour_d AS peak_hour_d, d.dow_d AS peak_dow_d
-        FROM totals t, hour_top h, dow_top d
-    """)
+    with skeleton_placeholder("metric_row") as ph_pe3:
+        fingerprint_df = query_df("""
+            WITH totals AS (
+                SELECT
+                    COUNT(*) AS total_plays,
+                    COUNT(DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam')) AS total_days
+                FROM unified_plays
+            ),
+            hour_top AS (
+                SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d
+                FROM unified_plays
+                GROUP BY hour_d
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+            ),
+            dow_top AS (
+                SELECT EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS dow_d
+                FROM unified_plays
+                GROUP BY dow_d
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+            )
+            SELECT t.total_plays, t.total_days, h.hour_d AS peak_hour_d, d.dow_d AS peak_dow_d
+            FROM totals t, hour_top h, dow_top d
+        """)
+    ph_pe3.empty()
 
     fp = fingerprint_df.iloc[0]
     DOW_NAMES = {0: "Sunday", 1: "Monday", 2: "Tuesday", 3: "Wednesday",
@@ -626,16 +674,29 @@ with tab_records:
     # ── Section A: Biggest single day ─────────────────────────────────────────
     st.subheader("Biggest single day")
 
-    biggest_day_df = query_df("""
-        WITH daily AS (
-            SELECT
-                (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d,
-                COUNT(*) AS plays
-            FROM unified_plays
-            GROUP BY day_d
-        )
-        SELECT day_d, plays FROM daily ORDER BY plays DESC LIMIT 1
-    """)
+    with skeleton_placeholder("metric_row") as ph_re1:
+        biggest_day_df = query_df("""
+            WITH daily AS (
+                SELECT
+                    (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d,
+                    COUNT(*) AS plays
+                FROM unified_plays
+                GROUP BY day_d
+            )
+            SELECT day_d, plays FROM daily ORDER BY plays DESC LIMIT 1
+        """)
+        if not biggest_day_df.empty:
+            top5_df = query_df_params("""
+                SELECT track, artist, COUNT(*) AS plays
+                FROM unified_plays
+                WHERE (played_at AT TIME ZONE 'Europe/Amsterdam')::date = %s
+                GROUP BY track, artist
+                ORDER BY plays DESC
+                LIMIT 5
+            """, (biggest_day_df.iloc[0]["day_d"],))
+        else:
+            top5_df = None
+    ph_re1.empty()
 
     if not biggest_day_df.empty:
         bd = biggest_day_df.iloc[0]
@@ -647,14 +708,6 @@ with tab_records:
             st.metric("Date",       bd_date_str)
             st.metric("Scrobbles",  f"{bd_plays:,}")
         with bd_col2:
-            top5_df = query_df_params("""
-                SELECT track, artist, COUNT(*) AS plays
-                FROM unified_plays
-                WHERE (played_at AT TIME ZONE 'Europe/Amsterdam')::date = %s
-                GROUP BY track, artist
-                ORDER BY plays DESC
-                LIMIT 5
-            """, (bd["day_d"],))
             top5_df = top5_df.rename(columns={"track": "Track", "artist": "Artist", "plays": "Plays"})
             top5_df.insert(0, "Rank", range(1, len(top5_df) + 1))
             st.dataframe(top5_df[["Rank", "Track", "Artist", "Plays"]], hide_index=True, width='stretch')
@@ -665,24 +718,26 @@ with tab_records:
     st.subheader("Longest gap")
     st.caption("Your longest silence between scrobbles.")
 
-    gap_df = query_df("""
-        WITH gaps AS (
-            SELECT
-                played_at,
-                artist,
-                track,
-                LAG(played_at) OVER (ORDER BY played_at) AS prev_played,
-                LAG(artist)    OVER (ORDER BY played_at) AS prev_artist,
-                LAG(track)     OVER (ORDER BY played_at) AS prev_track,
-                played_at - LAG(played_at) OVER (ORDER BY played_at) AS gap_duration
-            FROM unified_plays
-        )
-        SELECT played_at, artist, track, prev_played, prev_artist, prev_track, gap_duration
-        FROM gaps
-        WHERE prev_played IS NOT NULL
-        ORDER BY gap_duration DESC
-        LIMIT 1
-    """)
+    with skeleton_placeholder("lines") as ph_re2:
+        gap_df = query_df("""
+            WITH gaps AS (
+                SELECT
+                    played_at,
+                    artist,
+                    track,
+                    LAG(played_at) OVER (ORDER BY played_at) AS prev_played,
+                    LAG(artist)    OVER (ORDER BY played_at) AS prev_artist,
+                    LAG(track)     OVER (ORDER BY played_at) AS prev_track,
+                    played_at - LAG(played_at) OVER (ORDER BY played_at) AS gap_duration
+                FROM unified_plays
+            )
+            SELECT played_at, artist, track, prev_played, prev_artist, prev_track, gap_duration
+            FROM gaps
+            WHERE prev_played IS NOT NULL
+            ORDER BY gap_duration DESC
+            LIMIT 1
+        """)
+    ph_re2.empty()
 
     if not gap_df.empty:
         gr       = gap_df.iloc[0]
@@ -713,20 +768,22 @@ with tab_records:
         25000: "25,000th", 50000: "50,000th", 100000: "100,000th",
     }
 
-    milestones_df = query_df(f"""
-        WITH numbered AS (
-            SELECT
-                ROW_NUMBER() OVER (ORDER BY played_at) AS n,
-                played_at,
-                artist,
-                track
-            FROM unified_plays
-        )
-        SELECT n, played_at, artist, track
-        FROM numbered
-        WHERE n IN ({', '.join(str(x) for x in _MILESTONE_NS)})
-        ORDER BY n
-    """)
+    with skeleton_placeholder("table") as ph_re3:
+        milestones_df = query_df(f"""
+            WITH numbered AS (
+                SELECT
+                    ROW_NUMBER() OVER (ORDER BY played_at) AS n,
+                    played_at,
+                    artist,
+                    track
+                FROM unified_plays
+            )
+            SELECT n, played_at, artist, track
+            FROM numbered
+            WHERE n IN ({', '.join(str(x) for x in _MILESTONE_NS)})
+            ORDER BY n
+        """)
+    ph_re3.empty()
 
     if not milestones_df.empty:
         milestones_df["N"]    = milestones_df["n"].apply(lambda x: _ORDINALS.get(int(x), f"{int(x):,}th"))
@@ -739,24 +796,26 @@ with tab_records:
     # ── Section D: Top artist of each year ────────────────────────────────────
     st.subheader("Top artist of each year")
 
-    top_by_year_df = query_df("""
-        WITH yearly AS (
-            SELECT
-                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-                artist,
-                COUNT(*) AS plays,
-                ROW_NUMBER() OVER (
-                    PARTITION BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int
-                    ORDER BY COUNT(*) DESC
-                ) AS rnk
-            FROM unified_plays
-            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
-        )
-        SELECT year_d AS "Year", artist AS "Top artist", plays AS "Plays"
-        FROM yearly
-        WHERE rnk = 1
-        ORDER BY year_d DESC
-    """)
+    with skeleton_placeholder("table") as ph_re4:
+        top_by_year_df = query_df("""
+            WITH yearly AS (
+                SELECT
+                    EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                    artist,
+                    COUNT(*) AS plays,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int
+                        ORDER BY COUNT(*) DESC
+                    ) AS rnk
+                FROM unified_plays
+                GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
+            )
+            SELECT year_d AS "Year", artist AS "Top artist", plays AS "Plays"
+            FROM yearly
+            WHERE rnk = 1
+            ORDER BY year_d DESC
+        """)
+    ph_re4.empty()
     st.dataframe(top_by_year_df, hide_index=True, width='stretch')
 
 # ── Tab 9: Highlights ─────────────────────────────────────────────────────────
@@ -788,54 +847,58 @@ with tab_highlights:
         with hl_col_b:
             hl_b = st.selectbox("Period B", hl_years, index=min(1, len(hl_years) - 1), key="hl_year_b")
 
-        cmp_df = query_df_params("""
-            WITH filtered AS (
+        with skeleton_placeholder("metric_row") as ph_hl1:
+            cmp_df = query_df_params("""
+                WITH filtered AS (
+                    SELECT
+                        EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS period_key,
+                        artist AS artist_name,
+                        track AS track_title,
+                        DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+                    FROM unified_plays
+                    WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
+                )
                 SELECT
-                    EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS period_key,
-                    artist AS artist_name,
-                    track AS track_title,
-                    DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-                FROM unified_plays
-                WHERE EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (%s, %s)
-            )
-            SELECT
-                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
-                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
-                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
-                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
-                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
-                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
-                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
-                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
-            FROM filtered
-        """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+                    COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
+                    COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
+                    COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
+                    COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
+                    COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
+                    COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
+                    COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
+                    COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
+                FROM filtered
+            """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+        ph_hl1.empty()
     else:
         with hl_col_a:
             hl_a = st.selectbox("Period A", hl_months, index=0, key="hl_month_a")
         with hl_col_b:
             hl_b = st.selectbox("Period B", hl_months, index=min(1, len(hl_months) - 1), key="hl_month_b")
 
-        cmp_df = query_df_params("""
-            WITH filtered AS (
+        with skeleton_placeholder("metric_row") as ph_hl1:
+            cmp_df = query_df_params("""
+                WITH filtered AS (
+                    SELECT
+                        TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS period_key,
+                        artist AS artist_name,
+                        track AS track_title,
+                        DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
+                    FROM unified_plays
+                    WHERE TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') IN (%s, %s)
+                )
                 SELECT
-                    TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS period_key,
-                    artist AS artist_name,
-                    track AS track_title,
-                    DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS play_date
-                FROM unified_plays
-                WHERE TO_CHAR(played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') IN (%s, %s)
-            )
-            SELECT
-                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
-                COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
-                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
-                COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
-                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
-                COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
-                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
-                COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
-            FROM filtered
-        """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+                    COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_a,
+                    COUNT(*) FILTER (WHERE period_key = %s) AS scrobbles_b,
+                    COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_a,
+                    COUNT(DISTINCT (artist_name || '|||' || track_title)) FILTER (WHERE period_key = %s) AS tracks_b,
+                    COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_a,
+                    COUNT(DISTINCT artist_name) FILTER (WHERE period_key = %s) AS artists_b,
+                    COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_a,
+                    COUNT(DISTINCT play_date) FILTER (WHERE period_key = %s) AS days_b
+                FROM filtered
+            """, (hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b, hl_a, hl_b))
+        ph_hl1.empty()
 
     if not cmp_df.empty:
         cmp_row = cmp_df.iloc[0]
@@ -851,60 +914,62 @@ with tab_highlights:
     # ── Section B: Achievements ───────────────────────────────────────────────
     st.subheader("Achievements")
 
-    ach_first = query_df("""
-        SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS first_d,
-               artist, track
-        FROM unified_plays
-        ORDER BY played_at ASC LIMIT 1
-    """)
-    ach_streak = query_df("""
-        WITH days AS (
-            SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
+    with skeleton_placeholder("metric_row", "metric_row") as ph_hl2:
+        ach_first = query_df("""
+            SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS first_d,
+                   artist, track
             FROM unified_plays
-        ),
-        grps AS (
-            SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
-        ),
-        streaks AS (
-            SELECT MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM grps GROUP BY grp
-        )
-        SELECT len, start_d, end_d FROM streaks ORDER BY len DESC LIMIT 1
-    """)
-    ach_marathon = query_df("""
-        SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d, COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY day_d ORDER BY plays DESC LIMIT 1
-    """)
-    ach_top_artist = query_df("""
-        SELECT artist, COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY artist ORDER BY plays DESC LIMIT 1
-    """)
-    ach_top_track = query_df("""
-        SELECT artist, track, COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY artist, track ORDER BY plays DESC LIMIT 1
-    """)
-    ach_best_year = query_df("""
-        SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d, COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY year_d ORDER BY plays DESC LIMIT 1
-    """)
-    ach_discovery = query_df("""
-        WITH firsts AS (
-            SELECT artist AS artist_name,
-                   EXTRACT(YEAR FROM MIN(played_at AT TIME ZONE 'Europe/Amsterdam'))::int AS first_yr
+            ORDER BY played_at ASC LIMIT 1
+        """)
+        ach_streak = query_df("""
+            WITH days AS (
+                SELECT DISTINCT DATE(played_at AT TIME ZONE 'Europe/Amsterdam') AS d
+                FROM unified_plays
+            ),
+            grps AS (
+                SELECT d, d - (ROW_NUMBER() OVER (ORDER BY d))::int AS grp FROM days
+            ),
+            streaks AS (
+                SELECT MIN(d) AS start_d, MAX(d) AS end_d, COUNT(*) AS len FROM grps GROUP BY grp
+            )
+            SELECT len, start_d, end_d FROM streaks ORDER BY len DESC LIMIT 1
+        """)
+        ach_marathon = query_df("""
+            SELECT (played_at AT TIME ZONE 'Europe/Amsterdam')::date AS day_d, COUNT(*) AS plays
             FROM unified_plays
-            GROUP BY artist
-        )
-        SELECT first_yr AS year_d, COUNT(*) AS new_artists
-        FROM firsts GROUP BY first_yr ORDER BY new_artists DESC LIMIT 1
-    """)
-    ach_peak_hour = query_df("""
-        SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d, COUNT(*) AS plays
-        FROM unified_plays
-        GROUP BY hour_d ORDER BY plays DESC LIMIT 1
-    """)
+            GROUP BY day_d ORDER BY plays DESC LIMIT 1
+        """)
+        ach_top_artist = query_df("""
+            SELECT artist, COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY artist ORDER BY plays DESC LIMIT 1
+        """)
+        ach_top_track = query_df("""
+            SELECT artist, track, COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY artist, track ORDER BY plays DESC LIMIT 1
+        """)
+        ach_best_year = query_df("""
+            SELECT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d, COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY year_d ORDER BY plays DESC LIMIT 1
+        """)
+        ach_discovery = query_df("""
+            WITH firsts AS (
+                SELECT artist AS artist_name,
+                       EXTRACT(YEAR FROM MIN(played_at AT TIME ZONE 'Europe/Amsterdam'))::int AS first_yr
+                FROM unified_plays
+                GROUP BY artist
+            )
+            SELECT first_yr AS year_d, COUNT(*) AS new_artists
+            FROM firsts GROUP BY first_yr ORDER BY new_artists DESC LIMIT 1
+        """)
+        ach_peak_hour = query_df("""
+            SELECT EXTRACT(HOUR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS hour_d, COUNT(*) AS plays
+            FROM unified_plays
+            GROUP BY hour_d ORDER BY plays DESC LIMIT 1
+        """)
+    ph_hl2.empty()
 
     def _ach_card(col, emoji, name, value, detail):
         with col:
@@ -963,31 +1028,33 @@ with tab_highlights:
     st.subheader("Artist rank race")
     st.caption("Where your top 10 all-time artists ranked each year.")
 
-    race_df = query_df("""
-        WITH yearly AS (
-            SELECT
-                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-                artist,
-                COUNT(*) AS plays
-            FROM unified_plays
-            GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
-        ),
-        ranked_all AS (
-            SELECT year_d, artist, plays,
-                   ROW_NUMBER() OVER (PARTITION BY year_d ORDER BY plays DESC) AS rnk
-            FROM yearly
-        ),
-        top10 AS (
-            SELECT artist FROM (
-                SELECT artist, SUM(plays) AS total_plays
-                FROM yearly GROUP BY artist ORDER BY total_plays DESC LIMIT 10
-            ) sub
-        )
-        SELECT r.year_d, r.artist, r.plays, r.rnk
-        FROM ranked_all r
-        JOIN top10 t ON t.artist = r.artist
-        ORDER BY r.year_d, r.rnk
-    """)
+    with skeleton_placeholder("chart") as ph_hl3:
+        race_df = query_df("""
+            WITH yearly AS (
+                SELECT
+                    EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                    artist,
+                    COUNT(*) AS plays
+                FROM unified_plays
+                GROUP BY EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int, artist
+            ),
+            ranked_all AS (
+                SELECT year_d, artist, plays,
+                       ROW_NUMBER() OVER (PARTITION BY year_d ORDER BY plays DESC) AS rnk
+                FROM yearly
+            ),
+            top10 AS (
+                SELECT artist FROM (
+                    SELECT artist, SUM(plays) AS total_plays
+                    FROM yearly GROUP BY artist ORDER BY total_plays DESC LIMIT 10
+                ) sub
+            )
+            SELECT r.year_d, r.artist, r.plays, r.rnk
+            FROM ranked_all r
+            JOIN top10 t ON t.artist = r.artist
+            ORDER BY r.year_d, r.rnk
+        """)
+    ph_hl3.empty()
 
     if not race_df.empty:
         race_chart = alt.Chart(race_df).mark_line(point=True).encode(
@@ -1004,16 +1071,18 @@ with tab_highlights:
 
 with tab_spotify:
     # ── Section 1: Overview metrics row ──────────────────────────────────────
-    sp_overview_df = query_df("""
-        SELECT
-            COUNT(*) AS total_plays,
-            ROUND(SUM(ms_played) / 3600000.0, 1) AS total_hours,
-            MIN((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS first_d,
-            MAX((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS last_d,
-            COUNT(DISTINCT track_uri) AS distinct_tracks
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-    """)
+    with skeleton_placeholder("metric_row") as ph_sp1:
+        sp_overview_df = query_df("""
+            SELECT
+                COUNT(*) AS total_plays,
+                ROUND(SUM(ms_played) / 3600000.0, 1) AS total_hours,
+                MIN((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS first_d,
+                MAX((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS last_d,
+                COUNT(DISTINCT track_uri) AS distinct_tracks
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+        """)
+    ph_sp1.empty()
 
     sp_row = sp_overview_df.iloc[0]
     sp_date_range = (
@@ -1034,15 +1103,17 @@ with tab_spotify:
     st.subheader("Listening time")
     st.caption("Hours of music listened to, by year.")
 
-    sp_hours_df = query_df("""
-        SELECT
-            EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-            ROUND(SUM(ms_played) / 3600000.0, 1) AS hours
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-        GROUP BY year_d
-        ORDER BY year_d
-    """)
+    with skeleton_placeholder("chart") as ph_sp2:
+        sp_hours_df = query_df("""
+            SELECT
+                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                ROUND(SUM(ms_played) / 3600000.0, 1) AS hours
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY year_d
+            ORDER BY year_d
+        """)
+    ph_sp2.empty()
 
     sp_hours_chart = alt.Chart(sp_hours_df).mark_bar().encode(
         x=alt.X("year_d:O", title="Year"),
@@ -1057,39 +1128,41 @@ with tab_spotify:
     st.subheader("Skip analysis")
     st.caption("Skip rate and the tracks you skipped most often.")
 
-    sp_skip_rate_df = query_df("""
-        SELECT
-            ROUND(100.0 * COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') / COUNT(*), 1) AS skip_rate_pct
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-    """)
-    sp_skip_rate = float(sp_skip_rate_df.iloc[0]["skip_rate_pct"])
-    st.metric("Overall skip rate", f"{sp_skip_rate:.1f}%")
-
-    sp_skipped_df = query_df("""
-        WITH t AS (
+    with skeleton_placeholder("metric", "table") as ph_sp3:
+        sp_skip_rate_df = query_df("""
             SELECT
-                track_uri,
-                MAX(track_name) AS track_name,
-                MAX(artist_name) AS artist_name,
-                COUNT(*) AS plays,
-                COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') AS skips
+                ROUND(100.0 * COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') / COUNT(*), 1) AS skip_rate_pct
             FROM spotify_plays
             WHERE track_uri IS NOT NULL
-            GROUP BY track_uri
-            HAVING COUNT(*) >= 10
-        )
-        SELECT
-            track_name,
-            artist_name,
-            plays,
-            skips,
-            ROUND(100.0 * skips / plays, 1) AS skip_rate_pct
-        FROM t
-        WHERE skips > 0
-        ORDER BY skip_rate_pct DESC, skips DESC
-        LIMIT 20
-    """)
+        """)
+        sp_skipped_df = query_df("""
+            WITH t AS (
+                SELECT
+                    track_uri,
+                    MAX(track_name) AS track_name,
+                    MAX(artist_name) AS artist_name,
+                    COUNT(*) AS plays,
+                    COUNT(*) FILTER (WHERE reason_end = 'fwdbtn') AS skips
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                GROUP BY track_uri
+                HAVING COUNT(*) >= 10
+            )
+            SELECT
+                track_name,
+                artist_name,
+                plays,
+                skips,
+                ROUND(100.0 * skips / plays, 1) AS skip_rate_pct
+            FROM t
+            WHERE skips > 0
+            ORDER BY skip_rate_pct DESC, skips DESC
+            LIMIT 20
+        """)
+    ph_sp3.empty()
+
+    sp_skip_rate = float(sp_skip_rate_df.iloc[0]["skip_rate_pct"])
+    st.metric("Overall skip rate", f"{sp_skip_rate:.1f}%")
     sp_skipped_df = sp_skipped_df.rename(columns={
         "track_name": "Track", "artist_name": "Artist",
         "plays": "Plays", "skips": "Skips", "skip_rate_pct": "Skip rate %",
@@ -1103,23 +1176,25 @@ with tab_spotify:
     st.subheader("Platform breakdown")
     st.caption("Where you listen — by device family.")
 
-    sp_platform_df = query_df("""
-        SELECT
-            CASE
-                WHEN platform LIKE '%OS X%' OR platform LIKE '%Mac OS%' OR platform LIKE '%macOS%' THEN 'Mac'
-                WHEN platform LIKE '%iOS%' OR platform LIKE '%iPhone%' OR platform LIKE '%iPad%' THEN 'iOS'
-                WHEN platform LIKE '%Android%' THEN 'Android'
-                WHEN platform LIKE '%Windows%' THEN 'Windows'
-                WHEN platform LIKE '%WebPlayer%' OR platform ILIKE '%web%' THEN 'Web'
-                WHEN platform IS NULL OR platform = '' THEN 'Unknown'
-                ELSE 'Other'
-            END AS platform_family,
-            COUNT(*) AS plays
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-        GROUP BY platform_family
-        ORDER BY plays DESC
-    """)
+    with skeleton_placeholder("chart") as ph_sp4:
+        sp_platform_df = query_df("""
+            SELECT
+                CASE
+                    WHEN platform LIKE '%OS X%' OR platform LIKE '%Mac OS%' OR platform LIKE '%macOS%' THEN 'Mac'
+                    WHEN platform LIKE '%iOS%' OR platform LIKE '%iPhone%' OR platform LIKE '%iPad%' THEN 'iOS'
+                    WHEN platform LIKE '%Android%' THEN 'Android'
+                    WHEN platform LIKE '%Windows%' THEN 'Windows'
+                    WHEN platform LIKE '%WebPlayer%' OR platform ILIKE '%web%' THEN 'Web'
+                    WHEN platform IS NULL OR platform = '' THEN 'Unknown'
+                    ELSE 'Other'
+                END AS platform_family,
+                COUNT(*) AS plays
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY platform_family
+            ORDER BY plays DESC
+        """)
+    ph_sp4.empty()
 
     sp_platform_total = sp_platform_df["plays"].sum()
     sp_platform_df["pct"] = (sp_platform_df["plays"] / sp_platform_total * 100).round(1)
@@ -1151,21 +1226,23 @@ with tab_spotify:
     st.subheader("Shuffle behavior")
     st.caption("How often you let Spotify pick the order versus choosing yourself.")
 
-    sp_shuffle_df = query_df("""
-        SELECT
-            EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-            ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-        GROUP BY year_d
-        ORDER BY year_d
-    """)
+    with skeleton_placeholder("metric", "chart") as ph_sp5:
+        sp_shuffle_overall_df = query_df("""
+            SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+        """)
+        sp_shuffle_df = query_df("""
+            SELECT
+                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY year_d
+            ORDER BY year_d
+        """)
+    ph_sp5.empty()
 
-    sp_shuffle_overall_df = query_df("""
-        SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE shuffle = true) / COUNT(*), 1) AS shuffle_rate_pct
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-    """)
     sp_shuffle_overall = float(sp_shuffle_overall_df.iloc[0]["shuffle_rate_pct"])
     st.metric("Shuffle rate", f"{sp_shuffle_overall:.1f}%")
 
@@ -1183,23 +1260,25 @@ with tab_spotify:
     st.subheader("End-of-play reasons")
     st.caption("Why each play ended — finished naturally, skipped, paused, app closed.")
 
-    sp_reasons_df = query_df("""
-        WITH r AS (
+    with skeleton_placeholder("chart") as ph_sp6:
+        sp_reasons_df = query_df("""
+            WITH r AS (
+                SELECT
+                    COALESCE(reason_end, '(null)') AS reason,
+                    COUNT(*) AS plays
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                GROUP BY reason_end
+            )
             SELECT
-                COALESCE(reason_end, '(null)') AS reason,
-                COUNT(*) AS plays
-            FROM spotify_plays
-            WHERE track_uri IS NOT NULL
-            GROUP BY reason_end
-        )
-        SELECT
-            reason,
-            plays,
-            ROUND(100.0 * plays / SUM(plays) OVER (), 1) AS pct
-        FROM r
-        ORDER BY plays DESC
-        LIMIT 10
-    """)
+                reason,
+                plays,
+                ROUND(100.0 * plays / SUM(plays) OVER (), 1) AS pct
+            FROM r
+            ORDER BY plays DESC
+            LIMIT 10
+        """)
+    ph_sp6.empty()
 
     sp_reasons_chart = alt.Chart(sp_reasons_df).mark_bar().encode(
         y=alt.Y("reason:N", title="Reason", sort="-x"),
