@@ -708,6 +708,99 @@ def all_time_top_yearly_snapshots(conn) -> list[PlaylistDefinition]:
     return definitions
 
 
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+_MONTHLY_NUMBER_ONE_DESCRIPTION = (
+    "Auto-managed by music-tracker. Manual edits will be overwritten on refresh."
+)
+
+
+def _monthly_top_one_per_month(conn) -> list[tuple[int, int, str]]:
+    """One row per (year, month) with the top track URI, ordered yr ASC, mo ASC.
+
+    Tie-breaking: on equal plays, earliest first_play_at wins (deterministic).
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        WITH per_month AS (
+            SELECT
+                EXTRACT(YEAR  FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS yr,
+                EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS mo,
+                track_uri,
+                COUNT(*) AS plays,
+                MIN(played_at) AS first_play_at
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+            GROUP BY yr, mo, track_uri
+        ),
+        ranked AS (
+            SELECT yr, mo, track_uri, plays, first_play_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY yr, mo
+                       ORDER BY plays DESC, first_play_at ASC
+                   ) AS rn
+            FROM per_month
+        )
+        SELECT yr, mo, track_uri
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY yr DESC, mo DESC
+        """
+    )
+    return cur.fetchall()
+
+
+def month_number_one_playlists(conn) -> list[PlaylistDefinition]:
+    """12 PlaylistDefinitions — one per calendar month, each holding that month's #1
+    track across all years, ordered by year ASC.
+    """
+    rows = _monthly_top_one_per_month(conn)
+
+    def make_query_fn(uris):
+        def fn(_conn):
+            return uris
+        return fn
+
+    definitions = []
+    for mo_num in range(1, 13):
+        month_name = _MONTH_NAMES[mo_num - 1]
+        month_uris = [uri for yr, mo, uri in rows if mo == mo_num]
+        definitions.append(
+            PlaylistDefinition(
+                suffix=f"My {month_name} #1",
+                description=_MONTHLY_NUMBER_ONE_DESCRIPTION,
+                query_fn=make_query_fn(month_uris),
+                kind="updating",
+            )
+        )
+
+    return definitions
+
+
+def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
+    """One PlaylistDefinition — one track per (year, month) the user had plays in,
+    ordered oldest-first. Grows by one entry each month.
+    """
+    rows = _monthly_top_one_per_month(conn)
+    all_uris = [uri for _yr, _mo, uri in rows]
+
+    def query_fn(_conn):
+        return all_uris
+
+    return [
+        PlaylistDefinition(
+            suffix="My Monthly #1",
+            description=_MONTHLY_NUMBER_ONE_DESCRIPTION,
+            query_fn=query_fn,
+            kind="updating",
+        )
+    ]
+
+
 def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     """Return all managed playlist definitions (static + dynamic)."""
     dynamic = []
@@ -717,6 +810,8 @@ def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     dynamic.extend(seasonal_top_snapshots(conn))
     dynamic.extend(yearly_top_snapshots(conn))
     dynamic.extend(all_time_top_yearly_snapshots(conn))
+    dynamic.extend(month_number_one_playlists(conn))
+    dynamic.extend(rolling_monthly_number_one_playlist(conn))
     return STATIC_PLAYLISTS + dynamic
 
 
