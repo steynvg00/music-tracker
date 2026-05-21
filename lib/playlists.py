@@ -884,13 +884,13 @@ def missed_new_tracks_popular_playlist(conn, sp, rank_fn=None) -> list[PlaylistD
     top 20 followed artists by play count.
     """
     from lib.missed_new_tracks import (
-        rank_artists_by_plays,
         find_missed_tracks,
         _MISSED_NEW_TRACKS_RECENCY_DAYS,
         _MISSED_NEW_TRACKS_POPULAR_TOP_N,
     )
+    from lib.artist_popularity import rank_artists_by_composite  # v0.45: composite default
     if rank_fn is None:
-        rank_fn = rank_artists_by_plays
+        rank_fn = rank_artists_by_composite
 
     ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
     top_n = _MISSED_NEW_TRACKS_POPULAR_TOP_N
@@ -918,13 +918,13 @@ def missed_new_tracks_other_playlist(conn, sp, rank_fn=None) -> list[PlaylistDef
     artists ranked 21-1000 by play count.
     """
     from lib.missed_new_tracks import (
-        rank_artists_by_plays,
         find_missed_tracks,
         _MISSED_NEW_TRACKS_RECENCY_DAYS,
         _MISSED_NEW_TRACKS_OTHER_RANGE,
     )
+    from lib.artist_popularity import rank_artists_by_composite  # v0.45: composite default
     if rank_fn is None:
-        rank_fn = rank_artists_by_plays
+        rank_fn = rank_artists_by_composite
 
     ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
     start, end = _MISSED_NEW_TRACKS_OTHER_RANGE

@@ -209,19 +209,57 @@ with tab_top:
 
     st.divider()
 
-    top_artists_sql = f"""
-        SELECT artist, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE TRUE {period_filter}
-        GROUP BY artist
-        ORDER BY plays DESC
-        LIMIT 50
-    """
+    _ARTIST_RANK_OPTIONS = {
+        "Total plays": None,
+        "Composite popularity": "composite_score",
+        "Sticky (current obsession)": "sticky_pct",
+        "Evergreen (sustained over years)": "evergreen_pct",
+        "Depth (catalog coverage)": "depth_pct",
+        "Saved (Liked Songs curation)": "saved_count_pct",
+    }
+    artist_rank_by = st.selectbox(
+        "Rank artists by", list(_ARTIST_RANK_OPTIONS.keys()), key="top_artist_ranking"
+    )
+    artist_score_col = _ARTIST_RANK_OPTIONS[artist_rank_by]
+
     st.subheader("Top 50 artists")
-    with skeleton_placeholder("table") as ph_top2:
-        top_artists_df = query_df(top_artists_sql)
-    ph_top2.empty()
-    st.dataframe(top_artists_df, hide_index=True, width='stretch')
+
+    if artist_score_col is None:
+        top_artists_sql = f"""
+            SELECT artist, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE TRUE {period_filter}
+            GROUP BY artist
+            ORDER BY plays DESC
+            LIMIT 50
+        """
+        with skeleton_placeholder("table") as ph_top2:
+            top_artists_df = query_df(top_artists_sql)
+        ph_top2.empty()
+        st.dataframe(top_artists_df, hide_index=True, width='stretch')
+    else:
+        st.caption(
+            "Popularity scores reflect your full listening history; "
+            "time-window filter doesn't apply to score-based rankings."
+        )
+        artist_pop_sql = f"""
+            SELECT
+                aps.artist_name AS artist,
+                aps.total_plays AS plays,
+                aps.{artist_score_col} AS score
+            FROM artist_popularity_scores aps
+            ORDER BY aps.{artist_score_col} DESC
+            LIMIT 50
+        """
+        with skeleton_placeholder("table") as ph_top2:
+            top_artists_df = query_df(artist_pop_sql)
+        ph_top2.empty()
+        if artist_score_col == "composite_score":
+            top_artists_df["score"] = top_artists_df["score"].apply(lambda x: f"{float(x):.3f}")
+        else:
+            top_artists_df["score"] = top_artists_df["score"].apply(lambda x: f"{float(x) * 100:.0f}%")
+        top_artists_df = top_artists_df.rename(columns={"score": artist_rank_by})
+        st.dataframe(top_artists_df, hide_index=True, width='stretch')
 
 # ── Tab 3: Trends ─────────────────────────────────────────────────────────────
 
