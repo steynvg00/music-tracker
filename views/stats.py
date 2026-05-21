@@ -156,19 +156,56 @@ with tab_top:
         "Last 7 days": "AND played_at >= NOW() - INTERVAL '7 days'",
     }[period]
 
-    top_tracks_sql = f"""
-        SELECT artist, track, COUNT(*) AS plays
-        FROM unified_plays
-        WHERE TRUE {period_filter}
-        GROUP BY artist, track
-        ORDER BY plays DESC
-        LIMIT 50
-    """
+    _RANK_OPTIONS = {
+        "Total plays": None,
+        "Composite popularity": "composite_score",
+        "Sticky (current obsession)": "sticky_pct",
+        "Evergreen (sustained over years)": "evergreen_pct",
+        "Flash hit (brief explosion)": "flash_hit_pct",
+        "Session loop (replay behavior)": "session_loop_pct",
+    }
+    rank_by = st.selectbox("Rank tracks by", list(_RANK_OPTIONS.keys()), key="top_track_ranking")
+    score_col = _RANK_OPTIONS[rank_by]
+
     st.subheader("Top 50 tracks")
-    with skeleton_placeholder("table") as ph_top1:
-        top_tracks_df = query_df(top_tracks_sql)
-    ph_top1.empty()
-    st.dataframe(top_tracks_df, hide_index=True, width='stretch')
+
+    if score_col is None:
+        top_tracks_sql = f"""
+            SELECT artist, track, COUNT(*) AS plays
+            FROM unified_plays
+            WHERE TRUE {period_filter}
+            GROUP BY artist, track
+            ORDER BY plays DESC
+            LIMIT 50
+        """
+        with skeleton_placeholder("table") as ph_top1:
+            top_tracks_df = query_df(top_tracks_sql)
+        ph_top1.empty()
+        st.dataframe(top_tracks_df, hide_index=True, width='stretch')
+    else:
+        st.caption(
+            "Popularity scores reflect your full listening history; "
+            "time-window filter doesn't apply to score-based rankings."
+        )
+        pop_sql = f"""
+            SELECT
+                (SELECT artist_name FROM spotify_plays WHERE track_uri = tps.track_uri LIMIT 1) AS artist,
+                (SELECT track_name FROM spotify_plays WHERE track_uri = tps.track_uri LIMIT 1) AS track,
+                tps.raw_plays AS plays,
+                tps.{score_col} AS score
+            FROM track_popularity_scores tps
+            ORDER BY tps.{score_col} DESC
+            LIMIT 50
+        """
+        with skeleton_placeholder("table") as ph_top1:
+            top_tracks_df = query_df(pop_sql)
+        ph_top1.empty()
+        if score_col == "composite_score":
+            top_tracks_df["score"] = top_tracks_df["score"].apply(lambda x: f"{float(x):.3f}")
+        else:
+            top_tracks_df["score"] = top_tracks_df["score"].apply(lambda x: f"{float(x) * 100:.0f}%")
+        top_tracks_df = top_tracks_df.rename(columns={"score": rank_by})
+        st.dataframe(top_tracks_df, hide_index=True, width='stretch')
 
     st.divider()
 
