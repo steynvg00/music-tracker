@@ -2,7 +2,7 @@ name: Scheduled ingest
 
 on:
   schedule:
-    - cron: "0 6 * * 1"     # Mondays 06:00 UTC — last.fm weekly ingest
+    - cron: "0 6 * * 1"     # Mondays 06:00 UTC — weekly playlist refresh
     - cron: "*/30 * * * *"  # Every 30 minutes — Spotify recently-played
     - cron: "0 3 * * *"    # Daily 03:00 UTC — Spotify liked songs sync
     - cron: "30 3 * * *"  # Daily 03:30 UTC — Spotify track metadata enrichment
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   ingest:
-    name: last.fm weekly ingest
+    name: Weekly playlist refresh
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * 1'
     runs-on: ubuntu-latest
     concurrency:
@@ -30,13 +30,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
-
-      - name: Ingest scrobbles
-        run: uv run python scripts/ingest_scrobbles.py
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
-          LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
 
       - name: Refresh playlist
         if: success()
