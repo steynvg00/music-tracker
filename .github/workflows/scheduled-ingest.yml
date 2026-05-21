@@ -35,7 +35,7 @@ jobs:
 
       - name: Refresh playlist
         if: success()
-        run: uv run python scripts/update_managed_playlists.py
+        run: uv run python scripts/update_managed_playlists.py --fresh-ingest
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
