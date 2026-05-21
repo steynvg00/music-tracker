@@ -177,3 +177,33 @@ def get_scores(conn, artist_name: str) -> dict | None:
     columns = [desc[0] for desc in cur.description]
     cur.close()
     return dict(zip(columns, row))
+
+
+def rank_artists_by_composite(conn, artist_names: list[str]) -> list[str]:
+    """Rank a set of artist names by composite popularity score.
+
+    Drop-in replacement for rank_artists_by_plays. Returns the input list
+    sorted by composite_score DESC. Artists without a row in
+    artist_popularity_scores (i.e. fewer than 100 plays) are sorted to the
+    end of the list, ordered among themselves by raw plays DESC (fallback
+    to the play-based ranker for the unscored tail).
+    """
+    if not artist_names:
+        return []
+
+    from lib.missed_new_tracks import rank_artists_by_plays
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT artist_name, composite_score FROM artist_popularity_scores WHERE artist_name = ANY(%s)",
+        (artist_names,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+
+    scored = {row[0]: float(row[1]) for row in rows}
+    scored_names = sorted(scored, key=lambda n: scored[n], reverse=True)
+    unscored_names = [n for n in artist_names if n not in scored]
+    unscored_ranked = rank_artists_by_plays(conn, unscored_names)
+
+    return scored_names + unscored_ranked
