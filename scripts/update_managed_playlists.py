@@ -38,7 +38,7 @@ def main():
     print("[playlists] Opening DB connection...", flush=True)
     conn = psycopg.connect(db_url)
 
-    definitions = get_managed_playlists(conn)
+    definitions = get_managed_playlists(conn, sp)
     total = len(definitions)
     start = time.time()
     for i, definition in enumerate(definitions, start=1):

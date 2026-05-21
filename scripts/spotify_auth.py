@@ -13,7 +13,8 @@ SPOTIFY_SCOPES = (
     "playlist-read-private "
     "user-library-read "
     "user-top-read "
-    "user-read-recently-played"
+    "user-read-recently-played "
+    "user-follow-read"
 )
 
 REDIRECT_URI = "http://127.0.0.1:8888/callback"

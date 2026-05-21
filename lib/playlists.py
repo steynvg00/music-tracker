@@ -849,7 +849,105 @@ def forgotten_favorites_playlist(conn) -> list[PlaylistDefinition]:
     ]
 
 
-def get_managed_playlists(conn) -> list[PlaylistDefinition]:
+# ── Missed new tracks ─────────────────────────────────────────────────────────
+# Cache keyed by id(rank_fn) so both factories share one followed-artist fetch
+# per interpreter run when they use the same ranker.
+_followed_artists_cache: dict[int, tuple[list[str], dict[str, str]]] = {}
+
+
+def _get_ranked_followed_artists(
+    conn, sp, rank_fn
+) -> tuple[list[str], dict[str, str]]:
+    """Fetch + rank followed artists, caching the result per rank_fn identity.
+
+    Returns (ranked_names, artist_id_by_name). The cache is module-level and
+    lives only for the current interpreter run — no cross-run persistence.
+    """
+    cache_key = id(rank_fn)
+    if cache_key in _followed_artists_cache:
+        return _followed_artists_cache[cache_key]
+
+    from lib.missed_new_tracks import fetch_followed_artists
+    print("[playlists] Fetching followed artists...", flush=True)
+    artists = fetch_followed_artists(sp)
+    names = [a["name"] for a in artists]
+    id_by_name = {a["name"]: a["id"] for a in artists}
+    print(f"[playlists] Ranking {len(names)} followed artists...", flush=True)
+    ranked = rank_fn(conn, names)
+    result = (ranked, id_by_name)
+    _followed_artists_cache[cache_key] = result
+    return result
+
+
+def missed_new_tracks_popular_playlist(conn, sp, rank_fn=None) -> list[PlaylistDefinition]:
+    """One PlaylistDefinition — unplayed new releases (last 14 days) from the user's
+    top 20 followed artists by play count.
+    """
+    from lib.missed_new_tracks import (
+        rank_artists_by_plays,
+        find_missed_tracks,
+        _MISSED_NEW_TRACKS_RECENCY_DAYS,
+        _MISSED_NEW_TRACKS_POPULAR_TOP_N,
+    )
+    if rank_fn is None:
+        rank_fn = rank_artists_by_plays
+
+    ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
+    top_n = _MISSED_NEW_TRACKS_POPULAR_TOP_N
+    slice_names = ranked_names[:top_n]
+    days = _MISSED_NEW_TRACKS_RECENCY_DAYS
+
+    def query_fn(_conn):
+        return find_missed_tracks(_conn, sp, slice_names, artist_id_by_name, days_window=days)
+
+    return [
+        PlaylistDefinition(
+            suffix="Missed new tracks · popular artists",
+            description=(
+                f"Auto-managed. New releases (last {days} days) from your top {top_n} "
+                "followed artists that you haven't played yet."
+            ),
+            query_fn=query_fn,
+            kind="updating",
+        )
+    ]
+
+
+def missed_new_tracks_other_playlist(conn, sp, rank_fn=None) -> list[PlaylistDefinition]:
+    """One PlaylistDefinition — unplayed new releases (last 14 days) from followed
+    artists ranked 21-1000 by play count.
+    """
+    from lib.missed_new_tracks import (
+        rank_artists_by_plays,
+        find_missed_tracks,
+        _MISSED_NEW_TRACKS_RECENCY_DAYS,
+        _MISSED_NEW_TRACKS_OTHER_RANGE,
+    )
+    if rank_fn is None:
+        rank_fn = rank_artists_by_plays
+
+    ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
+    start, end = _MISSED_NEW_TRACKS_OTHER_RANGE
+    slice_names = ranked_names[start - 1 : end]  # convert 1-based inclusive to 0-based slice
+    days = _MISSED_NEW_TRACKS_RECENCY_DAYS
+
+    def query_fn(_conn):
+        return find_missed_tracks(_conn, sp, slice_names, artist_id_by_name, days_window=days)
+
+    return [
+        PlaylistDefinition(
+            suffix="Missed new tracks · other artists",
+            description=(
+                f"Auto-managed. New releases (last {days} days) from your followed artists "
+                f"ranked {start}-{end} that you haven't played yet."
+            ),
+            query_fn=query_fn,
+            kind="updating",
+        )
+    ]
+
+
+def get_managed_playlists(conn, sp) -> list[PlaylistDefinition]:
     """Return all managed playlist definitions (static + dynamic)."""
     dynamic = []
     dynamic.extend(year_discovered_playlists(conn))
@@ -861,6 +959,8 @@ def get_managed_playlists(conn) -> list[PlaylistDefinition]:
     dynamic.extend(month_number_one_playlists(conn))
     dynamic.extend(rolling_monthly_number_one_playlist(conn))
     dynamic.extend(forgotten_favorites_playlist(conn))
+    dynamic.extend(missed_new_tracks_popular_playlist(conn, sp))
+    dynamic.extend(missed_new_tracks_other_playlist(conn, sp))
     return STATIC_PLAYLISTS + dynamic
 
 
