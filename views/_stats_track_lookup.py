@@ -170,8 +170,8 @@ def _more_from_artist(artist_name: str, track_uri: str) -> pd.DataFrame:
     )
 
 
-def render_track_lookup_tab() -> None:
-    """Render the Track Lookup tab content."""
+def render_track_lookup_section() -> None:
+    """Render the Track Lookup section content."""
     query = st.text_input("Search by track name or artist", key="track_lookup_query")
 
     if not query:

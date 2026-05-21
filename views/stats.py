@@ -15,7 +15,8 @@ from views._skeleton import (
     skeleton_table,
 )
 from views._stats_phantom_plays import render_phantom_plays_tab
-from views._stats_track_lookup import render_track_lookup_tab
+from views._stats_album_lookup import render_album_lookup_section
+from views._stats_track_lookup import render_track_lookup_section
 
 
 @st.cache_data(ttl=60)
@@ -48,7 +49,7 @@ today = datetime.now().date()
 
 tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_tracklookup, tab_spotify, tab_phantom = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Track lookup", "Spotify", "Phantom plays",
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Lookup", "Spotify", "Phantom plays",
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1190,10 +1191,15 @@ with tab_highlights:
         ).properties(height=400)
         st.altair_chart(race_chart, width="stretch")
 
-# ── Tab 10: Track lookup ─────────────────────────────────────────────────────
+# ── Tab 10: Lookup (Track / Album toggle) ────────────────────────────────────
 
 with tab_tracklookup:
-    render_track_lookup_tab()
+    lookup_mode = st.radio("Search type", ["Track", "Album"], horizontal=True, key="lookup_mode")
+    st.divider()
+    if lookup_mode == "Track":
+        render_track_lookup_section()
+    else:
+        render_album_lookup_section()
 
 # ── Tab 11: Spotify ───────────────────────────────────────────────────────────
 
