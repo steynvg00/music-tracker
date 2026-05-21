@@ -964,6 +964,78 @@ def get_managed_playlists(conn, sp) -> list[PlaylistDefinition]:
     return STATIC_PLAYLISTS + dynamic
 
 
+def get_snapshot_definitions(conn) -> list[PlaylistDefinition]:
+    """All snapshot definitions — no Spotify client needed. Used by the dashboard."""
+    defs = []
+    defs.extend(monthly_top_snapshots(conn))
+    defs.extend(seasonal_top_snapshots(conn))
+    defs.extend(yearly_top_snapshots(conn))
+    defs.extend(all_time_top_yearly_snapshots(conn))
+    return defs
+
+
+def get_updating_definitions(conn) -> list[PlaylistDefinition]:
+    """All updating definitions that don't require a Spotify client. Used by the dashboard.
+
+    Missed new tracks playlists are included as display-only stubs (query_fn returns [])
+    since their actual queries require the Spotify client (sp) for followed-artist lookup.
+    """
+    defs: list[PlaylistDefinition] = list(STATIC_PLAYLISTS)
+    defs.extend(year_discovered_playlists(conn))
+    defs.extend(year_released_playlists(conn))
+    defs.extend(month_number_one_playlists(conn))
+    defs.extend(rolling_monthly_number_one_playlist(conn))
+    defs.extend(forgotten_favorites_playlist(conn))
+    # Stubs for display — stable names, no actual query needed in dashboard
+    defs.append(PlaylistDefinition(
+        suffix="Missed new tracks · popular artists",
+        description="",
+        query_fn=lambda _: [],
+        kind="updating",
+    ))
+    defs.append(PlaylistDefinition(
+        suffix="Missed new tracks · other artists",
+        description="",
+        query_fn=lambda _: [],
+        kind="updating",
+    ))
+    return defs
+
+
+# ── Per-playlist settings integration ────────────────────────────────────────
+# Module-level cache: populated once per interpreter run on first call to
+# update_managed_playlist (i.e., once per cron run). Never used in the dashboard.
+_playlist_settings_cache: dict[str, dict] | None = None
+
+
+def _get_settings_cache(conn) -> dict[str, dict]:
+    global _playlist_settings_cache
+    if _playlist_settings_cache is None:
+        from lib.playlist_settings import get_all_settings
+        _playlist_settings_cache = get_all_settings(conn)
+    return _playlist_settings_cache
+
+
+def _register_playlist(conn, playlist_id: str, playlist_name: str) -> None:
+    """Upsert playlist_id + name into playlist_settings without touching other fields.
+
+    Ensures every managed playlist has a row after its first cron run, allowing
+    the dashboard to look up Spotify IDs by name without calling the Spotify API.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO playlist_settings (playlist_id, playlist_name)
+        VALUES (%s, %s)
+        ON CONFLICT (playlist_id) DO UPDATE
+            SET playlist_name = EXCLUDED.playlist_name,
+                updated_at    = NOW()
+        """,
+        (playlist_id, playlist_name),
+    )
+    conn.commit()
+
+
 # ── Core playlist management ───────────────────────────────────────────────────
 
 def _ensure_playlist_metadata(sp, playlist_id: str, name: str, description: str):
@@ -1080,22 +1152,48 @@ def update_managed_playlist(
     playlist_cache: dict[str, str] | None = None,
 ) -> dict:
     """Refresh one managed playlist: find/create, run query, replace tracks.
-    Returns {'name': str, 'playlist_id': str, 'track_count': int, 'action': str}."""
+    Returns {'name': str, 'playlist_id': str, 'track_count': int, 'action': str}.
+
+    Behavior added in v0.37:
+    - Registers every playlist in playlist_settings (idempotent upsert of id + name).
+    - Snapshots: honored for force-refresh when force_refresh_requested_at is set and
+      more recent than force_refresh_completed_at; marks completed after refresh.
+    - Updating playlists: applies order_pref from playlist_settings after query_fn.
+    """
     full_name = get_full_name(definition)
     playlist_id, was_created = find_or_create_managed_playlist(
         sp, user_id, definition, playlist_cache
     )
 
+    _register_playlist(conn, playlist_id, full_name)
+
     if definition.kind == "snapshot" and not was_created:
-        return {
-            "name": full_name,
-            "playlist_id": playlist_id,
-            "track_count": 0,
-            "action": "skipped (snapshot exists)",
-        }
+        settings = _get_settings_cache(conn).get(playlist_id, {})
+        force_at = settings.get("force_refresh_requested_at")
+        done_at = settings.get("force_refresh_completed_at")
+        force_pending = force_at is not None and (done_at is None or force_at > done_at)
+        if not force_pending:
+            return {
+                "name": full_name,
+                "playlist_id": playlist_id,
+                "track_count": 0,
+                "action": "skipped (snapshot exists)",
+            }
 
     track_uris = definition.query_fn(conn)[: definition.max_tracks]
+
+    if definition.kind == "updating":
+        settings = _get_settings_cache(conn).get(playlist_id, {})
+        order_pref = settings.get("order_pref", "default")
+        if order_pref != "default":
+            from lib.playlist_settings import apply_ordering
+            track_uris = apply_ordering(conn, track_uris, order_pref)
+
     replace_playlist_tracks(sp, playlist_id, track_uris)
+
+    if definition.kind == "snapshot" and not was_created:
+        from lib.playlist_settings import mark_force_refresh_completed
+        mark_force_refresh_completed(conn, playlist_id)
 
     return {
         "name": full_name,
