@@ -563,7 +563,7 @@ with tab_personality:
             FROM unified_plays
             WHERE album IS NOT NULL AND album <> ''
             GROUP BY album, artist
-            ORDER BY unique_tracks DESC, total_plays DESC
+            ORDER BY total_plays DESC, unique_tracks DESC
             LIMIT 20
         """)
     ph_pe1.empty()
