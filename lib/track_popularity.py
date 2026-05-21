@@ -2,21 +2,32 @@
 
 import time
 
-MIN_PLAYS_FOR_SCORING = 20
+from lib.popularity_config import (
+    MIN_PLAYS_FOR_TRACK_SCORING,
+    TRACK_COMPOSITE_WEIGHTS,
+    TRACK_FLASH_HIT_RATIO_THRESHOLD,
+    TRACK_FLASH_HIT_WINDOW_DAYS,
+    TRACK_SESSION_WINDOW_HOURS,
+    TRACK_STICKY_WINDOW_DAYS,
+)
 
-_UPSERT_SQL = """
+MIN_PLAYS_FOR_SCORING = MIN_PLAYS_FOR_TRACK_SCORING  # backward-compat alias for scripts
+
+_W = TRACK_COMPOSITE_WEIGHTS
+
+_UPSERT_SQL = f"""
 WITH track_basics AS (
     SELECT track_uri, COUNT(*) AS total_plays, MIN(played_at) AS first_played
     FROM spotify_plays
     WHERE track_uri IS NOT NULL
     GROUP BY track_uri
-    HAVING COUNT(*) >= 20
+    HAVING COUNT(*) >= {MIN_PLAYS_FOR_TRACK_SCORING}
 ),
 sticky_calc AS (
     SELECT tb.track_uri, tb.total_plays,
-        COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '90 days') AS plays_last_90d,
+        COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '{TRACK_STICKY_WINDOW_DAYS} days') AS plays_last_90d,
         LEAST(
-            COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '90 days') / 30.0,
+            COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '{TRACK_STICKY_WINDOW_DAYS} days') / 30.0,
             1.0
         ) * SQRT(tb.total_plays) AS sticky_raw
     FROM track_basics tb
@@ -40,7 +51,7 @@ play_windows AS (
     SELECT track_uri, played_at,
         COUNT(*) OVER (
             PARTITION BY track_uri ORDER BY played_at
-            RANGE BETWEEN INTERVAL '90 days' PRECEDING AND CURRENT ROW
+            RANGE BETWEEN INTERVAL '{TRACK_FLASH_HIT_WINDOW_DAYS} days' PRECEDING AND CURRENT ROW
         ) AS plays_in_window
     FROM spotify_plays
     WHERE track_uri IN (SELECT track_uri FROM track_basics)
@@ -49,8 +60,8 @@ flash_hit_calc AS (
     SELECT tb.track_uri,
         MAX(pw.plays_in_window)::FLOAT / tb.total_plays AS window_share,
         CASE
-            WHEN MAX(pw.plays_in_window)::FLOAT / tb.total_plays > 0.5 THEN
-                (MAX(pw.plays_in_window)::FLOAT / tb.total_plays - 0.5) * 2 * LN(tb.total_plays)
+            WHEN MAX(pw.plays_in_window)::FLOAT / tb.total_plays > {TRACK_FLASH_HIT_RATIO_THRESHOLD} THEN
+                (MAX(pw.plays_in_window)::FLOAT / tb.total_plays - {TRACK_FLASH_HIT_RATIO_THRESHOLD}) * 2 * LN(tb.total_plays)
             ELSE 0
         END AS flash_hit_raw
     FROM track_basics tb
@@ -67,7 +78,7 @@ session_loop_calc AS (
     SELECT tb.track_uri,
         COUNT(*) FILTER (
             WHERE sg.prev_played_at IS NOT NULL
-            AND sg.played_at - sg.prev_played_at < INTERVAL '2 hours'
+            AND sg.played_at - sg.prev_played_at < INTERVAL '{TRACK_SESSION_WINDOW_HOURS} hours'
         )::FLOAT / tb.total_plays AS session_loop_raw
     FROM track_basics tb
     JOIN session_gaps sg USING (track_uri)
@@ -105,11 +116,11 @@ SELECT
     evergreen_raw, evergreen_pct,
     flash_hit_raw, flash_hit_pct,
     session_loop_raw, session_loop_pct,
-    0.4 * plays_log_pct
-    + 0.2 * COALESCE(sticky_pct, 0)
-    + 0.2 * COALESCE(evergreen_pct, 0)
-    + 0.1 * COALESCE(flash_hit_pct, 0)
-    + 0.1 * COALESCE(session_loop_pct, 0)
+    {_W['plays_log_pct']} * plays_log_pct
+    + {_W['sticky']} * COALESCE(sticky_pct, 0)
+    + {_W['evergreen']} * COALESCE(evergreen_pct, 0)
+    + {_W['flash_hit']} * COALESCE(flash_hit_pct, 0)
+    + {_W['session_loop']} * COALESCE(session_loop_pct, 0)
         AS composite_score,
     NOW()
 FROM percentile_ranks
