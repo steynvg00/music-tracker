@@ -1,4 +1,4 @@
-"""Stats page — 10 read-only tabs with scrobble statistics."""
+"""Stats page — 11 read-only tabs with scrobble statistics."""
 
 import altair as alt
 import pandas as pd
@@ -14,6 +14,7 @@ from views._skeleton import (
     skeleton_placeholder,
     skeleton_table,
 )
+from views._stats_track_lookup import render_track_lookup_tab
 
 
 @st.cache_data(ttl=60)
@@ -44,9 +45,9 @@ st.caption("Personal scrobble stats, threshold playlists, and listening patterns
 
 today = datetime.now().date()
 
-tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_spotify = st.tabs([
+tab_overview, tab_top, tab_trends, tab_onthisday, tab_yir, tab_deepdives, tab_personality, tab_records, tab_highlights, tab_tracklookup, tab_spotify = st.tabs([
     "Overview", "Top tracks/artists", "Trends", "On this day",
-    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Spotify",
+    "Year in review", "Deep dives", "Personality", "Records", "Highlights", "Track lookup", "Spotify",
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -1067,7 +1068,12 @@ with tab_highlights:
         ).properties(height=400)
         st.altair_chart(race_chart, width="stretch")
 
-# ── Tab 10: Spotify ───────────────────────────────────────────────────────────
+# ── Tab 10: Track lookup ─────────────────────────────────────────────────────
+
+with tab_tracklookup:
+    render_track_lookup_tab()
+
+# ── Tab 11: Spotify ───────────────────────────────────────────────────────────
 
 with tab_spotify:
     # ── Section 1: Overview metrics row ──────────────────────────────────────
