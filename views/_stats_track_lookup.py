@@ -4,7 +4,8 @@ import pandas as pd
 import streamlit as st
 
 from lib.db import get_connection
-from lib.track_popularity import get_scores
+from lib.artist_popularity import get_scores as get_artist_scores
+from lib.track_popularity import get_scores as get_track_scores
 from views._skeleton import skeleton_chart, skeleton_metric_row, skeleton_table
 
 
@@ -87,7 +88,12 @@ def _plays_per_month(track_uri: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _get_popularity_scores(track_uri: str) -> dict | None:
-    return get_scores(get_connection(), track_uri)
+    return get_track_scores(get_connection(), track_uri)
+
+
+@st.cache_data(ttl=60)
+def _get_artist_popularity_scores(artist_name: str) -> dict | None:
+    return get_artist_scores(get_connection(), artist_name)
 
 
 @st.cache_data(ttl=60)
@@ -216,6 +222,38 @@ def render_track_lookup_tab() -> None:
         st.dataframe(more_df[["Rank", "Track", "Plays"]], hide_index=True, width="stretch")
     else:
         st.info("No other tracks found for this artist.")
+
+    st.divider()
+
+    # ── Artist popularity ─────────────────────────────────────────────────────
+    st.subheader(f"Artist popularity — {artist_name}")
+    ph_apop = st.empty()
+    with ph_apop.container():
+        skeleton_metric_row(6)
+    artist_scores = _get_artist_popularity_scores(artist_name)
+    ph_apop.empty()
+
+    if artist_scores is None:
+        st.caption("Not enough plays for artist scoring (need 100+).")
+    else:
+        ac1, ac2, ac3, ac4, ac5, ac6 = st.columns(6)
+        ac1.metric("Composite",  f"{float(artist_scores['composite_score']):.3f}")
+        ac2.metric("Sticky",     f"{float(artist_scores['sticky_pct']) * 100:.0f}%")
+        ac3.metric("Evergreen",  f"{float(artist_scores['evergreen_pct']) * 100:.0f}%")
+        ac4.metric("Depth",      f"{float(artist_scores['depth_pct']) * 100:.0f}%")
+        ac5.metric(
+            "Saved",
+            f"{float(artist_scores['saved_count_pct']) * 100:.0f}%",
+            help=f"{int(artist_scores['saved_count_raw'])} liked tracks",
+        )
+        ac6.metric("Devotion",   f"{float(artist_scores['devotion_pct']) * 100:.0f}%")
+        st.caption(
+            "Composite uses plays (30%), sticky and evergreen (20% each), "
+            "depth + saved + inverse-devotion (10% each). "
+            "Saved = distinct tracks of this artist in your Liked Songs. "
+            "Devotion = top track's share of artist plays (inverted in composite so broad catalog love is rewarded). "
+            "Population: artists with 100+ total plays."
+        )
 
     st.divider()
 
