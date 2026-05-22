@@ -228,9 +228,17 @@ with tab_top:
 
     if artist_score_col is None:
         top_artists_sql = f"""
+            WITH plays_with_artists AS (
+                SELECT UNNEST(tm.artist_names) AS artist
+                FROM spotify_plays sp
+                JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+                WHERE sp.track_uri IS NOT NULL
+                  AND tm.artist_names IS NOT NULL
+                  AND array_length(tm.artist_names, 1) > 0
+                  {period_filter}
+            )
             SELECT artist, COUNT(*) AS plays
-            FROM unified_plays
-            WHERE TRUE {period_filter}
+            FROM plays_with_artists
             GROUP BY artist
             ORDER BY plays DESC
             LIMIT 50
@@ -706,21 +714,25 @@ with tab_personality:
 
     with skeleton_placeholder("table") as ph_pe2:
         dow_split_df = query_df("""
-            WITH labeled AS (
+            WITH plays_with_artists AS (
                 SELECT
-                    artist,
+                    UNNEST(tm.artist_names) AS artist,
                     CASE
-                        WHEN EXTRACT(DOW FROM played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
+                        WHEN EXTRACT(DOW FROM sp.played_at AT TIME ZONE 'Europe/Amsterdam') IN (0, 6) THEN 'weekend'
                         ELSE 'weekday'
                     END AS day_type
-                FROM unified_plays
+                FROM spotify_plays sp
+                JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+                WHERE sp.track_uri IS NOT NULL
+                  AND tm.artist_names IS NOT NULL
+                  AND array_length(tm.artist_names, 1) > 0
             ),
             ranked AS (
                 SELECT
                     day_type, artist,
                     COUNT(*) AS plays,
                     ROW_NUMBER() OVER (PARTITION BY day_type ORDER BY COUNT(*) DESC) AS rnk
-                FROM labeled
+                FROM plays_with_artists
                 GROUP BY day_type, artist
             )
             SELECT day_type, rnk, artist, plays

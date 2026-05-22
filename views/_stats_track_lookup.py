@@ -156,17 +156,25 @@ def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataF
 
 
 @st.cache_data(ttl=60)
-def _more_from_artist(artist_name: str, track_uri: str) -> pd.DataFrame:
+def _more_from_artist(track_uri: str) -> pd.DataFrame:
     return _run_query(
         """
-        SELECT track_name, COUNT(*) AS plays
-        FROM spotify_plays
-        WHERE artist_name = %s AND track_uri != %s
-        GROUP BY track_name
+        WITH target_artists AS (
+            SELECT artist_names FROM track_metadata WHERE track_uri = %s
+        )
+        SELECT sp.track_name, sp.track_uri, COUNT(*) AS plays
+        FROM spotify_plays sp
+        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+        CROSS JOIN target_artists ta
+        WHERE sp.track_uri != %s
+          AND tm.artist_names IS NOT NULL
+          AND ta.artist_names IS NOT NULL
+          AND tm.artist_names && ta.artist_names
+        GROUP BY sp.track_name, sp.track_uri
         ORDER BY plays DESC
         LIMIT 10
         """,
-        (artist_name, track_uri),
+        (track_uri, track_uri),
     )
 
 
@@ -323,7 +331,7 @@ def render_track_lookup_section() -> None:
     ph_more = st.empty()
     with ph_more.container():
         skeleton_table(10)
-    more_df = _more_from_artist(artist_name, track_uri)
+    more_df = _more_from_artist(track_uri)
     ph_more.empty()
 
     if not more_df.empty:

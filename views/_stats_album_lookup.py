@@ -80,20 +80,22 @@ def _album_tracks(album_name: str) -> pd.DataFrame:
     return _run_query(
         """
         SELECT
-            track_name,
-            artist_name,
-            track_uri,
+            sp.track_name,
+            array_to_string(tm.artist_names, ', ') AS artists,
+            sp.track_uri,
             COUNT(*) AS play_count,
             ROUND(
-                SUM(CASE WHEN reason_end = 'trackdone' THEN 1 ELSE 0 END) * 100.0
+                SUM(CASE WHEN sp.reason_end = 'trackdone' THEN 1 ELSE 0 END) * 100.0
                 / NULLIF(COUNT(*), 0),
                 1
             ) AS completion_rate
-        FROM spotify_plays
-        WHERE album_name = %s
-          AND track_uri IS NOT NULL
-          AND artist_name IS NOT NULL
-        GROUP BY track_uri, track_name, artist_name
+        FROM spotify_plays sp
+        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+        WHERE sp.album_name = %s
+          AND sp.track_uri IS NOT NULL
+          AND tm.artist_names IS NOT NULL
+          AND array_length(tm.artist_names, 1) > 0
+        GROUP BY sp.track_uri, sp.track_name, tm.artist_names
         ORDER BY play_count DESC
         LIMIT 50
         """,
@@ -210,13 +212,13 @@ def render_album_lookup_section() -> None:
     if not tracks_df.empty:
         disp_tracks = tracks_df.rename(columns={
             "track_name": "Track",
-            "artist_name": "Artist",
+            "artists": "Artists",
             "play_count": "Plays",
             "completion_rate": "Completion %",
         })
         disp_tracks.insert(0, "Rank", range(1, len(disp_tracks) + 1))
         st.dataframe(
-            disp_tracks[["Rank", "Track", "Artist", "Plays", "Completion %"]],
+            disp_tracks[["Rank", "Track", "Artists", "Plays", "Completion %"]],
             hide_index=True,
             width="stretch",
         )
