@@ -1,4 +1,9 @@
-"""Compute and store normalized popularity scores for artists with 100+ plays."""
+"""Compute and store normalized popularity scores for artists with 100+ plays.
+
+v0.54: attribution now uses track_metadata.artist_names (Spotify's authoritative
+artists array) via UNNEST, so every credited artist on a collab track receives
+the play. Previously grouped by spotify_plays.artist_name (credit string only).
+"""
 
 import time
 
@@ -11,37 +16,46 @@ from lib.popularity_config import (
 
 _W = ARTIST_COMPOSITE_WEIGHTS
 
-_UPSERT_SQL = f"""
-WITH artist_basics AS (
+_INSERT_SQL = f"""
+WITH plays_with_artists AS (
+    SELECT
+        sp.track_uri,
+        sp.played_at,
+        sp.ms_played,
+        UNNEST(tm.artist_names) AS artist_name
+    FROM spotify_plays sp
+    JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+    WHERE sp.track_uri IS NOT NULL
+      AND tm.artist_names IS NOT NULL
+      AND array_length(tm.artist_names, 1) > 0
+),
+artist_basics AS (
     SELECT artist_name,
            COUNT(*) AS total_plays,
            MIN(played_at) AS first_played
-    FROM spotify_plays
-    WHERE artist_name IS NOT NULL AND track_uri IS NOT NULL
+    FROM plays_with_artists
     GROUP BY artist_name
     HAVING COUNT(*) >= {MIN_PLAYS_FOR_ARTIST_SCORING}
 ),
 sticky_calc AS (
     SELECT ab.artist_name, ab.total_plays,
-           COUNT(sp.*) FILTER (WHERE sp.played_at >= NOW() - INTERVAL '{ARTIST_STICKY_WINDOW_DAYS} days')::FLOAT / NULLIF(ab.total_plays, 0) AS sticky_raw
+           COUNT(*) FILTER (WHERE pwa.played_at >= NOW() - INTERVAL '{ARTIST_STICKY_WINDOW_DAYS} days')::FLOAT
+               / NULLIF(ab.total_plays, 0) AS sticky_raw
     FROM artist_basics ab
-    JOIN spotify_plays sp USING (artist_name)
-    WHERE sp.track_uri IS NOT NULL
+    JOIN plays_with_artists pwa ON pwa.artist_name = ab.artist_name
     GROUP BY ab.artist_name, ab.total_plays
 ),
 evergreen_calc AS (
     SELECT ab.artist_name,
-        COUNT(DISTINCT DATE_TRUNC('month', sp.played_at)) AS evergreen_raw
+        COUNT(DISTINCT DATE_TRUNC('month', pwa.played_at)) AS evergreen_raw
     FROM artist_basics ab
-    JOIN spotify_plays sp USING (artist_name)
-    WHERE sp.track_uri IS NOT NULL
+    JOIN plays_with_artists pwa ON pwa.artist_name = ab.artist_name
     GROUP BY ab.artist_name, ab.total_plays, ab.first_played
 ),
 track_plays_per_artist AS (
     SELECT artist_name, track_uri, COUNT(*) AS plays
-    FROM spotify_plays
-    WHERE artist_name IS NOT NULL AND track_uri IS NOT NULL
-      AND artist_name IN (SELECT artist_name FROM artist_basics)
+    FROM plays_with_artists
+    WHERE artist_name IN (SELECT artist_name FROM artist_basics)
     GROUP BY artist_name, track_uri
 ),
 depth_calc AS (
@@ -56,23 +70,26 @@ devotion_calc AS (
     FROM track_plays_per_artist
     GROUP BY artist_name
 ),
-artist_track_map AS (
-    SELECT DISTINCT artist_name, track_uri
-    FROM spotify_plays
-    WHERE artist_name IS NOT NULL AND track_uri IS NOT NULL
-      AND artist_name IN (SELECT artist_name FROM artist_basics)
+liked_with_artists AS (
+    SELECT
+        ls.track_uri,
+        UNNEST(tm.artist_names) AS artist_name
+    FROM liked_songs ls
+    JOIN track_metadata tm ON tm.track_uri = ls.track_uri
+    WHERE tm.artist_names IS NOT NULL
+      AND array_length(tm.artist_names, 1) > 0
 ),
 saved_count_calc AS (
-    SELECT atm.artist_name,
-           COUNT(DISTINCT ls.track_uri) AS saved_count_raw
-    FROM liked_songs ls
-    JOIN artist_track_map atm USING (track_uri)
-    GROUP BY atm.artist_name
+    SELECT
+        artist_name,
+        COUNT(DISTINCT track_uri) AS saved_count
+    FROM liked_with_artists
+    GROUP BY artist_name
 ),
 raw_combined AS (
     SELECT ab.artist_name, ab.total_plays,
         s.sticky_raw, e.evergreen_raw, d.depth_raw, dv.devotion_raw,
-        COALESCE(sc.saved_count_raw, 0) AS saved_count_raw
+        COALESCE(sc.saved_count, 0) AS saved_count_raw
     FROM artist_basics ab
     LEFT JOIN sticky_calc s USING (artist_name)
     LEFT JOIN evergreen_calc e USING (artist_name)
@@ -82,10 +99,10 @@ raw_combined AS (
 ),
 percentile_ranks AS (
     SELECT artist_name, total_plays,
-        sticky_raw, PERCENT_RANK() OVER (ORDER BY sticky_raw NULLS FIRST) AS sticky_pct,
-        evergreen_raw, PERCENT_RANK() OVER (ORDER BY evergreen_raw NULLS FIRST) AS evergreen_pct,
-        depth_raw, PERCENT_RANK() OVER (ORDER BY depth_raw NULLS FIRST) AS depth_pct,
-        devotion_raw, PERCENT_RANK() OVER (ORDER BY devotion_raw NULLS FIRST) AS devotion_pct,
+        sticky_raw,      PERCENT_RANK() OVER (ORDER BY sticky_raw NULLS FIRST)      AS sticky_pct,
+        evergreen_raw,   PERCENT_RANK() OVER (ORDER BY evergreen_raw NULLS FIRST)   AS evergreen_pct,
+        depth_raw,       PERCENT_RANK() OVER (ORDER BY depth_raw NULLS FIRST)       AS depth_pct,
+        devotion_raw,    PERCENT_RANK() OVER (ORDER BY devotion_raw NULLS FIRST)    AS devotion_pct,
         saved_count_raw, PERCENT_RANK() OVER (ORDER BY saved_count_raw NULLS FIRST) AS saved_count_pct,
         PERCENT_RANK() OVER (ORDER BY LN(total_plays)) AS plays_log_pct
     FROM raw_combined
@@ -126,25 +143,42 @@ ON CONFLICT (artist_name) DO UPDATE SET
     computed_at      = NOW()
 """
 
+_TOP10_SQL = (
+    "SELECT artist_name, composite_score "
+    "FROM artist_popularity_scores "
+    "ORDER BY composite_score DESC LIMIT 10"
+)
+
 
 def compute_and_store_scores(conn) -> dict:
-    """Run the full artist scoring pipeline and upsert into artist_popularity_scores.
+    """Run the full artist scoring pipeline and store results in artist_popularity_scores.
 
-    Wrapped in a transaction — rolls back on failure.
-    Returns: {rows_inserted: int, rows_updated: int, runtime_seconds: float}
+    Transaction: TRUNCATE + INSERT in one atomic operation so a mid-run failure
+    never leaves the table empty.
+    Returns stats dict including before/after Top 10 for the verification log.
     """
     start = time.time()
     cur = conn.cursor()
 
     try:
+        # Capture state before truncate (may be empty on first ever run)
         cur.execute("SELECT COUNT(*) FROM artist_popularity_scores")
         before_count = cur.fetchone()[0]
 
-        cur.execute(_UPSERT_SQL)
-        total_processed = cur.rowcount
+        cur.execute(_TOP10_SQL)
+        before_top10 = cur.fetchall()
+
+        # TRUNCATE removes stale credit-string-keyed rows; INSERT replaces with
+        # canonical-name-keyed rows from the artist_names array.
+        cur.execute("TRUNCATE TABLE artist_popularity_scores")
+        cur.execute(_INSERT_SQL)
+        total_inserted = cur.rowcount
 
         cur.execute("SELECT COUNT(*) FROM artist_popularity_scores")
         after_count = cur.fetchone()[0]
+
+        cur.execute(_TOP10_SQL)
+        after_top10 = cur.fetchall()
 
         conn.commit()
     except Exception:
@@ -153,20 +187,32 @@ def compute_and_store_scores(conn) -> dict:
     finally:
         cur.close()
 
-    rows_inserted = after_count - before_count
-    rows_updated = total_processed - rows_inserted
     runtime = time.time() - start
 
+    print("\n=== Before v0.54 (Top 10 composite) ===", flush=True)
+    for i, (name, score) in enumerate(before_top10, 1):
+        print(f"{i:2}. {name}  {float(score):.4f}", flush=True)
+    if not before_top10:
+        print("  (table was empty)", flush=True)
+
+    print("\n=== After v0.54 (Top 10 composite) ===", flush=True)
+    for i, (name, score) in enumerate(after_top10, 1):
+        print(f"{i:2}. {name}  {float(score):.4f}", flush=True)
+
+    print(f"\nTotal artists scored: {after_count:,} (was {before_count:,})", flush=True)
+
     print(
-        f"[artist-popularity] Done. Processed {total_processed} artists "
-        f"({rows_inserted} inserted, {rows_updated} updated) in {runtime:.1f}s.",
+        f"[artist-popularity] Done. Truncated {before_count} old rows, "
+        f"inserted {total_inserted} new rows in {runtime:.1f}s.",
         flush=True,
     )
 
     return {
-        "rows_inserted": rows_inserted,
-        "rows_updated": rows_updated,
+        "rows_inserted": total_inserted,
+        "rows_updated": 0,
         "runtime_seconds": runtime,
+        "before_count": before_count,
+        "after_count": after_count,
     }
 
 

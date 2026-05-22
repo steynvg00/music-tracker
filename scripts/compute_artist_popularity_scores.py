@@ -24,8 +24,9 @@ def main():
     try:
         result = compute_and_store_scores(conn)
         print(
-            f"\n=== Done. {result['rows_inserted']} inserted, "
-            f"{result['rows_updated']} updated in {result['runtime_seconds']:.1f}s. ===",
+            f"\n=== Done. {result['rows_inserted']} inserted "
+            f"(replaced {result['before_count']} old rows) "
+            f"in {result['runtime_seconds']:.1f}s. ===",
             flush=True,
         )
     finally:
