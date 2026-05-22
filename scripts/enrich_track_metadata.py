@@ -1,4 +1,4 @@
-"""Enrich tracks in liked_songs with metadata from Spotify."""
+"""Enrich all played tracks with metadata from Spotify (nightly cron)."""
 import sys
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 import psycopg
 from lib.spotify import get_spotify_client
-from lib.track_metadata import enrich_tracks, get_unenriched_liked_song_uris
+from lib.track_metadata import enrich_tracks, get_unenriched_played_track_uris
 
 
 def main():
@@ -21,9 +21,9 @@ def main():
     conn = psycopg.connect(db_url)
 
     try:
-        print("[track-meta] Finding unenriched liked songs...", flush=True)
-        uris = get_unenriched_liked_song_uris(conn)
-        print(f"[track-meta] {len(uris)} liked songs need enrichment.", flush=True)
+        print("[track-meta] Finding played tracks needing enrichment...", flush=True)
+        uris = get_unenriched_played_track_uris(conn)
+        print(f"[track-meta] {len(uris)} played tracks need enrichment.", flush=True)
 
         result = enrich_tracks(sp, conn, uris)
         print(

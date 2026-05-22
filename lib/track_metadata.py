@@ -54,12 +54,17 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
                 except ValueError:
                     release_year = None
 
+            artists = track.get("artists") or []
+            artist_ids = [a["id"] for a in artists if a and a.get("id")] or None
+            artist_names = [a["name"] for a in artists if a and a.get("name")] or None
+
             cur.execute(
                 """
                 INSERT INTO track_metadata (
                     track_uri, release_date, release_year, release_date_precision,
-                    duration_ms, popularity, explicit, album_id, enriched_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    duration_ms, popularity, explicit, album_id,
+                    artist_ids, artist_names, enriched_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (track_uri) DO UPDATE SET
                     release_date = EXCLUDED.release_date,
                     release_year = EXCLUDED.release_year,
@@ -68,6 +73,8 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
                     popularity = EXCLUDED.popularity,
                     explicit = EXCLUDED.explicit,
                     album_id = EXCLUDED.album_id,
+                    artist_ids = EXCLUDED.artist_ids,
+                    artist_names = EXCLUDED.artist_names,
                     enriched_at = NOW()
                 """,
                 (
@@ -79,6 +86,8 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
                     track.get("popularity"),
                     track.get("explicit"),
                     album.get("id"),
+                    artist_ids,
+                    artist_names,
                 ),
             )
             enriched += 1
@@ -96,15 +105,25 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
     }
 
 
-def get_unenriched_liked_song_uris(conn) -> list[str]:
-    """Return track_uris in liked_songs that are NOT yet in track_metadata."""
+def get_unenriched_played_track_uris(conn) -> list[str]:
+    """Return distinct track_uris from spotify_plays that need enrichment.
+
+    Covers two cases:
+      1. No track_metadata row at all.
+      2. Row exists but artist_ids is NULL (added in migration 0012).
+    """
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT ls.track_uri
-        FROM liked_songs ls
-        LEFT JOIN track_metadata tm ON tm.track_uri = ls.track_uri
-        WHERE tm.track_uri IS NULL
+        SELECT DISTINCT sp.track_uri
+        FROM spotify_plays sp
+        WHERE sp.track_uri IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM track_metadata tm
+              WHERE tm.track_uri = sp.track_uri
+                AND tm.artist_ids IS NOT NULL
+          )
         """
     )
     return [row[0] for row in cur.fetchall()]
