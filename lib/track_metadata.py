@@ -2,11 +2,14 @@
 
 import time
 
+import spotipy
+
 
 def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
     """Fetch metadata for the given track URIs from Spotify and UPSERT into track_metadata.
 
     Spotify's /tracks endpoint accepts comma-separated track IDs, up to 50 per call.
+    Sleeps 1.1s between batches (rate-limit-safe); retries once after 60s on 429.
     Returns a dict with summary stats: {'requested': int, 'enriched': int, 'failed': int, 'duration_s': float}.
     """
     start = time.time()
@@ -30,7 +33,20 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
         batch_num = i // BATCH + 1
         print(f"[track-meta] Batch {batch_num}/{total_batches} ({len(batch)} tracks)...", flush=True)
 
-        response = sp.tracks(batch)
+        if i > 0:
+            time.sleep(1.1)
+
+        for attempt in range(2):
+            try:
+                response = sp.tracks(batch)
+                break
+            except spotipy.exceptions.SpotifyException as e:
+                if e.http_status == 429 and attempt == 0:
+                    print("[track-meta] WARNING: 429 rate limit. Sleeping 60s before retry...", flush=True)
+                    time.sleep(60)
+                else:
+                    raise
+
         tracks = response.get("tracks", []) or []
 
         for track in tracks:
@@ -58,13 +74,16 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
             artist_ids = [a["id"] for a in artists if a and a.get("id")] or None
             artist_names = [a["name"] for a in artists if a and a.get("name")] or None
 
+            isrc = track.get("external_ids", {}).get("isrc") or None
+            album_type = album.get("album_type") or None
+
             cur.execute(
                 """
                 INSERT INTO track_metadata (
                     track_uri, release_date, release_year, release_date_precision,
                     duration_ms, popularity, explicit, album_id,
-                    artist_ids, artist_names, enriched_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    artist_ids, artist_names, isrc, album_type, enriched_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (track_uri) DO UPDATE SET
                     release_date = EXCLUDED.release_date,
                     release_year = EXCLUDED.release_year,
@@ -75,6 +94,8 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
                     album_id = EXCLUDED.album_id,
                     artist_ids = EXCLUDED.artist_ids,
                     artist_names = EXCLUDED.artist_names,
+                    isrc = EXCLUDED.isrc,
+                    album_type = EXCLUDED.album_type,
                     enriched_at = NOW()
                 """,
                 (
@@ -88,6 +109,8 @@ def enrich_tracks(sp, conn, track_uris: list[str]) -> dict:
                     album.get("id"),
                     artist_ids,
                     artist_names,
+                    isrc,
+                    album_type,
                 ),
             )
             enriched += 1
