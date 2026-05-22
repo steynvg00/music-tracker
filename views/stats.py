@@ -3,7 +3,7 @@
 import altair as alt
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+from datetime import date, datetime
 
 from lib.db import get_connection
 from views._skeleton import (
@@ -144,19 +144,48 @@ with tab_overview:
 # ── Tab 2: Top tracks/artists ─────────────────────────────────────────────────
 
 with tab_top:
-    period = st.radio(
-        "Time period",
-        ["All time", "This year", "Last 30 days", "Last 7 days"],
-        horizontal=True,
-        key="period_filter",
+    time_range = st.selectbox(
+        "Time range",
+        ["All time", "This year", "Last year", "Custom year", "Custom range"],
+        key="top_tab_time_range",
     )
 
-    period_filter = {
-        "All time": "",
-        "This year": "AND EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam') = EXTRACT(YEAR FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))",
-        "Last 30 days": "AND played_at >= NOW() - INTERVAL '30 days'",
-        "Last 7 days": "AND played_at >= NOW() - INTERVAL '7 days'",
-    }[period]
+    start_date: date | None = None
+    end_date: date | None = None
+
+    if time_range == "This year":
+        _today = datetime.now().date()
+        start_date = date(_today.year, 1, 1)
+        end_date = date(_today.year, 12, 31)
+    elif time_range == "Last year":
+        _today = datetime.now().date()
+        start_date = date(_today.year - 1, 1, 1)
+        end_date = date(_today.year - 1, 12, 31)
+    elif time_range == "Custom year":
+        yr_opts_df = query_df(
+            "SELECT DISTINCT EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS y "
+            "FROM spotify_plays WHERE track_uri IS NOT NULL ORDER BY y DESC"
+        )
+        yr_options = yr_opts_df["y"].tolist()
+        sel_year = st.selectbox("Year", yr_options, index=0, key="top_custom_year")
+        start_date = date(sel_year, 1, 1)
+        end_date = date(sel_year, 12, 31)
+    elif time_range == "Custom range":
+        _cr_col1, _cr_col2 = st.columns(2)
+        with _cr_col1:
+            start_date = st.date_input("Start date", value=date(2024, 1, 1), key="top_start_date")
+        with _cr_col2:
+            end_date = st.date_input("End date", value=datetime.now().date(), key="top_end_date")
+
+    # Parameterized date filter — both variants cover the full end_date day
+    if start_date is not None and end_date is not None:
+        date_filter_sp = "AND sp.played_at >= %s AND sp.played_at < %s + INTERVAL '1 day'"
+        date_filter_up = "AND played_at >= %s AND played_at < %s + INTERVAL '1 day'"
+        date_params: tuple = (start_date, end_date)
+    else:
+        date_filter_sp = ""
+        date_filter_up = ""
+        date_params = ()
 
     _RANK_OPTIONS = {
         "Total plays": None,
@@ -175,20 +204,22 @@ with tab_top:
         top_tracks_sql = f"""
             SELECT artist, track, COUNT(*) AS plays
             FROM unified_plays
-            WHERE TRUE {period_filter}
+            WHERE TRUE {date_filter_up}
             GROUP BY artist, track
             ORDER BY plays DESC
             LIMIT 50
         """
         with skeleton_placeholder("table") as ph_top1:
-            top_tracks_df = query_df(top_tracks_sql)
+            top_tracks_df = query_df_params(top_tracks_sql, date_params)
         ph_top1.empty()
         st.dataframe(top_tracks_df, hide_index=True, width='stretch')
     else:
-        st.caption(
-            "Popularity scores reflect your full listening history; "
-            "time-window filter doesn't apply to score-based rankings."
-        )
+        if time_range != "All time":
+            st.caption(
+                "Score-based rankings (Composite, Sticky, Evergreen, Flash hit, Session loop) "
+                "use pre-computed all-time scores and don't reflect the selected time range. "
+                'Switch to "Total plays" to apply the time filter.'
+            )
         pop_sql = f"""
             SELECT
                 (SELECT artist_name FROM spotify_plays WHERE track_uri = tps.track_uri LIMIT 1) AS artist,
@@ -235,7 +266,7 @@ with tab_top:
                 WHERE sp.track_uri IS NOT NULL
                   AND tm.artist_names IS NOT NULL
                   AND array_length(tm.artist_names, 1) > 0
-                  {period_filter}
+                  {date_filter_sp}
             )
             SELECT artist, COUNT(*) AS plays
             FROM plays_with_artists
@@ -244,14 +275,16 @@ with tab_top:
             LIMIT 50
         """
         with skeleton_placeholder("table") as ph_top2:
-            top_artists_df = query_df(top_artists_sql)
+            top_artists_df = query_df_params(top_artists_sql, date_params)
         ph_top2.empty()
         st.dataframe(top_artists_df, hide_index=True, width='stretch')
     else:
-        st.caption(
-            "Popularity scores reflect your full listening history; "
-            "time-window filter doesn't apply to score-based rankings."
-        )
+        if time_range != "All time":
+            st.caption(
+                "Score-based rankings (Composite, Sticky, Evergreen, Depth, Saved) "
+                "use pre-computed all-time scores and don't reflect the selected time range. "
+                'Switch to "Total plays" to apply the time filter.'
+            )
         artist_pop_sql = f"""
             SELECT
                 aps.artist_name AS artist,
