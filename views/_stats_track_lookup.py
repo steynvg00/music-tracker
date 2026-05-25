@@ -181,28 +181,122 @@ def _track_skip_rate(track_uri: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataFrame:
-    # TODO v0.60: upgrade to canonical aggregation — expand target_plays to cover all
-    # URI variants of this canonical, and group companion tracks by their canonical URI.
+def _track_uri_variants(canonical_track_uri: str) -> pd.DataFrame:
+    """Return one row per track_uri that maps to this canonical group.
+
+    Columns: track_uri, album_type, album_name, release_date, plays_for_uri, is_canonical.
+    Single-URI tracks return exactly one row (is_canonical=True) — callers can check
+    len(df) > 1 to decide whether to surface the multi-URI badge.
+
+    Note on 'viewed' marker (v0.60): post-v0.59 _search_tracks() always returns the
+    canonical URI, so track_uri in the render function IS the canonical URI. There is
+    no path by which a user lands on a non-canonical URI detail page; the 'viewed'
+    marker (distinct from 'canonical') is therefore unreachable and is omitted from
+    this query — the caller only uses is_canonical for the Marker column.
+    """
     return _run_query(
         """
-        WITH target_plays AS (
-            SELECT played_at FROM spotify_plays
-            WHERE track_uri = %s
+        WITH variants AS (
+            -- All track_uris that belong to this canonical group
+            SELECT tm.track_uri,
+                   tm.album_type,
+                   tm.release_date
+            FROM track_metadata tm
+            WHERE tm.canonical_track_uri = %s
+              AND tm.track_uri IS NOT NULL
+        ),
+        album_names AS (
+            -- Grab one album_name per variant URI from spotify_plays
+            -- (track_metadata has album_id but not album_name)
+            SELECT DISTINCT ON (sp.track_uri) sp.track_uri, sp.album_name
+            FROM spotify_plays sp
+            WHERE sp.track_uri IN (SELECT track_uri FROM variants)
+              AND sp.album_name IS NOT NULL
+            ORDER BY sp.track_uri
+        ),
+        per_uri_plays AS (
+            -- Plays recorded directly under each raw URI (not consolidated)
+            SELECT sp.track_uri, COUNT(*) AS plays_for_uri
+            FROM spotify_plays sp
+            WHERE sp.track_uri IN (SELECT track_uri FROM variants)
+            GROUP BY sp.track_uri
         )
-        SELECT
-            sp.artist_name AS companion_artist,
-            sp.track_name AS companion_track,
-            sp.track_uri AS companion_uri,
-            COUNT(*) AS co_occurrences
-        FROM spotify_plays sp, target_plays tp
-        WHERE sp.played_at BETWEEN tp.played_at - (INTERVAL '1 minute' * %s)
-                               AND tp.played_at + (INTERVAL '1 minute' * %s)
-          AND sp.track_uri != %s
-          AND sp.track_uri IS NOT NULL
-          AND sp.artist_name IS NOT NULL
-        GROUP BY sp.track_uri, sp.artist_name, sp.track_name
-        ORDER BY co_occurrences DESC
+        SELECT v.track_uri,
+               v.album_type,
+               an.album_name,
+               v.release_date,
+               COALESCE(pup.plays_for_uri, 0) AS plays_for_uri,
+               (v.track_uri = %s)             AS is_canonical
+        FROM variants v
+        LEFT JOIN album_names  an  ON an.track_uri  = v.track_uri
+        LEFT JOIN per_uri_plays pup ON pup.track_uri = v.track_uri
+        ORDER BY is_canonical DESC, plays_for_uri DESC
+        """,
+        (canonical_track_uri, canonical_track_uri),
+    )
+
+
+@st.cache_data(ttl=60)
+def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataFrame:
+    # v0.60: canonical aggregation.
+    # 1. Expand target_plays to ALL URI variants of the focal canonical so that
+    #    album-URI plays are included as target timestamps.
+    # 2. Group companion tracks by their canonical_track_uri so URI variants of
+    #    the same companion merge into one row.
+    # 3. Exclude companions whose canonical = the focal canonical (same song).
+    # Column shape unchanged: companion_artist, companion_track, companion_uri,
+    # co_occurrences — render code requires no changes.
+    return _run_query(
+        """
+        WITH focal_uris AS (
+            -- All raw URIs that belong to the focal canonical group
+            SELECT track_uri
+            FROM track_metadata
+            WHERE canonical_track_uri = %s
+              AND track_uri IS NOT NULL
+        ),
+        target_plays AS (
+            -- Every play timestamp for any variant of the focal track
+            SELECT played_at
+            FROM spotify_plays
+            WHERE track_uri IN (SELECT track_uri FROM focal_uris)
+        ),
+        co_by_uri AS (
+            -- Raw co-occurrence count per companion track_uri
+            SELECT sp.track_uri,
+                   COUNT(*) AS co_count
+            FROM spotify_plays sp
+            JOIN target_plays tp
+              ON sp.played_at BETWEEN tp.played_at - (INTERVAL '1 minute' * %s)
+                                  AND tp.played_at + (INTERVAL '1 minute' * %s)
+            WHERE sp.track_uri IS NOT NULL
+            GROUP BY sp.track_uri
+        ),
+        co_by_canonical AS (
+            -- Aggregate co-counts to canonical level; drop focal canonical
+            SELECT tm.canonical_track_uri,
+                   SUM(cbu.co_count) AS co_occurrences
+            FROM co_by_uri cbu
+            JOIN track_metadata tm ON tm.track_uri = cbu.track_uri
+            WHERE tm.canonical_track_uri IS NOT NULL
+              AND tm.canonical_track_uri != %s
+            GROUP BY tm.canonical_track_uri
+        ),
+        canonical_names AS (
+            -- One track_name per canonical URI (sourced from spotify_plays)
+            SELECT DISTINCT ON (track_uri) track_uri, track_name
+            FROM spotify_plays
+            WHERE track_uri IN (SELECT canonical_track_uri FROM co_by_canonical)
+              AND track_name IS NOT NULL
+        )
+        SELECT array_to_string(tm_can.artist_names, ', ') AS companion_artist,
+               cn.track_name                              AS companion_track,
+               cbc.canonical_track_uri                    AS companion_uri,
+               cbc.co_occurrences::int                    AS co_occurrences
+        FROM co_by_canonical cbc
+        JOIN  track_metadata   tm_can ON tm_can.track_uri = cbc.canonical_track_uri
+        LEFT JOIN canonical_names cn   ON cn.track_uri    = cbc.canonical_track_uri
+        ORDER BY cbc.co_occurrences DESC
         LIMIT 10
         """,
         (track_uri, window_minutes, window_minutes, track_uri),
@@ -211,23 +305,54 @@ def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataF
 
 @st.cache_data(ttl=60)
 def _more_from_artist(track_uri: str) -> pd.DataFrame:
-    # TODO v0.60: upgrade to canonical aggregation — group similar-artist tracks by
-    # their canonical URI and sum cross-URI plays.
+    # v0.60: canonical aggregation.
+    # 1. Find all canonical groups that share at least one artist with the focal track.
+    # 2. Sum plays across ALL URI variants of each canonical (consolidated count).
+    # 3. Exclude the focal track's own canonical from results.
+    # Column shape unchanged: track_name, track_uri, plays — render code unchanged.
     return _run_query(
         """
         WITH target_artists AS (
-            SELECT artist_names FROM track_metadata WHERE track_uri = %s
+            -- Artists on the focal track (track_uri is the canonical URI post-v0.59)
+            SELECT artist_names
+            FROM track_metadata
+            WHERE track_uri = %s
+              AND artist_names IS NOT NULL
+        ),
+        matching_canonicals AS (
+            -- Canonical groups that share ≥1 artist with the focal track
+            SELECT DISTINCT tm.canonical_track_uri
+            FROM track_metadata tm
+            CROSS JOIN target_artists ta
+            WHERE tm.artist_names IS NOT NULL
+              AND tm.artist_names && ta.artist_names
+              AND tm.canonical_track_uri IS NOT NULL
+              AND tm.canonical_track_uri != %s
+        ),
+        plays_by_canonical AS (
+            -- Consolidated play count across all URI variants per canonical
+            SELECT tm.canonical_track_uri,
+                   COUNT(*) AS plays
+            FROM spotify_plays sp
+            JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+            WHERE tm.canonical_track_uri IN (
+                SELECT canonical_track_uri FROM matching_canonicals
+            )
+            GROUP BY tm.canonical_track_uri
+        ),
+        canonical_names AS (
+            -- One track_name per canonical URI from spotify_plays
+            SELECT DISTINCT ON (track_uri) track_uri, track_name
+            FROM spotify_plays
+            WHERE track_uri IN (SELECT canonical_track_uri FROM plays_by_canonical)
+              AND track_name IS NOT NULL
         )
-        SELECT sp.track_name, sp.track_uri, COUNT(*) AS plays
-        FROM spotify_plays sp
-        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
-        CROSS JOIN target_artists ta
-        WHERE sp.track_uri != %s
-          AND tm.artist_names IS NOT NULL
-          AND ta.artist_names IS NOT NULL
-          AND tm.artist_names && ta.artist_names
-        GROUP BY sp.track_name, sp.track_uri
-        ORDER BY plays DESC
+        SELECT cn.track_name,
+               pbc.canonical_track_uri AS track_uri,
+               pbc.plays
+        FROM plays_by_canonical pbc
+        LEFT JOIN canonical_names cn ON cn.track_uri = pbc.canonical_track_uri
+        ORDER BY pbc.plays DESC
         LIMIT 10
         """,
         (track_uri, track_uri),
@@ -312,6 +437,34 @@ def render_track_lookup_section() -> None:
             pd.to_datetime(m["last_played"]).strftime("%Y-%m-%d") if m["last_played"] is not None else "—",
         )
         mc4.metric("Days listened", f"{int(m['days_listened']):,}")
+
+    # ── URI variant visibility (v0.60) ────────────────────────────────────────
+    # Only shown when canonical group contains >1 URI (single-URI tracks are silent).
+    # track_uri here is always the canonical URI (post-v0.59 search flow), so
+    # _track_uri_variants keying on it is correct.
+    variants_df = _track_uri_variants(track_uri)
+    if len(variants_df) > 1:
+        st.info(f"This track combines {len(variants_df)} URI variants")
+        with st.expander("Variant breakdown", expanded=False):
+            disp_variants = variants_df.copy()
+            # "viewed" marker: unreachable in current flow — search always returns the
+            # canonical URI, so the user can never navigate to a non-canonical detail
+            # page. Only "canonical" and "" are used.
+            disp_variants["Marker"] = disp_variants["is_canonical"].map(
+                lambda c: "canonical" if c else ""
+            )
+            disp_variants = disp_variants.rename(columns={
+                "track_uri":     "URI",
+                "album_type":    "Album type",
+                "album_name":    "Album name",
+                "release_date":  "Release date",
+                "plays_for_uri": "Plays for this URI",
+            })
+            st.dataframe(
+                disp_variants[["URI", "Album type", "Album name", "Release date",
+                                "Plays for this URI", "Marker"]],
+                hide_index=True,
+            )
 
     st.divider()
 
