@@ -67,13 +67,21 @@ def _search_tracks(query: str) -> pd.DataFrame:
                 SELECT canonical_track_uri FROM matching_canonicals
             )
             GROUP BY tm.canonical_track_uri
+        ),
+        canonical_track_names AS (
+            -- v0.59.1: track_metadata has no track_name column; source from spotify_plays.
+            SELECT DISTINCT ON (track_uri) track_uri, track_name
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND track_name IS NOT NULL
         )
-        SELECT tm_can.track_name,
+        SELECT ctn.track_name,
                array_to_string(tm_can.artist_names, ', ') AS artist_name,
                pbc.track_uri,
                pbc.plays
         FROM plays_by_canonical pbc
         JOIN track_metadata tm_can ON tm_can.track_uri = pbc.track_uri
+        LEFT JOIN canonical_track_names ctn ON ctn.track_uri = pbc.track_uri
         ORDER BY pbc.plays DESC
         LIMIT 20
         """,

@@ -206,6 +206,8 @@ with tab_top:
         # collapse into one row.  Total row count drops ~226 vs. the old per-URI
         # unified_plays query, matching the canonical population in v0.58 scores.
         # date_filter_sp uses the sp. alias; it goes inside the CTE where sp is in scope.
+        # v0.59.1 — track_metadata has no track_name column; source it from spotify_plays
+        # via the canonical_track_names CTE (DISTINCT ON to pick one stable name per URI).
         top_tracks_sql = f"""
             WITH plays_by_canonical AS (
                 SELECT tm.canonical_track_uri AS track_uri,
@@ -216,12 +218,19 @@ with tab_top:
                   AND tm.canonical_track_uri IS NOT NULL
                   {date_filter_sp}
                 GROUP BY tm.canonical_track_uri
+            ),
+            canonical_track_names AS (
+                SELECT DISTINCT ON (track_uri) track_uri, track_name
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                  AND track_name IS NOT NULL
             )
-            SELECT tm_can.track_name,
+            SELECT ctn.track_name,
                    array_to_string(tm_can.artist_names, ', ') AS artist_name,
                    pbc.plays
             FROM plays_by_canonical pbc
             JOIN track_metadata tm_can ON tm_can.track_uri = pbc.track_uri
+            LEFT JOIN canonical_track_names ctn ON ctn.track_uri = pbc.track_uri
             ORDER BY pbc.plays DESC
             LIMIT 50
         """
@@ -237,15 +246,23 @@ with tab_top:
                 'Switch to "Total plays" to apply the time filter.'
             )
         # v0.59 — track_popularity_scores is keyed by canonical_track_uri after
-        # v0.58; replace the expensive correlated subqueries with a direct JOIN to
-        # track_metadata for track/artist names (canonical rows have artist_names[]).
+        # v0.58; JOIN track_metadata for artist_names[] array.
+        # v0.59.1 — track_metadata has no track_name column; track_popularity_scores
+        # also has no track_name column.  Source name from spotify_plays via CTE.
         pop_sql = f"""
-            SELECT tm_can.track_name,
+            WITH canonical_track_names AS (
+                SELECT DISTINCT ON (track_uri) track_uri, track_name
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                  AND track_name IS NOT NULL
+            )
+            SELECT ctn.track_name,
                    array_to_string(tm_can.artist_names, ', ') AS artist_name,
                    s.raw_plays AS plays,
                    s.{score_col} AS score
             FROM track_popularity_scores s
             JOIN track_metadata tm_can ON tm_can.track_uri = s.track_uri
+            LEFT JOIN canonical_track_names ctn ON ctn.track_uri = s.track_uri
             WHERE s.{score_col} IS NOT NULL
             ORDER BY s.{score_col} DESC
             LIMIT 50
