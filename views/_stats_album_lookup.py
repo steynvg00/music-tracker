@@ -114,14 +114,22 @@ def _album_tracks(album_name: str) -> pd.DataFrame:
             JOIN track_metadata tm ON tm.track_uri = sp.track_uri
             WHERE tm.canonical_track_uri IN (SELECT canonical_track_uri FROM canonical_groups)
             GROUP BY tm.canonical_track_uri
+        ),
+        canonical_track_names AS (
+            -- v0.59.2: track_metadata has no track_name column; source from spotify_plays.
+            SELECT DISTINCT ON (track_uri) track_uri, track_name
+            FROM spotify_plays
+            WHERE track_uri IS NOT NULL
+              AND track_name IS NOT NULL
         )
-        SELECT tm_can.track_name,
+        SELECT ctn.track_name,
                array_to_string(tm_can.artist_names, ', ') AS artists,
                apc.canonical_track_uri AS track_uri,
                apc.play_count,
                ROUND(apc.completed_plays * 100.0 / NULLIF(apc.play_count, 0), 1) AS completion_rate
         FROM all_plays_for_canonicals apc
         JOIN track_metadata tm_can ON tm_can.track_uri = apc.canonical_track_uri
+        LEFT JOIN canonical_track_names ctn ON ctn.track_uri = apc.canonical_track_uri
         ORDER BY apc.play_count DESC
         LIMIT 50
         """,
