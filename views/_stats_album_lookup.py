@@ -77,26 +77,52 @@ def _album_plays_per_month(album_name: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _album_tracks(album_name: str) -> pd.DataFrame:
+    # v0.59 — canonical aggregation (introduced v0.57/v0.58).
+    # Strategy: find every canonical group that contains ANY track URI appearing
+    # on this album, then aggregate ALL plays for those canonicals — including plays
+    # recorded under URI variants that don't show album_name = this album.
+    #
+    # Example: Synchronised appears on the "Synchronised" album with its album-track
+    # URI (144 plays) but also exists as a single URI (469 plays).  The single URI's
+    # plays don't carry album_name = "Synchronised", so the old per-URI query showed
+    # only 144 plays.  This query follows the canonical link and counts 613 total.
+    #
+    # Column names (track_name, artists, track_uri, play_count, completion_rate) are
+    # preserved for downstream Python compatibility.
     return _run_query(
         """
-        SELECT
-            sp.track_name,
-            array_to_string(tm.artist_names, ', ') AS artists,
-            sp.track_uri,
-            COUNT(*) AS play_count,
-            ROUND(
-                SUM(CASE WHEN sp.reason_end = 'trackdone' THEN 1 ELSE 0 END) * 100.0
-                / NULLIF(COUNT(*), 0),
-                1
-            ) AS completion_rate
-        FROM spotify_plays sp
-        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
-        WHERE sp.album_name = %s
-          AND sp.track_uri IS NOT NULL
-          AND tm.artist_names IS NOT NULL
-          AND array_length(tm.artist_names, 1) > 0
-        GROUP BY sp.track_uri, sp.track_name, tm.artist_names
-        ORDER BY play_count DESC
+        WITH album_track_uris AS (
+            -- All distinct URIs that Spotify recorded under this album name
+            SELECT DISTINCT track_uri
+            FROM spotify_plays
+            WHERE album_name = %s
+              AND track_uri IS NOT NULL
+        ),
+        canonical_groups AS (
+            -- Deduplicate to one canonical_track_uri per recording
+            SELECT DISTINCT tm.canonical_track_uri
+            FROM album_track_uris atu
+            JOIN track_metadata tm ON tm.track_uri = atu.track_uri
+            WHERE tm.canonical_track_uri IS NOT NULL
+        ),
+        all_plays_for_canonicals AS (
+            -- Sum plays from ALL URI variants (album + single + any other release)
+            SELECT tm.canonical_track_uri,
+                   COUNT(*) AS play_count,
+                   SUM(CASE WHEN sp.reason_end = 'trackdone' THEN 1 ELSE 0 END) AS completed_plays
+            FROM spotify_plays sp
+            JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+            WHERE tm.canonical_track_uri IN (SELECT canonical_track_uri FROM canonical_groups)
+            GROUP BY tm.canonical_track_uri
+        )
+        SELECT tm_can.track_name,
+               array_to_string(tm_can.artist_names, ', ') AS artists,
+               apc.canonical_track_uri AS track_uri,
+               apc.play_count,
+               ROUND(apc.completed_plays * 100.0 / NULLIF(apc.play_count, 0), 1) AS completion_rate
+        FROM all_plays_for_canonicals apc
+        JOIN track_metadata tm_can ON tm_can.track_uri = apc.canonical_track_uri
+        ORDER BY apc.play_count DESC
         LIMIT 50
         """,
         (album_name,),

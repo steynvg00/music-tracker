@@ -35,13 +35,46 @@ def _run_query(sql: str, params: tuple) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _search_tracks(query: str) -> pd.DataFrame:
+    # v0.59 DIAGNOSIS: pre-v0.59 this grouped by track_uri, so each URI variant
+    # (e.g. single vs. album release of the same recording) appeared as a separate
+    # row with its own per-URI play count.  The 613-play "Total plays" the user saw
+    # for Synchronised was an accidental alignment: Spotify had recorded all 613
+    # streams under the single (canonical) URI in spotify_plays, so that one URI
+    # returned 613 directly.  For tracks that genuinely split plays across two URIs
+    # the old query would have undercounted.
+    #
+    # v0.59 FIX: canonical aggregation — find every canonical group that contains
+    # at least one play matching the search term, then sum ALL plays for that
+    # canonical (including plays recorded under non-matching URI variants).
+    # Returns the canonical URI as track_uri so all downstream detail functions
+    # receive a canonical key.
     return _run_query(
         """
-        SELECT DISTINCT artist_name, track_name, track_uri, COUNT(*) AS plays
-        FROM spotify_plays
-        WHERE artist_name ILIKE %s OR track_name ILIKE %s
-        GROUP BY artist_name, track_name, track_uri
-        ORDER BY plays DESC
+        WITH matching_canonicals AS (
+            SELECT DISTINCT tm.canonical_track_uri
+            FROM spotify_plays sp
+            JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+            WHERE (sp.artist_name ILIKE %s OR sp.track_name ILIKE %s)
+              AND sp.track_uri IS NOT NULL
+              AND tm.canonical_track_uri IS NOT NULL
+        ),
+        plays_by_canonical AS (
+            SELECT tm.canonical_track_uri AS track_uri,
+                   COUNT(*) AS plays
+            FROM spotify_plays sp
+            JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+            WHERE tm.canonical_track_uri IN (
+                SELECT canonical_track_uri FROM matching_canonicals
+            )
+            GROUP BY tm.canonical_track_uri
+        )
+        SELECT tm_can.track_name,
+               array_to_string(tm_can.artist_names, ', ') AS artist_name,
+               pbc.track_uri,
+               pbc.plays
+        FROM plays_by_canonical pbc
+        JOIN track_metadata tm_can ON tm_can.track_uri = pbc.track_uri
+        ORDER BY pbc.plays DESC
         LIMIT 20
         """,
         (f"%{query}%", f"%{query}%"),
@@ -72,15 +105,20 @@ def _track_detail(track_uri: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _track_metrics(track_uri: str) -> pd.DataFrame:
+    # v0.59: track_uri is the canonical URI (from _search_tracks).
+    # Aggregate ALL plays across every URI that maps to this canonical so that
+    # single + album variants are summed (e.g. Synchronised: 469 + 144 = 613).
     return _run_query(
         """
         SELECT
             COUNT(*) AS total_plays,
-            MIN(played_at) AS first_played,
-            MAX(played_at) AS last_played,
-            COUNT(DISTINCT DATE(played_at)) AS days_listened
-        FROM spotify_plays
-        WHERE track_uri = %s
+            MIN(sp.played_at) AS first_played,
+            MAX(sp.played_at) AS last_played,
+            COUNT(DISTINCT DATE(sp.played_at)) AS days_listened
+        FROM spotify_plays sp
+        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+        WHERE tm.canonical_track_uri = %s
+          AND tm.canonical_track_uri IS NOT NULL
         """,
         (track_uri,),
     )
@@ -88,11 +126,14 @@ def _track_metrics(track_uri: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _plays_per_month(track_uri: str) -> pd.DataFrame:
+    # v0.59: aggregate across all URI variants for this canonical.
     return _run_query(
         """
-        SELECT date_trunc('month', played_at) AS month, COUNT(*) AS plays
-        FROM spotify_plays
-        WHERE track_uri = %s
+        SELECT date_trunc('month', sp.played_at) AS month, COUNT(*) AS plays
+        FROM spotify_plays sp
+        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+        WHERE tm.canonical_track_uri = %s
+          AND tm.canonical_track_uri IS NOT NULL
         GROUP BY month
         ORDER BY month
         """,
@@ -112,16 +153,19 @@ def _get_artist_popularity_scores(artist_name: str) -> dict | None:
 
 @st.cache_data(ttl=60)
 def _track_skip_rate(track_uri: str) -> pd.DataFrame:
+    # v0.59: aggregate across all URI variants for this canonical.
     return _run_query(
         """
         SELECT
-            reason_end,
+            sp.reason_end,
             COUNT(*) AS play_count,
             ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percentage
-        FROM spotify_plays
-        WHERE track_uri = %s
-          AND reason_end IS NOT NULL
-        GROUP BY reason_end
+        FROM spotify_plays sp
+        JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+        WHERE tm.canonical_track_uri = %s
+          AND tm.canonical_track_uri IS NOT NULL
+          AND sp.reason_end IS NOT NULL
+        GROUP BY sp.reason_end
         ORDER BY play_count DESC
         """,
         (track_uri,),
@@ -130,6 +174,8 @@ def _track_skip_rate(track_uri: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataFrame:
+    # TODO v0.60: upgrade to canonical aggregation — expand target_plays to cover all
+    # URI variants of this canonical, and group companion tracks by their canonical URI.
     return _run_query(
         """
         WITH target_plays AS (
@@ -157,6 +203,8 @@ def _track_heard_alongside(track_uri: str, window_minutes: int = 30) -> pd.DataF
 
 @st.cache_data(ttl=60)
 def _more_from_artist(track_uri: str) -> pd.DataFrame:
+    # TODO v0.60: upgrade to canonical aggregation — group similar-artist tracks by
+    # their canonical URI and sum cross-URI plays.
     return _run_query(
         """
         WITH target_artists AS (
