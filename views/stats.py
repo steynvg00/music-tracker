@@ -201,12 +201,37 @@ with tab_top:
     st.subheader("Top 50 tracks")
 
     if score_col is None:
+        # v0.59 — canonical aggregation: plays are grouped by canonical_track_uri so
+        # URI variants of the same recording (single vs. album release, same ISRC)
+        # collapse into one row.  Total row count drops ~226 vs. the old per-URI
+        # unified_plays query, matching the canonical population in v0.58 scores.
+        # date_filter_sp uses the sp. alias; it goes inside the CTE where sp is in scope.
+        # v0.59.1 — track_metadata has no track_name column; source it from spotify_plays
+        # via the canonical_track_names CTE (DISTINCT ON to pick one stable name per URI).
         top_tracks_sql = f"""
-            SELECT artist, track, COUNT(*) AS plays
-            FROM unified_plays
-            WHERE TRUE {date_filter_up}
-            GROUP BY artist, track
-            ORDER BY plays DESC
+            WITH plays_by_canonical AS (
+                SELECT tm.canonical_track_uri AS track_uri,
+                       COUNT(*) AS plays
+                FROM spotify_plays sp
+                JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+                WHERE sp.track_uri IS NOT NULL
+                  AND tm.canonical_track_uri IS NOT NULL
+                  {date_filter_sp}
+                GROUP BY tm.canonical_track_uri
+            ),
+            canonical_track_names AS (
+                SELECT DISTINCT ON (track_uri) track_uri, track_name
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                  AND track_name IS NOT NULL
+            )
+            SELECT ctn.track_name,
+                   array_to_string(tm_can.artist_names, ', ') AS artist_name,
+                   pbc.plays
+            FROM plays_by_canonical pbc
+            JOIN track_metadata tm_can ON tm_can.track_uri = pbc.track_uri
+            LEFT JOIN canonical_track_names ctn ON ctn.track_uri = pbc.track_uri
+            ORDER BY pbc.plays DESC
             LIMIT 50
         """
         with skeleton_placeholder("table") as ph_top1:
@@ -220,14 +245,26 @@ with tab_top:
                 "use pre-computed all-time scores and don't reflect the selected time range. "
                 'Switch to "Total plays" to apply the time filter.'
             )
+        # v0.59 — track_popularity_scores is keyed by canonical_track_uri after
+        # v0.58; JOIN track_metadata for artist_names[] array.
+        # v0.59.1 — track_metadata has no track_name column; track_popularity_scores
+        # also has no track_name column.  Source name from spotify_plays via CTE.
         pop_sql = f"""
-            SELECT
-                (SELECT artist_name FROM spotify_plays WHERE track_uri = tps.track_uri LIMIT 1) AS artist,
-                (SELECT track_name FROM spotify_plays WHERE track_uri = tps.track_uri LIMIT 1) AS track,
-                tps.raw_plays AS plays,
-                tps.{score_col} AS score
-            FROM track_popularity_scores tps
-            ORDER BY tps.{score_col} DESC
+            WITH canonical_track_names AS (
+                SELECT DISTINCT ON (track_uri) track_uri, track_name
+                FROM spotify_plays
+                WHERE track_uri IS NOT NULL
+                  AND track_name IS NOT NULL
+            )
+            SELECT ctn.track_name,
+                   array_to_string(tm_can.artist_names, ', ') AS artist_name,
+                   s.raw_plays AS plays,
+                   s.{score_col} AS score
+            FROM track_popularity_scores s
+            JOIN track_metadata tm_can ON tm_can.track_uri = s.track_uri
+            LEFT JOIN canonical_track_names ctn ON ctn.track_uri = s.track_uri
+            WHERE s.{score_col} IS NOT NULL
+            ORDER BY s.{score_col} DESC
             LIMIT 50
         """
         with skeleton_placeholder("table") as ph_top1:
