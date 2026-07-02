@@ -5,6 +5,7 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, _is_top_playlist
+from lib.seasons import build_season_description, season_end
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
@@ -633,7 +634,24 @@ def seasonal_top_snapshots(conn) -> list[PlaylistDefinition]:
                 continue
 
             suffix = f"Top 50 · {name} {year}"
-            description = f"Your 50 most-played tracks during {name} {year}."
+            # v0.64: astronomical dates in the description via lib.seasons.
+            # `name`/`year` here use the END-year winter convention (Winter 2026 =
+            # Dec 2025 → Mar 2026); lib.seasons uses START-year (winter 2025), so
+            # shift winter back one year. created_on is the day the season ended +1
+            # (== the next season's opening equinox/solstice) — the canonical day a
+            # correctly-scheduled snapshot exists, not the arbitrary weekly-cron run
+            # date. See commit message for the created_on rationale.
+            season = name.lower()
+            season_year = year - 1 if season == "winter" else year
+            try:
+                created_on = season_end(season, season_year) + timedelta(days=1)
+                description = build_season_description(
+                    "Top 50 tracks", season, season_year, created_on
+                )
+            except ValueError:
+                # Season outside the 2015-2040 boundary table — fall back to the
+                # previous ad-hoc template rather than break the playlist refresh.
+                description = f"Your 50 most-played tracks during {name} {year}."
             definitions.append(
                 PlaylistDefinition(
                     suffix=suffix,
