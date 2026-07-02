@@ -125,9 +125,61 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
 
     subject = f"music-tracker: '{track_name}' just hit {threshold}+ plays"
 
-    # v0.64: the badge visual PNG will be embedded here via a CID reference, e.g.
-    #   <img src="cid:badge_plays_{threshold}" alt="{threshold}+ plays badge" />
-    # For v0.63 the mail is text-only — no attachment, no CID part.
+    # Which play milestones has THIS track already earned? Drives the progression strip.
+    # NOTE: scoped to this exact track_uri, NOT canonical-aggregated across URI variants.
+    # Milestone mails alert on a specific URI's play-count crossing; rolling badges up to a
+    # canonical group is a larger design question deferred to v0.70 (Track lookup badge display).
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT badge_type FROM badge_events
+            WHERE entity_type = 'track'
+              AND entity_id = %s
+              AND badge_type LIKE 'plays_%%'
+            """,
+            (track_uri,),
+        )
+        earned_badge_types = {row[0] for row in cur.fetchall()}
+
+    earned_flags = [(n, f"plays_{n}" in earned_badge_types) for n in PLAY_MILESTONE_THRESHOLDS]
+    earned_count = sum(1 for _n, ok in earned_flags if ok)
+    total_milestones = len(PLAY_MILESTONE_THRESHOLDS)
+    if earned_count == total_milestones:
+        # At 6/6 the celebration string stands alone — no "Play milestones — " prefix,
+        # to avoid the redundant "milestones ... milestones" reading.
+        progress_line = f"All {total_milestones} milestones reached! 🏆"
+        strip_label = progress_line
+    else:
+        progress_line = f"{earned_count} of {total_milestones} reached"
+        strip_label = f"Play milestones — {progress_line}"
+
+    # v0.64 will replace the ✓/— text placeholders with badge PNG icons via CID embed.
+    # The layout structure (6-cell horizontal strip, earned vs not-earned styling) stays;
+    # only the inner cell content swaps from text to <img src="cid:badge_plays_50"> etc.
+    strip_cells = []
+    for n, ok in earned_flags:
+        if ok:
+            strip_cells.append(
+                '<td style="padding:6px 10px;background:#1a5f1a;color:#fff;border-radius:4px;'
+                'text-align:center;min-width:44px;">'
+                f'<div style="font-weight:bold;">{n}</div>'
+                '<div style="font-size:11px;opacity:0.85;">✓</div></td>'
+            )
+        else:
+            strip_cells.append(
+                '<td style="padding:6px 10px;background:#333;color:#888;border-radius:4px;'
+                'text-align:center;min-width:44px;">'
+                f'<div style="font-weight:bold;">{n}</div>'
+                '<div style="font-size:11px;opacity:0.7;">—</div></td>'
+            )
+    strip_html = (
+        '<div style="margin:16px 0;">'
+        f'<p style="font-size:13px;color:#888;margin:0 0 6px 0;">{escape(strip_label)}</p>'
+        '<table style="border-collapse:separate;border-spacing:6px 0;font-size:13px;"><tr>'
+        + "".join(strip_cells)
+        + "</tr></table></div>"
+    )
+
     html_body = "\n".join([
         "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
         "color:#222;max-width:640px;\">",
@@ -143,9 +195,13 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
         f'<tr><td style="padding:2px 10px 2px 0;color:#888;">First played</td>'
         f'<td style="padding:2px 0;">{escape(first_play_str)}</td></tr>'
         "</table>",
+        strip_html,
         "</body></html>",
     ])
 
+    strip_plain_cells = "  ".join(
+        f"[{n} {'✓' if ok else '—'}]" for n, ok in earned_flags
+    )
     plaintext_body = "\n".join([
         f"{threshold}+ plays milestone!",
         "",
@@ -154,6 +210,9 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
         f"Total plays: {total_plays}",
         f"Milestone:   {threshold}+ plays",
         f"First played: {first_play_str}",
+        "",
+        f"{strip_label}:",
+        f"  {strip_plain_cells}",
     ])
 
     return subject, html_body, plaintext_body
