@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
+from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, _is_top_playlist
+
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
 # Playlist helpers for music-tracker.
@@ -1047,11 +1049,51 @@ def _ensure_playlist_metadata(sp, playlist_id: str, name: str, description: str)
     )
 
 
+def _emit_created_event(collector, definition: PlaylistDefinition) -> None:
+    """Instrumentation only: record a PLAYLIST_CREATED event on the collector."""
+    if collector is None:
+        return
+    full_name = get_full_name(definition)
+    collector.add_event(PlaylistEvent(
+        event_type=EventType.PLAYLIST_CREATED,
+        playlist_name=full_name,
+        playlist_kind=definition.kind,
+        is_top_playlist=_is_top_playlist(full_name, definition.kind),
+        tracks=[],  # tracks toegevoegd komen in het eerste update event, niet hier
+        extra={"description": get_full_description(definition)},
+    ))
+
+
+def _fetch_current_track_uris(sp, playlist_id: str) -> list[str]:
+    """Read the playlist's current track URIs (instrumentation only — no writes).
+
+    Used to diff added/removed for the email digest. Only ever called when a
+    collector is present, so non-email callers pay nothing.
+    """
+    uris: list[str] = []
+    offset = 0
+    while True:
+        page = sp.playlist_items(
+            playlist_id, limit=100, offset=offset, fields="items.track.uri,next"
+        )
+        items = page.get("items", []) or []
+        for it in items:
+            track = it.get("track") or {}
+            uri = track.get("uri")
+            if uri:
+                uris.append(uri)
+        if not page.get("next"):
+            break
+        offset += 100
+    return uris
+
+
 def find_or_create_managed_playlist(
     sp,
     user_id: str,
     definition: PlaylistDefinition,
     playlist_cache: dict[str, str] | None = None,
+    collector: EmailEventCollector | None = None,
 ) -> tuple[str, bool]:
     """Find an existing playlist by name (or legacy_names), or create it.
 
@@ -1091,6 +1133,7 @@ def find_or_create_managed_playlist(
         _ensure_playlist_metadata(sp, new["id"], full_name, full_description)
         playlist_cache[full_name] = new["id"]
         print(f"[playlists] Created '{full_name}'.", flush=True)
+        _emit_created_event(collector, definition)
         return (new["id"], True)
 
     # Legacy path: paginate user's playlists
@@ -1141,6 +1184,7 @@ def find_or_create_managed_playlist(
     )
     _ensure_playlist_metadata(sp, new["id"], full_name, full_description)
     print(f"[playlists] Created '{full_name}'.", flush=True)
+    _emit_created_event(collector, definition)
     return (new["id"], True)
 
 
@@ -1150,6 +1194,7 @@ def update_managed_playlist(
     user_id: str,
     definition: PlaylistDefinition,
     playlist_cache: dict[str, str] | None = None,
+    collector: EmailEventCollector | None = None,
 ) -> dict:
     """Refresh one managed playlist: find/create, run query, replace tracks.
     Returns {'name': str, 'playlist_id': str, 'track_count': int, 'action': str}.
@@ -1162,7 +1207,7 @@ def update_managed_playlist(
     """
     full_name = get_full_name(definition)
     playlist_id, was_created = find_or_create_managed_playlist(
-        sp, user_id, definition, playlist_cache
+        sp, user_id, definition, playlist_cache, collector=collector
     )
 
     _register_playlist(conn, playlist_id, full_name)
@@ -1189,11 +1234,51 @@ def update_managed_playlist(
             from lib.playlist_settings import apply_ordering
             track_uris = apply_ordering(conn, track_uris, order_pref)
 
+    # Instrumentation only (email digest): capture prior contents to diff.
+    # Gated on `collector` so non-email callers do zero extra API work.
+    prev_uris: list[str] = []
+    if collector is not None and not was_created:
+        prev_uris = _fetch_current_track_uris(sp, playlist_id)
+
     replace_playlist_tracks(sp, playlist_id, track_uris)
 
     if definition.kind == "snapshot" and not was_created:
         from lib.playlist_settings import mark_force_refresh_completed
         mark_force_refresh_completed(conn, playlist_id)
+
+    if collector is not None:
+        before = set(prev_uris)
+        after = set(track_uris)
+        added_uris = [u for u in track_uris if u not in before]
+        removed_uris = [u for u in prev_uris if u not in after]
+        is_top = _is_top_playlist(full_name, definition.kind)
+        if added_uris or removed_uris:
+            if is_top:
+                # Top playlists always render the full ranked final list.
+                collector.add_event(PlaylistEvent(
+                    event_type=EventType.TRACKS_ADDED,
+                    playlist_name=full_name,
+                    playlist_kind=definition.kind,
+                    is_top_playlist=True,
+                    tracks=list(track_uris),
+                ))
+            else:
+                if added_uris:
+                    collector.add_event(PlaylistEvent(
+                        event_type=EventType.TRACKS_ADDED,
+                        playlist_name=full_name,
+                        playlist_kind=definition.kind,
+                        is_top_playlist=False,
+                        tracks=added_uris,
+                    ))
+                if removed_uris:
+                    collector.add_event(PlaylistEvent(
+                        event_type=EventType.TRACKS_REMOVED,
+                        playlist_name=full_name,
+                        playlist_kind=definition.kind,
+                        is_top_playlist=False,
+                        tracks=removed_uris,
+                    ))
 
     return {
         "name": full_name,
