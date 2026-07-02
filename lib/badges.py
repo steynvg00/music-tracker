@@ -12,12 +12,35 @@ see the placeholder comment in _build_milestone_mail.
 
 from __future__ import annotations
 
+import json
 import sys
 from html import escape
+from typing import Literal
 
 from lib.email_notify import _smtp_send
 
 PLAY_MILESTONE_THRESHOLDS = [50, 100, 200, 300, 400, 500]
+
+# v0.65: per-snapshot "#1 of this period" badges. One fixed badge_type per period
+# cadence; the specific window (e.g. "January 2026") lives in context->>'window',
+# so a track can hold many top_1st_month rows (one per month it topped).
+TOP_1ST_BADGE_TYPES = [
+    "top_1st_month",
+    "top_1st_season",
+    "top_1st_year",
+    "top_1st_alltime",
+    "top_1st_decade",
+]
+
+# Display labels for the Rankings strip, in render order. Kept parallel to the
+# top_1st_* suffixes so both the mail and any future dashboard reuse one source.
+_TOP_1ST_LABELS: list[tuple[str, str]] = [
+    ("month", "🥇 Monthly #1"),
+    ("season", "🥇 Seasonal #1"),
+    ("year", "🥇 Yearly #1"),
+    ("alltime", "🥇 All-time #1"),
+    ("decade", "🥇 Decade #1"),
+]
 
 
 def detect_new_play_milestones(conn, batch_track_uris: list[str]) -> list[tuple[str, int]]:
@@ -118,6 +141,81 @@ def _track_display(conn, track_uri: str) -> tuple[str, str, int, object]:
     return track_name, artist_display, total_plays, first_played_at
 
 
+# ── top_1st_* (Rankings) badges ─────────────────────────────────────────────────
+
+def award_top_1st_badge(
+    conn,
+    track_uri: str,
+    kind: Literal["month", "season", "year", "alltime", "decade"],
+    context: dict,
+    awarded_at=None,
+) -> bool:
+    """Insert a top_1st_{kind} badge_events row for this track.
+
+    Returns True if inserted, False if it already existed for this specific window
+    (UNIQUE conflict on entity_type, entity_id, badge_type, context->>'window').
+
+    A track can win the same cadence for multiple windows (Jan 2026 + Feb 2026):
+    both rows keep badge_type='top_1st_month' but carry distinct context['window'].
+    Idempotency is per-window thanks to migration 0015's windowed unique index.
+
+    awarded_at defaults to NOW(); the backfill passes the historical period-end date.
+    """
+    badge_type = f"top_1st_{kind}"
+    with conn.cursor() as cur:
+        if awarded_at is None:
+            cur.execute(
+                """
+                INSERT INTO badge_events (entity_type, entity_id, badge_type, context)
+                VALUES ('track', %s, %s, %s::jsonb)
+                ON CONFLICT (entity_type, entity_id, badge_type, (context->>'window'))
+                    DO NOTHING
+                RETURNING id
+                """,
+                (track_uri, badge_type, json.dumps(context)),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO badge_events (entity_type, entity_id, badge_type, awarded_at, context)
+                VALUES ('track', %s, %s, %s, %s::jsonb)
+                ON CONFLICT (entity_type, entity_id, badge_type, (context->>'window'))
+                    DO NOTHING
+                RETURNING id
+                """,
+                (track_uri, badge_type, awarded_at, json.dumps(context)),
+            )
+        inserted = cur.fetchone() is not None
+    conn.commit()
+    return inserted
+
+
+def _fetch_track_rankings(conn, track_uri: str) -> dict[str, list[str]]:
+    """Returns {kind: [window, ...]} for every top_1st_* badge this track holds.
+
+    Keys are the short kinds (month/season/year/alltime/decade); windows are ordered
+    by awarded_at ascending. Kinds with no awards map to an empty list.
+    """
+    rankings: dict[str, list[str]] = {kind: [] for kind, _label in _TOP_1ST_LABELS}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT badge_type, context->>'window' AS window
+            FROM badge_events
+            WHERE entity_type = 'track'
+              AND entity_id = %s
+              AND badge_type LIKE 'top_1st_%%'
+            ORDER BY awarded_at ASC
+            """,
+            (track_uri,),
+        )
+        for badge_type, window in cur.fetchall():
+            kind = badge_type.removeprefix("top_1st_")
+            if kind in rankings and window:
+                rankings[kind].append(window)
+    return rankings
+
+
 def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, str, str]:
     """Returns (subject, html_body, plaintext_body) for one milestone crossing."""
     track_name, artist_display, total_plays, first_played_at = _track_display(conn, track_uri)
@@ -180,6 +278,33 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
         + "</tr></table></div>"
     )
 
+    # Rankings strip (v0.65) — the "Pokémon badge doos": every top_1st_* category this
+    # track has ever won, one row per cadence. Rows always present; a category with no
+    # win shows an em-dash. If the track has no rankings at all, show a compact line.
+    rankings = _fetch_track_rankings(conn, track_uri)
+    any_ranking = any(rankings[kind] for kind, _label in _TOP_1ST_LABELS)
+    if any_ranking:
+        ranking_rows = []
+        for kind, label in _TOP_1ST_LABELS:
+            windows = rankings[kind]
+            if windows:
+                value_cell = f'<td style="padding:4px 0;">{escape(", ".join(windows))}</td>'
+            else:
+                value_cell = '<td style="padding:4px 0;color:#555;">—</td>'
+            ranking_rows.append(
+                f'<tr><td style="padding:4px 12px 4px 0;color:#888;min-width:100px;">{escape(label)}</td>'
+                f'{value_cell}</tr>'
+            )
+        rankings_html = (
+            '<div style="margin:16px 0;">'
+            '<p style="font-size:13px;color:#888;margin:0 0 6px 0;">Rankings</p>'
+            '<table style="font-size:13px;color:#ccc;">'
+            + "".join(ranking_rows)
+            + "</table></div>"
+        )
+    else:
+        rankings_html = '<p style="font-size:13px;color:#888;margin:16px 0;">Rankings — none yet 🎯</p>'
+
     html_body = "\n".join([
         "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
         "color:#222;max-width:640px;\">",
@@ -196,12 +321,25 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
         f'<td style="padding:2px 0;">{escape(first_play_str)}</td></tr>'
         "</table>",
         strip_html,
+        rankings_html,
         "</body></html>",
     ])
 
     strip_plain_cells = "  ".join(
         f"[{n} {'✓' if ok else '—'}]" for n, ok in earned_flags
     )
+
+    if any_ranking:
+        label_width = max(len(label) for _kind, label in _TOP_1ST_LABELS) + 1  # + colon
+        ranking_lines = ["Rankings:"]
+        for kind, label in _TOP_1ST_LABELS:
+            windows = rankings[kind]
+            value = ", ".join(windows) if windows else "—"
+            ranking_lines.append(f"  {(label + ':').ljust(label_width)} {value}")
+        rankings_plain = "\n".join(ranking_lines)
+    else:
+        rankings_plain = "Rankings — none yet 🎯"
+
     plaintext_body = "\n".join([
         f"{threshold}+ plays milestone!",
         "",
@@ -213,6 +351,8 @@ def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, st
         "",
         f"{strip_label}:",
         f"  {strip_plain_cells}",
+        "",
+        rankings_plain,
     ])
 
     return subject, html_body, plaintext_body
@@ -232,7 +372,7 @@ def record_and_notify_milestone(conn, track_uri: str, threshold: int) -> bool:
             """
             INSERT INTO badge_events (entity_type, entity_id, badge_type, awarded_at, context)
             VALUES ('track', %s, %s, NOW(), '{"source": "live"}'::jsonb)
-            ON CONFLICT (entity_type, entity_id, badge_type) DO NOTHING
+            ON CONFLICT (entity_type, entity_id, badge_type, (context->>'window')) DO NOTHING
             RETURNING id
             """,
             (track_uri, f"plays_{threshold}"),

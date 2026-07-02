@@ -80,7 +80,10 @@ def main():
 
     collector = EmailEventCollector()
 
-    definitions = get_managed_playlists(conn, sp)
+    # v0.65: snapshot creation moved to the dedicated daily create-snapshots cron.
+    # get_managed_playlists() no longer returns snapshots; this filter is a defensive
+    # guard so a stray snapshot definition can never be (re)created by the weekly cron.
+    definitions = [d for d in get_managed_playlists(conn, sp) if d.kind != "snapshot"]
     total = len(definitions)
     start = time.time()
     for i, definition in enumerate(definitions, start=1):
