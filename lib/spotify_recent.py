@@ -88,4 +88,14 @@ def ingest_recent(conn) -> dict:
 
     conn.commit()
     skipped = attempted - inserted
-    return {"attempted": attempted, "inserted": inserted, "skipped": skipped}
+    # Deduplicated non-null track_uris seen in this batch. Consumed by the badge
+    # milestone detector (v0.63); ON CONFLICT means we can't cheaply tell which
+    # rows were newly inserted, but batch-scoped detection is idempotent so
+    # passing the full recently-played set is correct and safe.
+    batch_track_uris = sorted({r["track_uri"] for r in records if r["track_uri"]})
+    return {
+        "attempted": attempted,
+        "inserted": inserted,
+        "skipped": skipped,
+        "track_uris": batch_track_uris,
+    }
