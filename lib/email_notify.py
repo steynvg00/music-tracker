@@ -408,6 +408,56 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
 
 # ── Sender ─────────────────────────────────────────────────────────────────────
 
+def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
+    """Low-level SMTP transport shared by all outbound mail (digests + milestones).
+
+    - Reads GMAIL_USER / GMAIL_APP_PASSWORD / EMAIL_RECIPIENT from os.environ.
+    - MUSIC_TRACKER_EMAIL_DRY_RUN=1: print subject + HTML body to stdout, no SMTP,
+      return True (works without secrets, for local testing).
+    - Raises RuntimeError with a clear message if any secret is missing.
+    - Returns True on successful SMTP send.
+    - Caller is responsible for catching exceptions to get non-fatal semantics.
+    """
+    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
+        print(f"[email] DRY RUN — subject={subject}", flush=True)
+        print(html_body, flush=True)
+        return True
+
+    gmail_user = os.environ.get("GMAIL_USER")
+    gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
+    recipient = os.environ.get("EMAIL_RECIPIENT")
+    missing = [
+        name
+        for name, val in (
+            ("GMAIL_USER", gmail_user),
+            ("GMAIL_APP_PASSWORD", gmail_password),
+            ("EMAIL_RECIPIENT", recipient),
+        )
+        if not val
+    ]
+    if missing:
+        raise RuntimeError(
+            "Cannot send email — missing env vars: "
+            + ", ".join(missing)
+            + ". Set them as GitHub Actions secrets, or use MUSIC_TRACKER_EMAIL_DRY_RUN=1 for local testing."
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = recipient
+    msg.attach(MIMEText(plaintext_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(gmail_user, gmail_password)
+        server.sendmail(gmail_user, [recipient], msg.as_string())
+
+    print(f"Sent email to {recipient}: subject={subject}", flush=True)
+    return True
+
+
 def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly", "sweep"]) -> bool:
     """Sends digest email. Returns True if sent (or dry-run printed), False if skipped.
 
@@ -430,41 +480,4 @@ def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly"
         n_deleted = sum(1 for e in events if e.event_type == EventType.CUSTOM_DELETED)
         subject = f"music-tracker: {n_deleted} custom playlists auto-deleted"
 
-    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
-        print(f"[email] DRY RUN — subject={subject}", flush=True)
-        print(html_body, flush=True)
-        return True
-
-    gmail_user = os.environ.get("GMAIL_USER")
-    gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
-    recipient = os.environ.get("EMAIL_RECIPIENT")
-    missing = [
-        name
-        for name, val in (
-            ("GMAIL_USER", gmail_user),
-            ("GMAIL_APP_PASSWORD", gmail_password),
-            ("EMAIL_RECIPIENT", recipient),
-        )
-        if not val
-    ]
-    if missing:
-        raise RuntimeError(
-            "Cannot send email digest — missing env vars: "
-            + ", ".join(missing)
-            + ". Set them as GitHub Actions secrets, or use MUSIC_TRACKER_EMAIL_DRY_RUN=1 for local testing."
-        )
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = gmail_user
-    msg["To"] = recipient
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.starttls()
-        server.login(gmail_user, gmail_password)
-        server.sendmail(gmail_user, [recipient], msg.as_string())
-
-    print(f"Sent digest to {recipient}: subject={subject}", flush=True)
-    return True
+    return _smtp_send(subject, html_body, text_body)
