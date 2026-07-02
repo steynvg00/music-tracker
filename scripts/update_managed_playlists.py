@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import psycopg
 from lib.spotify import get_spotify_client
 from lib.playlists import get_managed_playlists, update_managed_playlist, get_full_name
+from lib.email_notify import EmailEventCollector, send_digest
 
 _INGEST_SCRIPT = Path(__file__).resolve().parent / "ingest_spotify_recent.py"
 
@@ -77,6 +78,8 @@ def main():
     print("[playlists] Opening DB connection...", flush=True)
     conn = psycopg.connect(db_url)
 
+    collector = EmailEventCollector()
+
     definitions = get_managed_playlists(conn, sp)
     total = len(definitions)
     start = time.time()
@@ -84,15 +87,30 @@ def main():
         full_name = get_full_name(definition)
         print(f"\n[{i}/{total}] {full_name}", flush=True)
         try:
-            result = update_managed_playlist(sp, conn, user_id, definition, playlist_cache)
+            result = update_managed_playlist(
+                sp, conn, user_id, definition, playlist_cache, collector=collector
+            )
             print(f"    {result['track_count']} tracks → {result['action']}", flush=True)
         except Exception as e:
             print(f"    FAILED: {e}", flush=True)
             continue
 
-    conn.close()
     duration = time.time() - start
     print(f"\n=== Done. {total} playlists processed in {duration:.1f}s. ===", flush=True)
+
+    # Email digest is best-effort: playlist ops already succeeded above, so a mail
+    # failure must NOT change the script's exit code (a failed step would read as
+    # "playlist update failed" to the user).
+    try:
+        sent = send_digest(collector, conn, run_type="weekly")
+        if sent:
+            print(f"Sent weekly digest with {len(collector.events)} events.", flush=True)
+        else:
+            print("No events this run, skipped digest email.", flush=True)
+    except Exception as e:
+        print(f"WARNING: Failed to send weekly digest: {e}", file=sys.stderr)
+
+    conn.close()
 
 
 if __name__ == "__main__":

@@ -4,9 +4,13 @@ Custom playlists are user-named, user-managed (no auto-refresh, no auto-delete).
 Naming format: '{user_name} · Custom 🎧'.
 """
 
+import sys
+
 import psycopg
 from datetime import datetime, timedelta, timezone
 from typing import Literal
+
+from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, send_digest
 
 CUSTOM_NAME_SUFFIX = " · Custom 🎧"
 
@@ -274,7 +278,7 @@ def delete_expired_custom_playlists(sp, conn) -> dict:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT playlist_id, name, expires_at
+        SELECT playlist_id, name, expires_at, track_count
         FROM custom_playlists
         WHERE expires_at IS NOT NULL
           AND expires_at < NOW()
@@ -287,8 +291,9 @@ def delete_expired_custom_playlists(sp, conn) -> dict:
     deleted_spotify = 0
     deleted_db = 0
     failed = 0
+    collector = EmailEventCollector()
 
-    for playlist_id, name, expires_at in expired:
+    for playlist_id, name, expires_at, track_count in expired:
         print(f"[sweep] Deleting '{name}' (expired {expires_at})...", flush=True)
         ok = delete_custom_playlist(sp, conn, playlist_id)
         if ok:
@@ -297,6 +302,28 @@ def delete_expired_custom_playlists(sp, conn) -> dict:
             print(f"[sweep]   FAILED to delete on Spotify", flush=True)
             failed += 1
         deleted_db += 1
+        extra = {"expires_at": expires_at.isoformat() if expires_at is not None else ""}
+        if track_count is not None:
+            extra["track_count"] = track_count
+        collector.add_event(PlaylistEvent(
+            event_type=EventType.CUSTOM_DELETED,
+            playlist_name=name,
+            playlist_kind="custom",
+            is_top_playlist=False,
+            tracks=[],
+            extra=extra,
+        ))
+
+    # Best-effort email: deletions already committed to Spotify + DB above, so a
+    # mail failure must not change the sweep's exit code.
+    try:
+        sent = send_digest(collector, conn, run_type="sweep")
+        if sent:
+            print(f"Sent sweep digest with {len(collector.events)} deletions.", flush=True)
+        else:
+            print("No deletions this run, skipped digest email.", flush=True)
+    except Exception as e:
+        print(f"WARNING: Failed to send sweep digest: {e}", file=sys.stderr)
 
     return {
         "expired": len(expired),
