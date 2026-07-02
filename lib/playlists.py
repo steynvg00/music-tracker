@@ -4,8 +4,8 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
-from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, _is_top_playlist
-from lib.seasons import build_season_description, season_end
+from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, _is_top_playlist, _hydrate_playcounts
+from lib.seasons import build_season_description, season_end, season_start, season_display_year
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
@@ -967,15 +967,197 @@ def missed_new_tracks_other_playlist(conn, sp, rank_fn=None) -> list[PlaylistDef
     ]
 
 
+# ── v0.65: on-demand snapshot creation (daily create-snapshots cron) ────────────
+#
+# The daily cron detects a period-end and calls one of the create_*_snapshot()
+# functions below. Each builds the same playlist name/description the old weekly
+# path used, populates it in rank order, and returns the ranked track list so the
+# caller can award the top_1st_* badge to the #1 track and render the snapshot mail.
+
+def snapshot_period_spec(kind: str, identifier) -> dict:
+    """Read-only: describe a period snapshot without touching Spotify or the DB.
+
+    Returns a dict with: limit, suffix (name w/o the ' · Auto 🤖📸' suffix),
+    description, display_name (also the badge context window), period_end (last day
+    of the period), where_sql + where_params (a spotify_plays filter for the period).
+
+    identifier per kind:
+      month  -> (year, month)      season -> (season_str, start_year)
+      year   -> year               decade -> decade_start (e.g. 2020)
+    """
+    if kind == "month":
+        year, month = identifier
+        mname = _MONTH_NAMES[month - 1]
+        next_first = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        return {
+            "limit": 25,
+            "suffix": f"Top 25 · {mname} {year}",
+            "description": f"Your 25 most-played tracks in {mname} {year}.",
+            "display_name": f"{mname} {year}",
+            "period_end": next_first - timedelta(days=1),
+            "where_sql": (
+                "EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s "
+                "AND EXTRACT(MONTH FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s"
+            ),
+            "where_params": (year, month),
+        }
+    if kind == "season":
+        season, start_year = identifier
+        season_cap = season.capitalize()
+        # Playlist names use the legacy END-year convention (Winter 2026 = 2025/2026).
+        name_year = start_year + 1 if season == "winter" else start_year
+        start = season_start(season, start_year)
+        last_day = season_end(season, start_year)
+        created_on = last_day + timedelta(days=1)  # v0.64 canonical "Gemaakt op"
+        start_dt = datetime.combine(start, datetime.min.time(), TZ_AMSTERDAM)
+        end_dt = datetime.combine(last_day + timedelta(days=1), datetime.min.time(), TZ_AMSTERDAM)
+        return {
+            "limit": 50,
+            "suffix": f"Top 50 · {season_cap} {name_year}",
+            "description": build_season_description("Top 50 tracks", season, start_year, created_on),
+            "display_name": f"{season_cap} {season_display_year(season, start_year)}",
+            "period_end": last_day,
+            "where_sql": "played_at >= %s AND played_at < %s",
+            "where_params": (start_dt, end_dt),
+        }
+    if kind == "year":
+        year = identifier
+        return {
+            "limit": 100,
+            "suffix": f"Top 100 · {year}",
+            "description": f"Your 100 most-played tracks in {year}.",
+            "display_name": str(year),
+            "period_end": date(year, 12, 31),
+            "where_sql": "EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = %s",
+            "where_params": (year,),
+        }
+    if kind == "decade":
+        decade_start = identifier
+        start = date(decade_start, 1, 1)
+        end_excl = date(decade_start + 10, 1, 1)
+        start_dt = datetime.combine(start, datetime.min.time(), TZ_AMSTERDAM)
+        end_dt = datetime.combine(end_excl, datetime.min.time(), TZ_AMSTERDAM)
+        return {
+            "limit": 100,
+            "suffix": f"Top 100 · {decade_start}s",
+            "description": f"Your 100 most-played tracks of the {decade_start}s.",
+            "display_name": f"{decade_start}s",
+            "period_end": date(decade_start + 9, 12, 31),
+            "where_sql": "played_at >= %s AND played_at < %s",
+            "where_params": (start_dt, end_dt),
+        }
+    raise ValueError(f"unknown snapshot kind {kind!r}")
+
+
+def _ranked_with_plays(conn, where_sql: str, where_params: tuple, limit: int) -> list[tuple[str, int]]:
+    """(track_uri, plays) for a period, rank order. Tie-break on earliest first play."""
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT track_uri, COUNT(*) AS plays
+        FROM spotify_plays
+        WHERE track_uri IS NOT NULL
+          AND {where_sql}
+        GROUP BY track_uri
+        ORDER BY plays DESC, MIN(played_at) ASC
+        LIMIT %s
+        """,
+        (*where_params, limit),
+    )
+    return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def count_period_plays(conn, track_uris: list[str], kind: str, identifier) -> dict[str, int]:
+    """Plays within the period for the given track_uris (used by the badge backfill)."""
+    if not track_uris:
+        return {}
+    spec = snapshot_period_spec(kind, identifier)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT track_uri, COUNT(*)
+        FROM spotify_plays
+        WHERE track_uri = ANY(%s)
+          AND {spec['where_sql']}
+        GROUP BY track_uri
+        """,
+        (track_uris, *spec["where_params"]),
+    )
+    return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def rank_period_tracks(conn, kind: str, identifier) -> list[dict]:
+    """Read-only ranked track list for a period. Each dict:
+    {"rank", "track_uri", "plays_in_period", "track_name", "artist_display"}.
+    """
+    spec = snapshot_period_spec(kind, identifier)
+    ranked = _ranked_with_plays(conn, spec["where_sql"], spec["where_params"], spec["limit"])
+    uris = [uri for uri, _plays in ranked]
+    names = _hydrate_playcounts(conn, uris)  # {uri: (track_name, artist_display, total_plays)}
+    out = []
+    for i, (uri, plays) in enumerate(ranked, start=1):
+        track_name, artist_display, _total = names.get(uri, ("(unknown track)", "(unknown artist)", 0))
+        out.append({
+            "rank": i,
+            "track_uri": uri,
+            "plays_in_period": plays,
+            "track_name": track_name,
+            "artist_display": artist_display,
+        })
+    return out
+
+
+def _create_period_snapshot(sp, user_id, conn, kind: str, identifier) -> tuple[str, list[dict]]:
+    """Create/find the snapshot playlist, populate it in rank order, return
+    (playlist_id, ranked_tracks)."""
+    spec = snapshot_period_spec(kind, identifier)
+    definition = PlaylistDefinition(
+        suffix=spec["suffix"],
+        description=spec["description"],
+        query_fn=lambda _conn: [],  # unused — tracks come from rank_period_tracks
+        kind="snapshot",
+        max_tracks=spec["limit"],
+    )
+    ranked_tracks = rank_period_tracks(conn, kind, identifier)
+    uris = [t["track_uri"] for t in ranked_tracks]
+    playlist_id, _was_created = find_or_create_managed_playlist(sp, user_id, definition, None)
+    _register_playlist(conn, playlist_id, get_full_name(definition))
+    replace_playlist_tracks(sp, playlist_id, uris)
+    return playlist_id, ranked_tracks
+
+
+def create_month_snapshot(sp, user_id, conn, year: int, month: int) -> tuple[str, list[dict]]:
+    """Creates the Top 25 · Month YYYY snapshot. Returns (playlist_id, ranked_tracks)."""
+    return _create_period_snapshot(sp, user_id, conn, "month", (year, month))
+
+
+def create_season_snapshot(sp, user_id, conn, season: str, year: int) -> tuple[str, list[dict]]:
+    """Creates the Top 50 · Season snapshot (year = season START year)."""
+    return _create_period_snapshot(sp, user_id, conn, "season", (season, year))
+
+
+def create_year_snapshot(sp, user_id, conn, year: int) -> tuple[str, list[dict]]:
+    """Creates the Top 100 · YYYY snapshot."""
+    return _create_period_snapshot(sp, user_id, conn, "year", year)
+
+
+def create_decade_snapshot(sp, user_id, conn, decade_start: int) -> tuple[str, list[dict]]:
+    """Creates the Top 100 · YYYYs decade snapshot (decade_start e.g. 2020)."""
+    return _create_period_snapshot(sp, user_id, conn, "decade", decade_start)
+
+
 def get_managed_playlists(conn, sp) -> list[PlaylistDefinition]:
-    """Return all managed playlist definitions (static + dynamic)."""
+    """Return all managed playlist definitions the weekly cron refreshes.
+
+    v0.65: snapshot definitions (monthly/seasonal/yearly/all-time top) are NO LONGER
+    included here — snapshot creation moved to the dedicated daily cron
+    (scripts/create_snapshots.py). This cron only refreshes `updating` playlists.
+    The snapshot definition builders still exist and are used by get_snapshot_definitions
+    for the dashboard.
+    """
     dynamic = []
     dynamic.extend(year_discovered_playlists(conn))
     dynamic.extend(year_released_playlists(conn))
-    dynamic.extend(monthly_top_snapshots(conn))
-    dynamic.extend(seasonal_top_snapshots(conn))
-    dynamic.extend(yearly_top_snapshots(conn))
-    dynamic.extend(all_time_top_yearly_snapshots(conn))
     dynamic.extend(month_number_one_playlists(conn))
     dynamic.extend(rolling_monthly_number_one_playlist(conn))
     dynamic.extend(forgotten_favorites_playlist(conn))
