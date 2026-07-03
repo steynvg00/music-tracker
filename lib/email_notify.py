@@ -204,10 +204,8 @@ def _collect_hydration_uris(aggregates, deleted) -> list[str]:
         if agg.is_top:
             uris.extend(t["uri"] for t in agg.ranked)
         else:
-            total_changes = len(agg.added) + len(agg.removed)
-            if total_changes <= 10:
-                uris.extend(agg.added)
-                uris.extend(agg.removed)
+            uris.extend(agg.added)
+            uris.extend(agg.removed)
     return uris
 
 
@@ -381,23 +379,16 @@ def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "
                 )
                 out.append(_html_ranked_table(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
-                total_changes = len(agg.added) + len(agg.removed)
                 out.append(
                     f'<p style="margin:2px 0;font-size:13px;color:#555;">'
                     f'+{len(agg.added)} added, −{len(agg.removed)} removed</p>'
                 )
-                if total_changes <= 10:
-                    if agg.added:
-                        out.append('<p style="margin:2px 0;font-size:13px;font-weight:600;">Added</p>')
-                        out.append(_html_track_table(agg.added, playcounts, show_plays=False))
-                    if agg.removed:
-                        out.append('<p style="margin:2px 0;font-size:13px;font-weight:600;">Removed</p>')
-                        out.append(_html_track_table(agg.removed, playcounts, show_plays=False))
-                else:
-                    out.append(
-                        '<p style="margin:2px 0;font-size:13px;color:#888;">'
-                        'More than 10 changes — expand in dashboard.</p>'
-                    )
+                if agg.added:
+                    out.append('<p style="margin:2px 0;font-size:13px;font-weight:600;">Added</p>')
+                    out.append(_html_track_table(agg.added, playcounts, show_plays=False))
+                if agg.removed:
+                    out.append('<p style="margin:2px 0;font-size:13px;font-weight:600;">Removed</p>')
+                    out.append(_html_track_table(agg.removed, playcounts, show_plays=False))
 
     # ── Section: Snapshots created ──────────────────────────────────────────
     if snapshots:
@@ -487,17 +478,13 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
                 lines.append(f"  +{len(agg.added)} tracks now in playlist")
                 lines.extend(_text_ranked_lines(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
-                total_changes = len(agg.added) + len(agg.removed)
                 lines.append(f"  +{len(agg.added)} added, -{len(agg.removed)} removed")
-                if total_changes <= 10:
-                    if agg.added:
-                        lines.append("  Added:")
-                        lines.extend(_text_track_lines(agg.added, playcounts, show_plays=False))
-                    if agg.removed:
-                        lines.append("  Removed:")
-                        lines.extend(_text_track_lines(agg.removed, playcounts, show_plays=False))
-                else:
-                    lines.append("  More than 10 changes — expand in dashboard.")
+                if agg.added:
+                    lines.append("  Added:")
+                    lines.extend(_text_track_lines(agg.added, playcounts, show_plays=False))
+                if agg.removed:
+                    lines.append("  Removed:")
+                    lines.extend(_text_track_lines(agg.removed, playcounts, show_plays=False))
         lines.append("")
 
     if snapshots:
@@ -610,16 +597,12 @@ def build_markdown_digest(events: list[PlaylistEvent], run_type: Literal["weekly
                 lines.extend(ranked_md(agg))
             else:
                 lines.append(f"- +{len(agg.added)} added, −{len(agg.removed)} removed")
-                total_changes = len(agg.added) + len(agg.removed)
-                if total_changes <= 10:
-                    if agg.added:
-                        lines.append("**Added**")
-                        lines.extend(uri_list_md(agg.added))
-                    if agg.removed:
-                        lines.append("**Removed**")
-                        lines.extend(uri_list_md(agg.removed))
-                else:
-                    lines.append("- More than 10 changes — expand in dashboard.")
+                if agg.added:
+                    lines.append("**Added**")
+                    lines.extend(uri_list_md(agg.added))
+                if agg.removed:
+                    lines.append("**Removed**")
+                    lines.extend(uri_list_md(agg.removed))
             lines.append("")
 
     if snapshots:
