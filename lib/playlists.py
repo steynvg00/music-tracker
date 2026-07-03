@@ -40,6 +40,10 @@ class PlaylistDefinition:
     kind: str = "updating"                               # "updating" or "snapshot"
     max_tracks: int = 10000                              # safety cap (Spotify max is 10000 per playlist)
     legacy_names: list[str] = field(default_factory=list)  # chain of past names, tried in order
+    # v0.66: for Top playlists, returns {track_uri: plays_in_the_playlist's_window} for the
+    # given uris — the SCOPE-CORRECT count shown in the weekly digest (e.g. last-30-day plays
+    # for "Top 50 last 30 days"). None → digest renders "—" instead of a misleading all-time count.
+    plays_count_fn: Optional[Callable[[psycopg.Connection, list[str]], dict[str, int]]] = None
 
 
 # ── Name/description helpers ───────────────────────────────────────────────────
@@ -159,6 +163,53 @@ def query_top_all_time(limit: int):
         )
         return [row[0] for row in cur.fetchall()]
     return fn
+
+
+def count_plays_in_window(where_sql: str = ""):
+    """Factory: returns a plays_count_fn (conn, uris) -> {uri: plays within the window}.
+
+    where_sql is a STATIC, module-controlled predicate on spotify_plays (never user
+    input). Empty string = all-time. Used to give Top playlists scope-correct counts
+    in the weekly digest (v0.66), matching each playlist's ranking window.
+    """
+    def fn(conn, uris: list[str]) -> dict[str, int]:
+        if not uris:
+            return {}
+        cur = conn.cursor()
+        extra = f" AND {where_sql}" if where_sql else ""
+        cur.execute(
+            f"""
+            SELECT track_uri, COUNT(*)
+            FROM spotify_plays
+            WHERE track_uri = ANY(%s){extra}
+            GROUP BY track_uri
+            """,
+            (uris,),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+    return fn
+
+
+# Windows matching the 3 rank-tracked Top updating playlists' ranking queries.
+_WINDOW_LAST_30_DAYS = "played_at >= NOW() - (INTERVAL '1 day' * 30)"
+_WINDOW_THIS_YEAR = (
+    "EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int = "
+    "EXTRACT(YEAR FROM (NOW() AT TIME ZONE 'Europe/Amsterdam'))::int"
+)
+
+
+# v0.66: playlists whose weekly rank changes are recorded in playlist_rank_history
+# (so the digest can render ↑/↓/—/★NEW arrows). Matched as substrings of the suffix.
+RANK_TRACKED_PLAYLISTS = {
+    "Top 100 this year",
+    "Top 100 all-time",
+    "Top 50 last 30 days",
+}
+
+
+def is_rank_tracked_playlist(playlist_name: str) -> bool:
+    """True if this playlist's rank changes should be tracked in playlist_rank_history."""
+    return any(name in playlist_name for name in RANK_TRACKED_PLAYLISTS)
 
 
 def query_top_in_month(year: int, month: int, limit: int):
@@ -400,6 +451,7 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_top_recent(days=30, limit=50),
         kind="updating",
         legacy_names=["🤖 Auto · Top 50 last 30 days"],
+        plays_count_fn=count_plays_in_window(_WINDOW_LAST_30_DAYS),
     ),
     PlaylistDefinition(
         suffix="Top 100 this year",
@@ -407,6 +459,7 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_top_current_year(limit=100),
         kind="updating",
         legacy_names=["🤖 Auto · Top 100 this year"],
+        plays_count_fn=count_plays_in_window(_WINDOW_THIS_YEAR),
     ),
     PlaylistDefinition(
         suffix="Top 100 all-time",
@@ -414,6 +467,7 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_top_all_time(limit=100),
         kind="updating",
         legacy_names=["🤖 Auto · Top 100 all-time"],
+        plays_count_fn=count_plays_in_window(),  # all-time window (no filter)
     ),
 ]
 
@@ -1388,6 +1442,29 @@ def find_or_create_managed_playlist(
     return (new["id"], True)
 
 
+def _record_rank_history(conn, playlist_id: str, track_uris: list[str]) -> None:
+    """Bulk-insert one rank snapshot for a rank-tracked Top playlist (v0.66).
+
+    All rows share a single snapshot_at (NOW() is constant within one statement), so
+    each weekly run produces exactly one distinct snapshot_at per playlist. Only called
+    after a successful playlist replace, so no partial history can corrupt arrow diffs.
+    """
+    if not track_uris:
+        return
+    ranks = list(range(1, len(track_uris) + 1))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO playlist_rank_history (playlist_id, track_uri, snapshot_at, rank)
+        SELECT %s, u.track_uri, NOW(), u.rank
+        FROM unnest(%s::text[], %s::int[]) AS u(track_uri, rank)
+        ON CONFLICT DO NOTHING
+        """,
+        (playlist_id, track_uris, ranks),
+    )
+    conn.commit()
+
+
 def update_managed_playlist(
     sp,
     conn,
@@ -1452,15 +1529,35 @@ def update_managed_playlist(
         added_uris = [u for u in track_uris if u not in before]
         removed_uris = [u for u in prev_uris if u not in after]
         is_top = _is_top_playlist(full_name, definition.kind)
+        if is_top:
+            # v0.66: record a weekly rank snapshot for rank-tracked playlists (every
+            # successful run, even if membership is unchanged, so arrow diffs stay fresh).
+            if is_rank_tracked_playlist(full_name):
+                _record_rank_history(conn, playlist_id, track_uris)
+
+            # Build scope-correct ranked tracks. plays_count_fn (if any) returns
+            # per-track plays within THIS playlist's window; None → digest shows "—".
+            plays_map: dict[str, int] = {}
+            if definition.plays_count_fn is not None:
+                try:
+                    plays_map = definition.plays_count_fn(conn, track_uris)
+                except Exception as err:
+                    print(f"[playlists] plays_count_fn failed for {full_name}: {err}", flush=True)
+                    plays_map = {}
+            ranked_tracks = [
+                {"uri": u, "rank": i + 1, "plays_in_context": plays_map.get(u)}
+                for i, u in enumerate(track_uris)
+            ]
         if added_uris or removed_uris:
             if is_top:
-                # Top playlists always render the full ranked final list.
+                # Top playlists always render the full ranked final list, scope-scoped.
                 collector.add_event(PlaylistEvent(
                     event_type=EventType.TRACKS_ADDED,
                     playlist_name=full_name,
                     playlist_kind=definition.kind,
                     is_top_playlist=True,
-                    tracks=list(track_uris),
+                    ranked_tracks=ranked_tracks,
+                    playlist_id=playlist_id,
                 ))
             else:
                 if added_uris:

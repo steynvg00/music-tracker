@@ -17,6 +17,30 @@ from lib.email_notify import EmailEventCollector, send_digest
 _INGEST_SCRIPT = Path(__file__).resolve().parent / "ingest_spotify_recent.py"
 
 
+def _neuter_writes(sp) -> None:
+    """--skip-writes: no-op every Spotify mutation + DB write so the collector/event/
+    digest pipeline can be exercised end-to-end fully read-only (no playlist changes,
+    no rank-history rows). Reads (queries, playlist listing) still run normally.
+    """
+    import lib.playlists as plmod
+    import lib.playlist_settings as psmod
+
+    def _noop_create(*a, **k):
+        return {"id": "SKIP_WRITES", "external_urls": {"spotify": ""}}
+
+    def _noop(*a, **k):
+        return None
+
+    sp.user_playlist_create = _noop_create
+    sp.playlist_change_details = _noop
+    sp.playlist_replace_items = _noop
+    sp.playlist_add_items = _noop
+    plmod._register_playlist = _noop
+    plmod._record_rank_history = _noop
+    psmod.mark_force_refresh_completed = _noop
+    print("[playlists] --skip-writes: all Spotify + DB writes neutered (read-only run).", flush=True)
+
+
 def _run_fresh_ingest() -> None:
     result = subprocess.run(
         [sys.executable, str(_INGEST_SCRIPT)],
@@ -39,6 +63,12 @@ def main():
         default=False,
         help="Run ingest_spotify_recent.py before refreshing to ensure plays are up to date.",
     )
+    parser.add_argument(
+        "--skip-writes",
+        action="store_true",
+        default=False,
+        help="Read-only run: neuter all Spotify + DB writes, still build + render the digest.",
+    )
     args = parser.parse_args()
 
     if args.fresh_ingest:
@@ -59,6 +89,9 @@ def main():
     print("[playlists] Fetching current user...", flush=True)
     user_id = sp.current_user()["id"]
     print(f"[playlists] Logged in as {user_id}.", flush=True)
+
+    if args.skip_writes:
+        _neuter_writes(sp)
 
     print("[playlists] Building playlist library cache...", flush=True)
     playlist_cache: dict[str, str] = {}

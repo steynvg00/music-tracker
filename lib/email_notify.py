@@ -17,6 +17,8 @@ import os
 import smtplib
 from dataclasses import dataclass, field
 from datetime import date
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
@@ -38,7 +40,13 @@ class PlaylistEvent:
     playlist_name: str
     playlist_kind: Literal["updating", "snapshot", "custom"]
     is_top_playlist: bool  # kind=='snapshot' OR suffix contains 'Top ' or 'Top-'
-    tracks: list[str] = field(default_factory=list)  # track_uris; playcounts hydrated at render time
+    tracks: list[str] = field(default_factory=list)  # non-Top: raw uris (diff or creation list)
+    # v0.66: Top playlists carry per-track SCOPE-CORRECT counts here instead of `tracks`.
+    # Each dict: {"uri": str, "rank": int, "plays_in_context": int | None}. plays_in_context
+    # is None when the playlist's ranking window can't cheaply produce per-track counts —
+    # rendered as "—" rather than a misleading all-time number.
+    ranked_tracks: list[dict] = field(default_factory=list)
+    playlist_id: str = ""  # Spotify id — needed to look up rank history for arrows
     extra: dict = field(default_factory=dict)  # e.g. {"description": "...", "expires_at": "..."}
 
 
@@ -148,6 +156,8 @@ class _PlaylistAgg:
     description: str = ""
     added: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    ranked: list[dict] = field(default_factory=list)  # Top playlists: scope-correct ranked tracks
+    playlist_id: str = ""
 
 
 def _aggregate(events: list[PlaylistEvent]):
@@ -168,13 +178,19 @@ def _aggregate(events: list[PlaylistEvent]):
             agg = _PlaylistAgg(name=e.playlist_name, kind=e.playlist_kind, is_top=e.is_top_playlist)
             aggs[e.playlist_name] = agg
             order.append(e.playlist_name)
+        if e.playlist_id:
+            agg.playlist_id = e.playlist_id
         if e.event_type in (EventType.PLAYLIST_CREATED, EventType.SNAPSHOT_CREATED):
             agg.created = True
             desc = e.extra.get("description")
             if desc:
                 agg.description = desc
         elif e.event_type == EventType.TRACKS_ADDED:
-            agg.added = list(e.tracks)  # full ordered list for Top; diff otherwise
+            if e.ranked_tracks:  # Top playlist: scope-correct ranked list
+                agg.ranked = list(e.ranked_tracks)
+                agg.added = [t["uri"] for t in e.ranked_tracks]
+            else:
+                agg.added = list(e.tracks)  # non-Top: diff list
         elif e.event_type == EventType.TRACKS_REMOVED:
             agg.removed = list(e.tracks)
 
@@ -182,17 +198,62 @@ def _aggregate(events: list[PlaylistEvent]):
 
 
 def _collect_hydration_uris(aggregates, deleted) -> list[str]:
-    """Every track_uri that any section will render with track detail."""
+    """Every track_uri that any section renders with a track name/artist."""
     uris: list[str] = []
     for agg in aggregates:
         if agg.is_top:
-            uris.extend(agg.added)
+            uris.extend(t["uri"] for t in agg.ranked)
         else:
             total_changes = len(agg.added) + len(agg.removed)
             if total_changes <= 10:
                 uris.extend(agg.added)
                 uris.extend(agg.removed)
     return uris
+
+
+# ── Rank change arrows (v0.66) ──────────────────────────────────────────────────
+
+def _fetch_previous_ranks(conn, playlist_id: str) -> dict[str, int] | None:
+    """Rank map {track_uri: rank} from the snapshot immediately BEFORE the latest one.
+
+    Returns None if fewer than 2 snapshots exist for this playlist (first week after
+    deploy → no baseline to diff against → no arrows). The current run's snapshot has
+    already been written by the time the digest renders, so the 2nd-most-recent
+    distinct snapshot_at is the correct "previous week" baseline.
+    """
+    if not playlist_id:
+        return None
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT snapshot_at FROM playlist_rank_history
+        WHERE playlist_id = %s
+        ORDER BY snapshot_at DESC
+        LIMIT 2
+        """,
+        (playlist_id,),
+    )
+    snaps = [row[0] for row in cur.fetchall()]
+    if len(snaps) < 2:
+        return None
+    cur.execute(
+        "SELECT track_uri, rank FROM playlist_rank_history WHERE playlist_id = %s AND snapshot_at = %s",
+        (playlist_id, snaps[1]),
+    )
+    return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _arrow_for(current_rank: int, previous_rank: int | None) -> tuple[str, str, str]:
+    """Returns (label, html_color, plaintext_token) for a rank change."""
+    if previous_rank is None:
+        return ("★ NEW", "#dc4", "[★NEW]")
+    if current_rank < previous_rank:
+        delta = previous_rank - current_rank
+        return (f"↑ {delta}", "#4a5", f"[↑ {delta}]")
+    if current_rank > previous_rank:
+        delta = current_rank - previous_rank
+        return (f"↓ {delta}", "#c55", f"[↓ {delta}]")
+    return ("—", "#666", "[—]")
 
 
 # ── HTML builder ─────────────────────────────────────────────────────────────────
@@ -232,6 +293,45 @@ def _html_track_table(uris: list[str], playcounts, show_plays: bool) -> str:
     )
 
 
+def _html_ranked_table(ranked: list[dict], playcounts, prev_ranks: dict[str, int] | None) -> str:
+    """Top-playlist table: rank [+ arrow] + track + artist + scope-correct plays.
+
+    Uses each track's plays_in_context (NOT all-time). The arrow column only appears
+    when prev_ranks is available (i.e. there is a previous weekly snapshot to diff).
+    """
+    show_arrows = prev_ranks is not None
+    rows = []
+    for t in ranked:
+        rank = t["rank"]
+        uri = t["uri"]
+        plays = t.get("plays_in_context")
+        name, artist = playcounts.get(uri, ("(unknown track)", "(unknown artist)", 0))[:2]
+        cells = f'<td style="padding:2px 8px 2px 0;color:#888;text-align:right;">{rank}</td>'
+        if show_arrows:
+            label, color, _ = _arrow_for(rank, prev_ranks.get(uri))
+            cells += (
+                f'<td style="padding:2px 12px 2px 0;text-align:left;font-size:12px;">'
+                f'<span style="color:{color};">{label}</span></td>'
+            )
+        cells += (
+            f'<td style="padding:2px 8px;">{escape(name)}</td>'
+            f'<td style="padding:2px 8px;color:#555;">{escape(artist)}</td>'
+        )
+        if plays is None:
+            cells += (
+                '<td style="padding:2px 8px;color:#888;text-align:right;">—</td>'
+                '<!-- plays_in_context not available for this playlist type -->'
+            )
+        else:
+            cells += f'<td style="padding:2px 8px;color:#888;text-align:right;">{plays} plays</td>'
+        rows.append(f"<tr>{cells}</tr>")
+    return (
+        '<table style="border-collapse:collapse;font-size:13px;margin:6px 0 14px 0;">'
+        + "".join(rows)
+        + "</table>"
+    )
+
+
 def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
     aggregates, deleted = _aggregate(events)
     playcounts = _hydrate_playcounts(conn, _collect_hydration_uris(aggregates, deleted))
@@ -261,8 +361,8 @@ def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "
             out.append(playlist_heading(agg))
             if agg.description:
                 out.append(f'<p style="margin:2px 0;color:#555;font-size:13px;">{escape(agg.description)}</p>')
-            if agg.is_top and agg.added:
-                out.append(_html_track_table(agg.added, playcounts, show_plays=True))
+            if agg.is_top and agg.ranked:
+                out.append(_html_ranked_table(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
                 out.append(
                     f'<p style="margin:2px 0;font-size:13px;">{len(agg.added)} tracks toegevoegd bij creatie.</p>'
@@ -279,7 +379,7 @@ def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "
                     f'<p style="margin:2px 0;font-size:13px;color:#555;">'
                     f'+{len(agg.added)} tracks now in playlist</p>'
                 )
-                out.append(_html_track_table(agg.added, playcounts, show_plays=True))
+                out.append(_html_ranked_table(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
                 total_changes = len(agg.added) + len(agg.removed)
                 out.append(
@@ -306,8 +406,8 @@ def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "
             out.append(playlist_heading(agg))
             if agg.description:
                 out.append(f'<p style="margin:2px 0;color:#555;font-size:13px;">{escape(agg.description)}</p>')
-            if agg.added:
-                out.append(_html_track_table(agg.added, playcounts, show_plays=True))
+            if agg.ranked:
+                out.append(_html_ranked_table(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
 
     # ── Section: Custom playlists deleted ───────────────────────────────────
     if run_type == "sweep" and deleted:
@@ -339,6 +439,24 @@ def _text_track_lines(uris: list[str], playcounts, show_plays: bool) -> list[str
     return lines
 
 
+def _text_ranked_lines(ranked: list[dict], playcounts, prev_ranks: dict[str, int] | None) -> list[str]:
+    """Top-playlist plaintext lines with scope-correct plays + optional rank arrows."""
+    show_arrows = prev_ranks is not None
+    lines = []
+    for t in ranked:
+        rank = t["rank"]
+        uri = t["uri"]
+        plays = t.get("plays_in_context")
+        name, artist = playcounts.get(uri, ("(unknown track)", "(unknown artist)", 0))[:2]
+        prefix = ""
+        if show_arrows:
+            _, _, token = _arrow_for(rank, prev_ranks.get(uri))
+            prefix = f"{token} "
+        plays_str = "—" if plays is None else f"{plays} plays"
+        lines.append(f"  {prefix}{rank}. {name} — {artist} ({plays_str})")
+    return lines
+
+
 def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
     aggregates, deleted = _aggregate(events)
     playcounts = _hydrate_playcounts(conn, _collect_hydration_uris(aggregates, deleted))
@@ -355,8 +473,8 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
             lines.append(f"- {agg.name} [{_badge(agg.kind)}]")
             if agg.description:
                 lines.append(f"  {agg.description}")
-            if agg.is_top and agg.added:
-                lines.extend(_text_track_lines(agg.added, playcounts, show_plays=True))
+            if agg.is_top and agg.ranked:
+                lines.extend(_text_ranked_lines(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
                 lines.append(f"  {len(agg.added)} tracks toegevoegd bij creatie.")
         lines.append("")
@@ -367,7 +485,7 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
             lines.append(f"- {agg.name} [{_badge(agg.kind)}]")
             if agg.is_top:
                 lines.append(f"  +{len(agg.added)} tracks now in playlist")
-                lines.extend(_text_track_lines(agg.added, playcounts, show_plays=True))
+                lines.extend(_text_ranked_lines(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
             else:
                 total_changes = len(agg.added) + len(agg.removed)
                 lines.append(f"  +{len(agg.added)} added, -{len(agg.removed)} removed")
@@ -388,8 +506,8 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
             lines.append(f"- {agg.name} [{_badge(agg.kind)}]")
             if agg.description:
                 lines.append(f"  {agg.description}")
-            if agg.added:
-                lines.extend(_text_track_lines(agg.added, playcounts, show_plays=True))
+            if agg.ranked:
+                lines.extend(_text_ranked_lines(agg.ranked, playcounts, _fetch_previous_ranks(conn, agg.playlist_id)))
         lines.append("")
 
     if run_type == "sweep" and deleted:
@@ -406,23 +524,134 @@ def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekl
     return "\n".join(lines)
 
 
+# ── Markdown builder (Obsidian attachment) ──────────────────────────────────────
+
+def _wikilink(text: str) -> str:
+    """Wrap text in an Obsidian [[wikilink]], stripping chars illegal inside links."""
+    cleaned = (
+        text.replace("[", "(").replace("]", ")")
+        .replace("|", "-").replace("#", "").replace("^", "")
+    ).strip()
+    return f"[[{cleaned}]]"
+
+
+def _artist_wikilinks(artist_display: str) -> str:
+    """Multi-artist 'A, B' -> '[[A]], [[B]]'."""
+    parts = [a.strip() for a in artist_display.split(",") if a.strip()]
+    return ", ".join(_wikilink(a) for a in parts) if parts else _wikilink(artist_display)
+
+
+def build_markdown_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
+    """Build a Markdown version of the digest for Obsidian vault use.
+
+    YAML frontmatter (date, tags, week_number) + h1 + h2 per section, with track
+    lists as numbered lists using [[wikilinks]] for track and artist names. Top
+    playlists use scope-correct plays_in_context (same source as the HTML/plaintext).
+    """
+    aggregates, deleted = _aggregate(events)
+    playcounts = _hydrate_playcounts(conn, _collect_hydration_uris(aggregates, deleted))
+
+    created = [a for a in aggregates if a.created and a.kind != "snapshot"]
+    snapshots = [a for a in aggregates if a.created and a.kind == "snapshot"]
+    updated = [a for a in aggregates if not a.created and (a.added or a.removed)]
+
+    today = date.today()
+    week_number = today.isocalendar()[1]
+
+    lines: list[str] = [
+        "---",
+        f"date: {today.isoformat()}",
+        "tags: [music-tracker, weekly-digest]",
+        f"week_number: {week_number}",
+        "---",
+        "",
+        f"# Weekly digest — {today.isoformat()}",
+        "",
+        _summary_line(len(created), len(updated), len(snapshots), len(deleted), run_type),
+        "",
+    ]
+
+    def ranked_md(agg: _PlaylistAgg) -> list[str]:
+        out = []
+        for t in agg.ranked:
+            name, artist = playcounts.get(t["uri"], ("(unknown track)", "(unknown artist)", 0))[:2]
+            plays = t.get("plays_in_context")
+            plays_str = "—" if plays is None else f"{plays} plays"
+            out.append(f"{t['rank']}. {_wikilink(name)} — {_artist_wikilinks(artist)} ({plays_str})")
+        return out
+
+    def uri_list_md(uris: list[str]) -> list[str]:
+        out = []
+        for i, uri in enumerate(uris, start=1):
+            name, artist = playcounts.get(uri, ("(unknown track)", "(unknown artist)", 0))[:2]
+            out.append(f"{i}. {_wikilink(name)} — {_artist_wikilinks(artist)}")
+        return out
+
+    if created:
+        lines.append("## New playlists")
+        lines.append("")
+        for agg in created:
+            lines.append(f"### {agg.name} ({_badge(agg.kind)})")
+            if agg.description:
+                lines.append(agg.description)
+            if agg.is_top and agg.ranked:
+                lines.extend(ranked_md(agg))
+            else:
+                lines.append(f"- {len(agg.added)} tracks added on creation")
+            lines.append("")
+
+    if updated:
+        lines.append("## Updated playlists")
+        lines.append("")
+        for agg in updated:
+            lines.append(f"### {agg.name} ({_badge(agg.kind)})")
+            if agg.is_top:
+                lines.append(f"- +{len(agg.added)} tracks now in playlist")
+                lines.extend(ranked_md(agg))
+            else:
+                lines.append(f"- +{len(agg.added)} added, −{len(agg.removed)} removed")
+                total_changes = len(agg.added) + len(agg.removed)
+                if total_changes <= 10:
+                    if agg.added:
+                        lines.append("**Added**")
+                        lines.extend(uri_list_md(agg.added))
+                    if agg.removed:
+                        lines.append("**Removed**")
+                        lines.extend(uri_list_md(agg.removed))
+                else:
+                    lines.append("- More than 10 changes — expand in dashboard.")
+            lines.append("")
+
+    if snapshots:
+        lines.append("## Snapshots created")
+        lines.append("")
+        for agg in snapshots:
+            lines.append(f"### {agg.name} ({_badge(agg.kind)})")
+            if agg.description:
+                lines.append(agg.description)
+            if agg.ranked:
+                lines.extend(ranked_md(agg))
+            lines.append("")
+
+    if run_type == "sweep" and deleted:
+        lines.append("## Custom playlists deleted")
+        lines.append("")
+        for e in deleted:
+            expires_at = e.extra.get("expires_at", "")
+            track_count = e.extra.get("track_count")
+            detail = f"expired {expires_at}" if expires_at else "expired"
+            if track_count is not None:
+                detail += f", {track_count} tracks"
+            lines.append(f"- {e.playlist_name} — {detail}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 # ── Sender ─────────────────────────────────────────────────────────────────────
 
-def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
-    """Low-level SMTP transport shared by all outbound mail (digests + milestones).
-
-    - Reads GMAIL_USER / GMAIL_APP_PASSWORD / EMAIL_RECIPIENT from os.environ.
-    - MUSIC_TRACKER_EMAIL_DRY_RUN=1: print subject + HTML body to stdout, no SMTP,
-      return True (works without secrets, for local testing).
-    - Raises RuntimeError with a clear message if any secret is missing.
-    - Returns True on successful SMTP send.
-    - Caller is responsible for catching exceptions to get non-fatal semantics.
-    """
-    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
-        print(f"[email] DRY RUN — subject={subject}", flush=True)
-        print(html_body, flush=True)
-        return True
-
+def _mail_secrets_or_raise() -> tuple[str, str, str]:
+    """Read GMAIL_USER / GMAIL_APP_PASSWORD / EMAIL_RECIPIENT or raise a clear error."""
     gmail_user = os.environ.get("GMAIL_USER")
     gmail_password = os.environ.get("GMAIL_APP_PASSWORD")
     recipient = os.environ.get("EMAIL_RECIPIENT")
@@ -441,6 +670,25 @@ def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
             + ", ".join(missing)
             + ". Set them as GitHub Actions secrets, or use MUSIC_TRACKER_EMAIL_DRY_RUN=1 for local testing."
         )
+    return gmail_user, gmail_password, recipient
+
+
+def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
+    """Low-level SMTP transport shared by all outbound mail (digests + milestones).
+
+    - Reads GMAIL_USER / GMAIL_APP_PASSWORD / EMAIL_RECIPIENT from os.environ.
+    - MUSIC_TRACKER_EMAIL_DRY_RUN=1: print subject + HTML body to stdout, no SMTP,
+      return True (works without secrets, for local testing).
+    - Raises RuntimeError with a clear message if any secret is missing.
+    - Returns True on successful SMTP send.
+    - Caller is responsible for catching exceptions to get non-fatal semantics.
+    """
+    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
+        print(f"[email] DRY RUN — subject={subject}", flush=True)
+        print(html_body, flush=True)
+        return True
+
+    gmail_user, gmail_password, recipient = _mail_secrets_or_raise()
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -458,12 +706,59 @@ def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
     return True
 
 
+def _smtp_send_with_attachment(
+    subject: str,
+    html_body: str,
+    plaintext_body: str,
+    attachment_content: str,
+    attachment_filename: str,
+) -> bool:
+    """Same as _smtp_send but with a text attachment (Obsidian .md file).
+
+    MIMEMultipart('mixed') = an 'alternative' plain/html part + a MIMEBase attachment
+    with Content-Disposition: attachment. Honors MUSIC_TRACKER_EMAIL_DRY_RUN.
+    """
+    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
+        print(f"[email] DRY RUN — subject={subject}", flush=True)
+        print(html_body, flush=True)
+        print(f"[email] DRY RUN — attachment {attachment_filename}:", flush=True)
+        print(attachment_content, flush=True)
+        return True
+
+    gmail_user, gmail_password, recipient = _mail_secrets_or_raise()
+
+    outer = MIMEMultipart("mixed")
+    outer["Subject"] = subject
+    outer["From"] = gmail_user
+    outer["To"] = recipient
+
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(plaintext_body, "plain", "utf-8"))
+    body.attach(MIMEText(html_body, "html", "utf-8"))
+    outer.attach(body)
+
+    part = MIMEBase("text", "markdown")
+    part.set_payload(attachment_content.encode("utf-8"))
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
+    outer.attach(part)
+
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(gmail_user, gmail_password)
+        server.sendmail(gmail_user, [recipient], outer.as_string())
+
+    print(f"Sent email to {recipient}: subject={subject} (+{attachment_filename})", flush=True)
+    return True
+
+
 def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly", "sweep"]) -> bool:
     """Sends digest email. Returns True if sent (or dry-run printed), False if skipped.
 
     - Reads GMAIL_USER, GMAIL_APP_PASSWORD, EMAIL_RECIPIENT from os.environ.
       Raises RuntimeError met clear message als er events zijn maar secrets missing.
     - Skip send (return False) als collector geen events heeft.
+    - Weekly digest attaches an Obsidian digest_YYYY-MM-DD.md; sweep mail has no attachment.
     - MUSIC_TRACKER_EMAIL_DRY_RUN=1: print HTML body to stdout, no SMTP, return True.
     """
     if not collector.has_events():
@@ -476,8 +771,14 @@ def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly"
     if run_type == "weekly":
         today = date.today().isoformat()
         subject = f"music-tracker: {len(events)} playlist updates ({today})"
-    else:  # sweep
-        n_deleted = sum(1 for e in events if e.event_type == EventType.CUSTOM_DELETED)
-        subject = f"music-tracker: {n_deleted} custom playlists auto-deleted"
+        markdown_body = build_markdown_digest(events, run_type, conn)
+        return _smtp_send_with_attachment(
+            subject, html_body, text_body,
+            attachment_content=markdown_body,
+            attachment_filename=f"digest_{today}.md",
+        )
 
+    # sweep: no attachment
+    n_deleted = sum(1 for e in events if e.event_type == EventType.CUSTOM_DELETED)
+    subject = f"music-tracker: {n_deleted} custom playlists auto-deleted"
     return _smtp_send(subject, html_body, text_body)
