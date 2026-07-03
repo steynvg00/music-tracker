@@ -53,7 +53,12 @@ _TOP_1ST_LABELS: list[tuple[str, str]] = [
 # lifetime with a NULL window.
 STREAK_BADGE_TYPES = ["streak_5_years", "streak_10_years"]
 DAILY_INTENSITY_BADGE_TYPES = ["plays_20_in_day", "plays_40_in_day"]
-RELEASE_TIMING_BADGE_TYPES = ["played_on_release_day", "day_one_stan", "late_bloomer"]
+# v0.67.1: release-timing family now scopes on plays WITHIN the time window (not total
+# plays). played_on_day_one = heard it on release day; day_one_fan = ≥20 plays on release
+# day itself; release_week_fan = ≥50 plays across release week (days 0-7, inclusive of day
+# one — cascade is by design); late_bloomer = discovered >2y late AND ≥30 plays in the
+# first 90 days after first play.
+RELEASE_TIMING_BADGE_TYPES = ["played_on_day_one", "day_one_fan", "release_week_fan", "late_bloomer"]
 BEHAVIORAL_BADGE_TYPES = ["comeback", "season_regular", "multi_top"]
 
 SPECIAL_BADGE_TYPES = (
@@ -69,8 +74,9 @@ _SPECIAL_STRIP: list[tuple[str, list[tuple[str, str]]]] = [
     ("🔥 Streaks", [("streak_5_years", "5-year"), ("streak_10_years", "10-year")]),
     ("⚡ Daily intensity", [("plays_20_in_day", "20 in a day"), ("plays_40_in_day", "40 in a day")]),
     ("🎬 Release timing", [
-        ("played_on_release_day", "Played on release day"),
-        ("day_one_stan", "Day-one stan"),
+        ("played_on_day_one", "Played on day one"),
+        ("day_one_fan", "Day-one fan"),
+        ("release_week_fan", "Release-week fan"),
         ("late_bloomer", "Late bloomer"),
     ]),
     ("🎭 Behavioral", [
@@ -447,14 +453,14 @@ def record_and_notify_milestone(conn, track_uri: str, threshold: int) -> bool:
         )
         mail_sent = False
 
-    # v0.67: crossing plays_50 is the trigger point for the release-timing achievement
-    # badges (day_one_stan / late_bloomer). Non-fatal: a failure here must not undo the
-    # play-milestone result. Each is once-per-track; the windowed index dedupes re-runs.
+    # v0.67.1: crossing plays_50 is the trigger point for the window-scoped release-timing
+    # badges (day_one_fan / release_week_fan / late_bloomer). detect_* returns ALL that
+    # apply — day_one_fan and release_week_fan can both fire. Non-fatal: a failure here
+    # must not undo the play-milestone result. Each is once-per-track; the windowed index
+    # dedupes re-runs.
     if threshold == 50:
         try:
-            outcome = detect_release_timing_at_50_plays(conn, track_uri)
-            if outcome is not None:
-                badge_type_earned, ctx = outcome
+            for badge_type_earned, ctx in detect_release_timing_at_50_plays(conn, track_uri):
                 award_special_badge(conn, track_uri, badge_type_earned, ctx, send_mail=True)
         except Exception as e:
             print(
@@ -728,14 +734,16 @@ def detect_daily_intensity_badges(conn, batch_track_uris: list[str] | None = Non
     return results
 
 
-# ── Detection: release timing (played_on_release_day) ────────────────────────────
+# ── Detection: release timing (played_on_day_one) ────────────────────────────────
 
 def detect_release_timing_badges(conn, batch_track_uris: list[str] | None = None) -> list[tuple[str, str, dict]]:
-    """played_on_release_day — a track whose FIRST play landed on its release date.
-    Requires day-precision release_date in track_metadata. Once per track.
+    """played_on_day_one — a track whose FIRST play landed on its release date (heard it
+    on day one; no play-count threshold). Requires day-precision release_date. Once per
+    track.
 
-    day_one_stan / late_bloomer are NOT here — they trigger from the plays_50 crossing
-    in record_and_notify_milestone (see detect_release_timing_at_50_plays).
+    day_one_fan / release_week_fan / late_bloomer are NOT here — they scope on plays within
+    a time window and trigger from the plays_50 crossing in record_and_notify_milestone
+    (see detect_release_timing_at_50_plays).
     """
     where_batch = ""
     params: list = []
@@ -756,7 +764,7 @@ def detect_release_timing_badges(conn, batch_track_uris: list[str] | None = None
     JOIN track_metadata tm ON tm.track_uri = f.track_uri
     LEFT JOIN badge_events be
       ON be.entity_type = 'track' AND be.entity_id = f.track_uri
-      AND be.badge_type = 'played_on_release_day' AND be.context->>'window' IS NULL
+      AND be.badge_type = 'played_on_day_one' AND be.context->>'window' IS NULL
     WHERE tm.release_date_precision = 'day'
       AND tm.release_date IS NOT NULL
       AND (f.first_play_at AT TIME ZONE 'Europe/Amsterdam')::date = tm.release_date::date
@@ -772,22 +780,38 @@ def detect_release_timing_badges(conn, batch_track_uris: list[str] | None = None
                 "first_played_at": first_play_at.isoformat(),
                 "awarded_at": first_play_at.isoformat(),
             }
-            results.append((track_uri, "played_on_release_day", ctx))
+            results.append((track_uri, "played_on_day_one", ctx))
     return results
 
 
-def detect_release_timing_at_50_plays(conn, track_uri: str) -> tuple[str, dict] | None:
-    """Called when a track just crossed plays_50. Compares the gap between the track's
-    first play and its release date:
-      - gap ≤ 7 days   → day_one_stan   (caught it on/around release, then stuck around)
-      - gap > 730 days → late_bloomer   (discovered it years later, then binged)
-      - otherwise      → None
-    Requires day-precision release_date. Both badges are once-per-track.
+def detect_release_timing_at_50_plays(conn, track_uri: str) -> list[tuple[str, dict]]:
+    """Called when a track just crossed plays_50. Runs three INDEPENDENT window-scoped
+    checks and returns every applicable release-timing badge (possibly several, possibly
+    none):
+
+      - day_one_fan      ≥20 plays ON release day itself (gap 0)
+      - release_week_fan ≥50 plays within release week (days 0-7, inclusive of day one)
+      - late_bloomer     first play >730 days after release AND ≥30 plays within the
+                         first 90 days after that first play
+
+    day_one_fan and release_week_fan can BOTH apply (a 50-on-day-0 track earns both — the
+    cascade is by design). late_bloomer is mutually exclusive with them: a >2y gap means
+    zero release-day/week plays. All three are once-per-track. Requires day-precision
+    release_date; returns [] if none apply.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT tm.release_date, MIN(sp.played_at)
+            SELECT
+                tm.release_date,
+                MIN(sp.played_at) AS first_play_at,
+                COUNT(*) FILTER (
+                    WHERE (sp.played_at AT TIME ZONE 'Europe/Amsterdam')::date = tm.release_date::date
+                ) AS plays_on_release_day,
+                COUNT(*) FILTER (
+                    WHERE (sp.played_at AT TIME ZONE 'Europe/Amsterdam')::date
+                          BETWEEN tm.release_date::date AND tm.release_date::date + 7
+                ) AS plays_in_release_week
             FROM track_metadata tm
             JOIN spotify_plays sp ON sp.track_uri = tm.track_uri
             WHERE tm.track_uri = %s
@@ -799,23 +823,55 @@ def detect_release_timing_at_50_plays(conn, track_uri: str) -> tuple[str, dict] 
         )
         row = cur.fetchone()
     if not row or not row[0] or row[1] is None:
-        return None
+        return []
 
     release_date = date.fromisoformat(row[0])
     first_play_at = row[1]
+    plays_on_release_day = row[2]
+    plays_in_release_week = row[3]
     first_play_date = first_play_at.astimezone(TZ_AMSTERDAM).date()
     gap_days = (first_play_date - release_date).days
-    ctx = {
-        "release_date": release_date.isoformat(),
-        "first_play_date": first_play_date.isoformat(),
-        "gap_days": gap_days,
-        "awarded_at": first_play_at.isoformat(),
-    }
-    if gap_days <= 7:
-        return ("day_one_stan", ctx)
+
+    results: list[tuple[str, dict]] = []
+
+    # ≥20 plays on release day itself → day_one_fan. awarded_at = close of release day.
+    if plays_on_release_day >= 20:
+        results.append(("day_one_fan", {
+            "plays_on_release_day": plays_on_release_day,
+            "release_date": release_date.isoformat(),
+            "awarded_at": _end_of_day_iso(release_date),
+        }))
+
+    # ≥50 plays across the release week → release_week_fan. awarded_at = close of week.
+    if plays_in_release_week >= 50:
+        results.append(("release_week_fan", {
+            "plays_in_release_week": plays_in_release_week,
+            "release_date": release_date.isoformat(),
+            "awarded_at": _end_of_day_iso(release_date + timedelta(days=7)),
+        }))
+
+    # >2y discovery gap AND a real binge (≥30 plays in first 90 days) → late_bloomer.
     if gap_days > 730:
-        return ("late_bloomer", ctx)
-    return None
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM spotify_plays
+                WHERE track_uri = %s
+                  AND played_at BETWEEN %s AND %s
+                """,
+                (track_uri, first_play_at, first_play_at + timedelta(days=90)),
+            )
+            plays_within_90d = cur.fetchone()[0]
+        if plays_within_90d >= 30:
+            results.append(("late_bloomer", {
+                "gap_days": gap_days,
+                "plays_within_90d_of_first_play": plays_within_90d,
+                "release_date": release_date.isoformat(),
+                "first_played": first_play_date.isoformat(),
+                "awarded_at": first_play_at.isoformat(),
+            }))
+
+    return results
 
 
 # ── Detection: comeback ──────────────────────────────────────────────────────────
@@ -1043,12 +1099,13 @@ def _special_subject(badge_type: str, track_name: str, context: dict) -> str:
         "streak_10_years": f"music-tracker: '{track_name}' — 10-year streak achievement",
         "plays_20_in_day": f"music-tracker: '{track_name}' — 20 plays in one day ({window})",
         "plays_40_in_day": f"music-tracker: '{track_name}' — 40 plays in one day ({window})",
-        "played_on_release_day": f"music-tracker: '{track_name}' played on release day",
-        "day_one_stan": f"music-tracker: Day-one stan achievement — '{track_name}'",
+        "played_on_day_one": f"music-tracker: '{track_name}' played on day one",
+        "day_one_fan": f"music-tracker: Day-one fan achievement — '{track_name}'",
+        "release_week_fan": f"music-tracker: Release-week fan — '{track_name}'",
         "late_bloomer": f"music-tracker: Late bloomer badge — '{track_name}'",
         "comeback": f"music-tracker: '{track_name}' is having a comeback",
         "season_regular": f"music-tracker: '{track_name}' — Season regular achievement",
-        "multi_top": f"music-tracker: '{track_name}' hit 5+ Top playlists simultaneously",
+        "multi_top": f"music-tracker: '{track_name}' hit 10+ Top playlists simultaneously",
     }[badge_type]
 
 
@@ -1058,12 +1115,13 @@ _SPECIAL_HEADLINE = {
     "streak_10_years": "10-year listening streak",
     "plays_20_in_day": "20 plays in a single day",
     "plays_40_in_day": "40 plays in a single day",
-    "played_on_release_day": "Played on release day",
-    "day_one_stan": "Day-one stan",
+    "played_on_day_one": "Played on day one",
+    "day_one_fan": "Day-one fan",
+    "release_week_fan": "Release-week fan",
     "late_bloomer": "Late bloomer",
     "comeback": "Comeback",
     "season_regular": "Season regular",
-    "multi_top": "Multi-top (5+ Top playlists)",
+    "multi_top": "Multi-top (10+ Top playlists)",
 }
 
 
@@ -1077,9 +1135,13 @@ def _context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
         "streak_10_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
         "plays_20_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
         "plays_40_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
-        "played_on_release_day": [("release_date", "Release date"), ("first_played_at", "First played")],
-        "day_one_stan": [("release_date", "Release date"), ("first_play_date", "First played"), ("gap_days", "Gap (days)")],
-        "late_bloomer": [("release_date", "Release date"), ("first_play_date", "First played"), ("gap_days", "Gap (days)")],
+        "played_on_day_one": [("release_date", "Release date"), ("first_played_at", "First played")],
+        "day_one_fan": [("plays_on_release_day", "Plays on release day"), ("release_date", "Release date")],
+        "release_week_fan": [("plays_in_release_week", "Plays within release week (day 0-7)"), ("release_date", "Release date")],
+        "late_bloomer": [
+            ("release_date", "Release date"), ("first_played", "First played"),
+            ("gap_days", "Gap (days)"), ("plays_within_90d_of_first_play", "Plays in first 90 days"),
+        ],
         "comeback": [("window", "Comeback month"), ("plays_that_month", "Plays that month"), ("dormant_since", "Dormant since")],
         "season_regular": [("count", "Seasons in top 25"), ("seasons_qualified", "Seasons")],
         "multi_top": [("count", "Top playlists"), ("playlists", "In")],
@@ -1093,7 +1155,7 @@ def _context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
 
 def _build_special_badge_mail(conn, track_uri: str, badge_type: str, context: dict) -> tuple[str, str, str]:
     """Returns (subject, html, plaintext) for one special-badge crossing. Generic across
-    all 10 types — the subject, category emoji, headline, and context box vary by type."""
+    all special types — the subject, category emoji, headline, and context box vary by type."""
     track_name, artist_display, total_plays, _first = _track_display(conn, track_uri)
     subject = _special_subject(badge_type, track_name, context)
     emoji = _SPECIAL_BADGE_EMOJI.get(badge_type, "🏅")
@@ -1137,9 +1199,9 @@ def _build_special_badge_mail(conn, track_uri: str, badge_type: str, context: di
 # ── Special badges strip (Design B, third strip in the milestone mail) ────────────
 
 def _build_special_strip(conn, track_uri: str) -> tuple[str, str]:
-    """Returns (html, plaintext) for the special-badges strip: all 10 types in 4 category
-    rows, earned vs not-earned, with a ×N multiplier for multi-fire badges. Mirrors the
-    rankings strip's compact-when-empty behaviour."""
+    """Returns (html, plaintext) for the special-badges strip: all special types in 4
+    category rows, earned vs not-earned, with a ×N multiplier for multi-fire badges.
+    Mirrors the rankings strip's compact-when-empty behaviour."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1162,7 +1224,7 @@ def _build_special_strip(conn, track_uri: str) -> tuple[str, str]:
         )
 
     if earned == total:
-        progress = "All 10 special badges earned! 🌟"
+        progress = f"All {total} special badges earned! 🌟"
     else:
         progress = f"Special badges — {earned} of {total} earned"
 
