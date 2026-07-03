@@ -13,6 +13,7 @@ import psycopg
 from lib.spotify import get_spotify_client
 from lib.playlists import get_managed_playlists, update_managed_playlist, get_full_name
 from lib.email_notify import EmailEventCollector, send_digest
+from lib.badges import award_special_badge, detect_multi_top_badge
 
 _INGEST_SCRIPT = Path(__file__).resolve().parent / "ingest_spotify_recent.py"
 
@@ -133,6 +134,20 @@ def main():
 
     duration = time.time() - start
     print(f"\n=== Done. {total} playlists processed in {duration:.1f}s. ===", flush=True)
+
+    # v0.67: multi_top runs at the very end (full mode) so it reflects the current state
+    # after every Top playlist has been refreshed. Non-fatal; skipped on --skip-writes
+    # so a read-only test run never awards real badges.
+    if not args.skip_writes:
+        try:
+            n_multi = 0
+            for track_uri, badge_type, context in detect_multi_top_badge(conn):
+                if award_special_badge(conn, track_uri, badge_type, context, send_mail=True):
+                    n_multi += 1
+            if n_multi > 0:
+                print(f"Awarded {n_multi} multi_top badge(s).", flush=True)
+        except Exception as e:
+            print(f"WARNING: multi_top detection failed: {e}", file=sys.stderr)
 
     # Email digest is best-effort: playlist ops already succeeded above, so a mail
     # failure must NOT change the script's exit code (a failed step would read as
