@@ -12,7 +12,9 @@ from lib.db import get_connection
 from lib.spotify_recent import ingest_recent
 from lib.badges import (
     process_batch_milestones,
-    award_special_badge,
+    BadgeAwardCollector,
+    award_special_badge_to_collector,
+    send_badge_digest_mail,
     detect_streak_badges,
     detect_daily_intensity_badges,
     detect_release_timing_badges,
@@ -39,10 +41,13 @@ def main() -> None:
                 if n_sent > 0:
                     print(f"Sent {n_sent} milestone mail(s).", flush=True)
 
-                # v0.67: ingest-driven special badges — streaks / daily intensity /
-                # release timing / comeback. Batch-scoped for the same blast-radius
-                # safety as the play-milestone detection above.
-                n_special = 0
+                # v0.67.2: ingest-driven special badges — streaks / daily intensity /
+                # release timing / comeback. Batch-scoped for the same blast-radius safety
+                # as the play-milestone detection above. Instead of one mail per crossing
+                # (5-10/day flood), badges are awarded silently and coalesced into a single
+                # end-of-run digest. Silent badges (played_on_day_one) are still inserted but
+                # excluded from the digest by the collector.
+                collector = BadgeAwardCollector()
                 for detector_fn in (
                     detect_streak_badges,
                     detect_daily_intensity_badges,
@@ -50,10 +55,11 @@ def main() -> None:
                     detect_comeback_badges,
                 ):
                     for track_uri, badge_type, context in detector_fn(conn, batch_track_uris):
-                        if award_special_badge(conn, track_uri, badge_type, context, send_mail=True):
-                            n_special += 1
-                if n_special > 0:
-                    print(f"Sent {n_special} special badge mail(s).", flush=True)
+                        award_special_badge_to_collector(conn, collector, track_uri, badge_type, context)
+
+                if collector.has_awards():
+                    if send_badge_digest_mail(conn, collector):
+                        print(f"Sent badge digest with {len(collector.awards)} awards.", flush=True)
         except Exception as e:
             print(
                 f"WARNING: Badge milestone detection/notification failed: {e}",
