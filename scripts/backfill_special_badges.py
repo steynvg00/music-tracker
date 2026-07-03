@@ -1,16 +1,17 @@
-"""One-off: backfill badge_events with every historical special badge (v0.67).
+"""One-off: backfill badge_events with every historical special badge (v0.67 / v0.67.1).
 
-Runs each v0.67 detection function in FULL mode (batch_track_uris=None) and awards
-what it finds with send_mail=False — a decade of historical badge alerts would be
-inbox spam, so the backfill is silent. Run it once against production AFTER merge and
-BEFORE the next ingest cron, so live detection only mails genuinely new crossings.
+Runs each detection function in FULL mode (batch_track_uris=None) and awards what it
+finds with send_mail=False — a decade of historical badge alerts would be inbox spam,
+so the backfill is silent. Run it once against production AFTER merge and BEFORE the
+next ingest cron, so live detection only mails genuinely new crossings.
 
-Covered badge types:
+Covered badge types (v0.67.1 release-timing rename/split):
   streak_5_years, streak_10_years, plays_20_in_day, plays_40_in_day,
-  played_on_release_day, comeback, season_regular, multi_top
-  + day_one_stan / late_bloomer — these have no full-mode detector (they trigger from
-    the plays_50 crossing at runtime), so the backfill sweeps every track with ≥50
-    plays through detect_release_timing_at_50_plays to seed them historically.
+  played_on_day_one, comeback, season_regular, multi_top
+  + day_one_fan / release_week_fan / late_bloomer — these have no full-mode detector
+    (they trigger from the plays_50 crossing at runtime), so the backfill sweeps every
+    track with ≥50 plays through detect_release_timing_at_50_plays (which now returns a
+    LIST of applicable badges per track) to seed them historically.
 
 awarded_at is the true historical crossing time (carried in each context's 'awarded_at'
 key and lifted onto the column by award_special_badge); multi_top awards at NOW() since
@@ -50,8 +51,9 @@ from lib.badges import (
 
 
 def _release_timing_at_50_full(conn):
-    """Full-mode wrapper for day_one_stan / late_bloomer: sweep every track with ≥50
-    plays through the plays_50 release-timing check, skipping already-awarded ones."""
+    """Full-mode wrapper for the plays_50-triggered release-timing badges (day_one_fan /
+    release_week_fan / late_bloomer): sweep every track with ≥50 plays through the check,
+    which now returns a LIST of applicable badges per track, skipping already-awarded ones."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -64,12 +66,9 @@ def _release_timing_at_50_full(conn):
 
     out = []
     for uri in uris:
-        res = detect_release_timing_at_50_plays(conn, uri)
-        if res is None:
-            continue
-        badge_type, ctx = res
-        if not _has_badge(conn, uri, badge_type):
-            out.append((uri, badge_type, ctx))
+        for badge_type, ctx in detect_release_timing_at_50_plays(conn, uri):
+            if not _has_badge(conn, uri, badge_type):
+                out.append((uri, badge_type, ctx))
     return out
 
 
@@ -86,7 +85,7 @@ _DETECTORS = [
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill historical special badges (v0.67).")
+    parser = argparse.ArgumentParser(description="Backfill historical special badges (v0.67.1).")
     parser.add_argument("--dry-run", action="store_true", default=False,
                         help="Run every detector and print the distribution, but award nothing.")
     args = parser.parse_args()
