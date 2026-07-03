@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from html import escape
 from typing import Literal
@@ -67,6 +68,13 @@ SPECIAL_BADGE_TYPES = (
     + RELEASE_TIMING_BADGE_TYPES
     + BEHAVIORAL_BADGE_TYPES
 )
+
+# v0.67.2: badge types that are awarded to badge_events but NEVER trigger a mail on live
+# detection — too high-volume (5-10/day for an active listener) for a per-crossing mail to
+# stay valuable. They remain fully visible in the milestone-mail Special strip and Track
+# lookup (v0.70); they're just passive achievement flags. award_special_badge skips the mail
+# for these, and BadgeAwardCollector excludes them from the coalesced ingest digest entirely.
+SILENT_BADGE_TYPES = {"played_on_day_one"}
 
 # Special strip layout — 4 category rows, each a (emoji-label, [(badge_type, slot_label)]).
 # Kept parallel to the *_BADGE_TYPES lists so the strip and detection share one order.
@@ -575,9 +583,10 @@ def award_special_badge(
     """Insert a special-badge row (ON CONFLICT DO NOTHING on the windowed unique index)
     and optionally send its mail.
 
-    Returns True if the row was newly inserted and (mailed OR send_mail=False); False on
-    a UNIQUE conflict (already awarded) or a post-insert mail failure (row is kept — the
-    badge WAS earned — and a warning is logged, same non-fatal pattern as v0.63).
+    Returns True if the row was newly inserted and (mailed OR send_mail=False OR the badge
+    type is silent); False on a UNIQUE conflict (already awarded) or a post-insert mail
+    failure (row is kept — the badge WAS earned — and a warning is logged, same non-fatal
+    pattern as v0.63). Silent badges (SILENT_BADGE_TYPES) never mail on live detection.
 
     context may include an 'awarded_at' ISO string: it's lifted onto the awarded_at
     column and removed from the stored JSONB (so backfill gets true historical times;
@@ -616,7 +625,8 @@ def award_special_badge(
 
     if not inserted:
         return False
-    if not send_mail:
+    # Silent badges (v0.67.2) are row-only: inserted, but never mailed on live detection.
+    if not send_mail or badge_type in SILENT_BADGE_TYPES:
         return True
 
     try:
@@ -627,6 +637,145 @@ def award_special_badge(
             f"WARNING: special badge {track_uri} {badge_type} recorded but mail failed: {e}",
             file=sys.stderr,
         )
+        return False
+
+
+# ── v0.67.2: coalesced ingest-run badge digest ───────────────────────────────────
+
+@dataclass
+class BadgeAwardCollector:
+    """Collects badges awarded during one ingest cron run for a single coalesced mail.
+
+    Silent badges (SILENT_BADGE_TYPES, e.g. played_on_day_one) are excluded entirely —
+    they are row-only and never mailed, so they never enter the digest.
+    """
+
+    awards: list[tuple[str, str, dict]] = field(default_factory=list)  # (track_uri, badge_type, context)
+
+    def add(self, track_uri: str, badge_type: str, context: dict) -> None:
+        if badge_type in SILENT_BADGE_TYPES:
+            return
+        self.awards.append((track_uri, badge_type, context))
+
+    def has_awards(self) -> bool:
+        return len(self.awards) > 0
+
+
+def award_special_badge_to_collector(
+    conn,
+    collector: BadgeAwardCollector,
+    track_uri: str,
+    badge_type: str,
+    context: dict,
+) -> bool:
+    """Insert the badge (award_special_badge with send_mail=False) and, if newly inserted,
+    add it to the collector for the end-of-run digest. Returns True if newly inserted,
+    False on a UNIQUE conflict (already awarded) — keeping detection loops idempotent while
+    coalescing all this run's mails into one.
+
+    Silent badges still get inserted here; the collector's add() drops them from the digest.
+    """
+    inserted = award_special_badge(conn, track_uri, badge_type, context, send_mail=False)
+    if inserted:
+        collector.add(track_uri, badge_type, context)
+    return inserted
+
+
+def _badge_digest_metric(badge_type: str, context: dict) -> str:
+    """Short per-badge context line for the coalesced ingest digest."""
+    if badge_type == "streak_5_years":
+        return "5-year streak reached"
+    if badge_type == "streak_10_years":
+        return "10-year streak reached"
+    if badge_type in ("plays_20_in_day", "plays_40_in_day"):
+        n, day = context.get("plays_that_day"), context.get("window")
+        return f"{n} plays on {day}" if n and day else "daily-intensity milestone"
+    if badge_type == "comeback":
+        n, mon = context.get("plays_that_month"), context.get("window")
+        return f"{n} plays in {mon}" if n and mon else "comeback"
+    if badge_type == "day_one_fan":
+        return f"{context.get('plays_on_release_day', '?')} plays on release day"
+    if badge_type == "release_week_fan":
+        return f"{context.get('plays_in_release_week', '?')} plays in release week"
+    if badge_type == "late_bloomer":
+        return f"discovered {context.get('gap_days', '?')}d after release"
+    if badge_type == "season_regular":
+        return f"top 25 of {context.get('count', '?')} seasons"
+    if badge_type == "multi_top":
+        return f"in {context.get('count', '?')} Top playlists"
+    if badge_type == "played_on_day_one":
+        return "played on release day"
+    return ""
+
+
+def _build_badge_digest(conn, awards: list[tuple[str, str, dict]]) -> tuple[str, str]:
+    """(html, plaintext) for a coalesced badge digest, grouped by badge_type in the canonical
+    SPECIAL_BADGE_TYPES order. Each group: emoji + headline header, then a track/artist/metric
+    table. Track names/artists via the same DISTINCT ON pattern (Lesson #18b) as _track_display.
+    """
+    grouped: dict[str, list[tuple[str, dict]]] = {}
+    for track_uri, badge_type, context in awards:
+        grouped.setdefault(badge_type, []).append((track_uri, context))
+
+    ordered_types = [bt for bt in SPECIAL_BADGE_TYPES if bt in grouped]
+    ordered_types += [bt for bt in grouped if bt not in SPECIAL_BADGE_TYPES]  # defensive tail
+
+    n = len(awards)
+    plural = "s" if n != 1 else ""
+    html_parts = [
+        "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
+        "color:#222;max-width:640px;\">",
+        f'<h2 style="margin:0 0 6px 0;">🏅 {n} new special badge{plural}</h2>',
+    ]
+    plain_parts = [f"{n} new special badge{plural}", ""]
+
+    for badge_type in ordered_types:
+        entries = grouped[badge_type]
+        emoji = _SPECIAL_BADGE_EMOJI.get(badge_type, "🏅")
+        headline = _SPECIAL_HEADLINE.get(badge_type, badge_type)
+        html_parts.append(
+            f'<h3 style="margin:16px 0 4px 0;font-size:15px;">{emoji} {escape(headline)} '
+            f'<span style="font-size:12px;font-weight:normal;color:#888;">({len(entries)})</span></h3>'
+        )
+        plain_parts.append(f"{emoji} {headline} ({len(entries)}):")
+
+        rows = []
+        for track_uri, context in entries:
+            track_name, artist_display, _total, _first = _track_display(conn, track_uri)
+            metric = _badge_digest_metric(badge_type, context)
+            rows.append(
+                f'<tr><td style="padding:2px 10px 2px 0;">{escape(track_name)}</td>'
+                f'<td style="padding:2px 10px 2px 0;color:#555;">{escape(artist_display)}</td>'
+                f'<td style="padding:2px 0;color:#888;">{escape(metric)}</td></tr>'
+            )
+            suffix = f" ({metric})" if metric else ""
+            plain_parts.append(f"  - {track_name} — {artist_display}{suffix}")
+
+        html_parts.append(
+            '<table style="border-collapse:collapse;font-size:13px;margin:2px 0 8px 0;">'
+            + "".join(rows)
+            + "</table>"
+        )
+        plain_parts.append("")
+
+    html_parts.append("</body></html>")
+    return "\n".join(html_parts), "\n".join(plain_parts)
+
+
+def send_badge_digest_mail(conn, collector: BadgeAwardCollector) -> bool:
+    """Send one coalesced mail for all badges awarded in this ingest run. Returns False and
+    sends nothing when the collector has no (non-silent) awards. Non-fatal: a mail failure is
+    logged and swallowed so the ingest cron never fails on notification."""
+    if not collector.has_awards():
+        return False
+
+    n = len(collector.awards)
+    subject = f"music-tracker: {n} new special badge{'s' if n != 1 else ''}"
+    try:
+        html, plaintext = _build_badge_digest(conn, collector.awards)
+        return _smtp_send(subject, html, plaintext)
+    except Exception as e:
+        print(f"WARNING: badge digest mail failed: {e}", file=sys.stderr)
         return False
 
 
