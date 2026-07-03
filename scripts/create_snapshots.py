@@ -36,7 +36,7 @@ from lib.playlists import (
     create_year_snapshot,
     create_decade_snapshot,
 )
-from lib.badges import award_top_1st_badge
+from lib.badges import award_top_1st_badge, award_special_badge, detect_season_regular_badge
 from lib.snapshot_notify import build_and_send_snapshot_mail
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
@@ -153,6 +153,18 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
         build_and_send_snapshot_mail(conn, kind, display_name, playlist_name, ranked)
     else:
         print(f"[create-snapshots] top_1st_{kind} for {display_name} already existed — skipping mail.", flush=True)
+
+    # v0.67: a fresh season snapshot may push a track over the season_regular threshold
+    # (top 25 of ≥3 seasons). Detection recomputes all past seasons, so we scope it to
+    # this snapshot's top 25. Non-fatal — never breaks snapshot creation.
+    if kind == "season":
+        try:
+            candidates = [t["track_uri"] for t in ranked[:25]]
+            for track_uri, badge_type, ctx in detect_season_regular_badge(conn, batch_track_uris=candidates):
+                if award_special_badge(conn, track_uri, badge_type, ctx, send_mail=True):
+                    print(f"[create-snapshots] Awarded season_regular to {track_uri}.", flush=True)
+        except Exception as e:
+            print(f"WARNING: season_regular detection failed: {e}", file=sys.stderr)
 
 
 def main() -> None:
