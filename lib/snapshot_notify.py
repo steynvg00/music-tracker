@@ -12,7 +12,8 @@ import sys
 from html import escape
 from typing import Literal
 
-from lib.email_notify import _smtp_send
+from lib.badges import _badge_img_html
+from lib.email_notify import _smtp_send_with_inline_images
 
 
 def _build_snapshot_mail(
@@ -20,10 +21,14 @@ def _build_snapshot_mail(
     display_name: str,
     playlist_name: str,
     ranked_tracks: list[dict],
-) -> tuple[str, str, str]:
-    """Returns (subject, html_body, plaintext_body)."""
+) -> tuple[str, str, str, dict[str, bytes]]:
+    """Returns (subject, html_body, plaintext_body, inline_images).
+
+    v0.68: the #1 spotlight box shows the top_1st_{kind} badge PNG next to the headline,
+    falling back to the 🥇 emoji layout when the PNG isn't present."""
     subject = f"music-tracker: {display_name} snapshot ready"
     top = ranked_tracks[0]
+    inline_images: dict[str, bytes] = {}
 
     # HTML rows for the full tracklist.
     rows_html = []
@@ -37,17 +42,39 @@ def _build_snapshot_mail(
             "</tr>"
         )
 
+    badge_img = _badge_img_html(
+        inline_images, f"top_1st_{kind}", 64,
+        alt=f"#1 this {kind}",
+        style="vertical-align:middle;",
+    )
+    if badge_img is not None:
+        spotlight_html = (
+            '<div style="background:#1a2540;padding:12px 16px;border-radius:6px;margin:12px 0;'
+            'display:flex;align-items:center;gap:12px;">'
+            f'{badge_img}'
+            '<div>'
+            '<p style="margin:0 0 4px 0;font-size:12px;color:#888;">#1 THIS PERIOD</p>'
+            f'<p style="margin:0;font-size:16px;color:#fff;"><strong>{escape(top["track_name"])}</strong></p>'
+            f'<p style="margin:2px 0 0 0;font-size:13px;color:#aaa;">'
+            f'{escape(top["artist_display"])} — {top["plays_in_period"]} plays</p>'
+            '</div></div>'
+        )
+    else:
+        spotlight_html = (
+            '<div style="background:#1a2540;padding:12px 16px;border-radius:6px;margin:12px 0;">'
+            '<p style="margin:0 0 4px 0;font-size:12px;color:#888;">🥇 #1 THIS PERIOD</p>'
+            f'<p style="margin:0;font-size:16px;color:#fff;"><strong>{escape(top["track_name"])}</strong></p>'
+            f'<p style="margin:2px 0 0 0;font-size:13px;color:#aaa;">'
+            f'{escape(top["artist_display"])} — {top["plays_in_period"]} plays</p>'
+            '</div>'
+        )
+
     html_body = "\n".join([
         "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
         "color:#222;max-width:640px;\">",
         f'<h2 style="margin:0 0 6px 0;">📸 {escape(display_name)} snapshot ready</h2>',
         f'<p style="font-size:14px;color:#555;margin:4px 0 16px 0;">{escape(playlist_name)}</p>',
-        '<div style="background:#1a2540;padding:12px 16px;border-radius:6px;margin:12px 0;">',
-        '<p style="margin:0 0 4px 0;font-size:12px;color:#888;">🥇 #1 THIS PERIOD</p>',
-        f'<p style="margin:0;font-size:16px;color:#fff;"><strong>{escape(top["track_name"])}</strong></p>',
-        f'<p style="margin:2px 0 0 0;font-size:13px;color:#aaa;">'
-        f'{escape(top["artist_display"])} — {top["plays_in_period"]} plays</p>',
-        "</div>",
+        spotlight_html,
         '<h3 style="margin:20px 0 8px 0;font-size:14px;color:#666;">Full tracklist</h3>',
         '<table style="border-collapse:collapse;font-size:13px;width:100%;">',
         '<tr style="color:#888;">'
@@ -75,7 +102,7 @@ def _build_snapshot_mail(
         )
     plaintext_body = "\n".join(plain_lines)
 
-    return subject, html_body, plaintext_body
+    return subject, html_body, plaintext_body, inline_images
 
 
 def build_and_send_snapshot_mail(
@@ -93,10 +120,10 @@ def build_and_send_snapshot_mail(
         print(f"[snapshot-mail] No tracks for {display_name}; skipping mail.", flush=True)
         return False
     try:
-        subject, html_body, plaintext_body = _build_snapshot_mail(
+        subject, html_body, plaintext_body, inline_images = _build_snapshot_mail(
             kind, display_name, playlist_name, ranked_tracks
         )
-        return _smtp_send(subject, html_body, plaintext_body)
+        return _smtp_send_with_inline_images(subject, html_body, plaintext_body, inline_images)
     except Exception as e:
         print(f"WARNING: snapshot mail for {display_name} failed: {e}", file=sys.stderr)
         return False
