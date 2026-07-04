@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from email import encoders
 from email.mime.base import MIMEBase
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
@@ -689,6 +690,90 @@ def _smtp_send(subject: str, html_body: str, plaintext_body: str) -> bool:
     return True
 
 
+def _smtp_send_with_inline_images(
+    subject: str,
+    html_body: str,
+    plaintext_body: str,
+    inline_images: dict[str, bytes],
+    attachment: tuple[str, bytes] | None = None,
+) -> bool:
+    """SMTP send met CID inline images en/of een file attachment.
+
+    MIME structure (v0.68):
+      - multipart/mixed          (top level, only when attachment present)
+        - multipart/related      (only when inline_images present)
+          - multipart/alternative  (plain + html)
+          - MIMEImage per inline PNG  (Content-ID matches HTML src="cid:xxx")
+        - MIMEBase attachment    (Obsidian .md, if any)
+
+    When inline_images is empty and attachment is None the wire format is identical to
+    _smtp_send (a bare multipart/alternative), so this is a safe drop-in. inline_images maps
+    a bare CID (no angle brackets) to raw PNG bytes; the <...> wrapping is added here so the
+    HTML's `cid:{cid}` reference resolves. Honors MUSIC_TRACKER_EMAIL_DRY_RUN.
+    """
+    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
+        print(f"[email] DRY RUN — subject={subject}", flush=True)
+        print(html_body, flush=True)
+        if inline_images:
+            print(
+                f"[email] DRY RUN — {len(inline_images)} inline image(s): "
+                + ", ".join(inline_images),
+                flush=True,
+            )
+        if attachment is not None:
+            print(f"[email] DRY RUN — attachment {attachment[0]} ({len(attachment[1])} bytes)", flush=True)
+        return True
+
+    gmail_user, gmail_password, recipient = _mail_secrets_or_raise()
+
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(plaintext_body, "plain", "utf-8"))
+    alternative.attach(MIMEText(html_body, "html", "utf-8"))
+
+    # multipart/related wraps the alternative body + the inline images it references.
+    if inline_images:
+        body_root = MIMEMultipart("related")
+        body_root.attach(alternative)
+        for cid, png_bytes in inline_images.items():
+            img = MIMEImage(png_bytes, _subtype="png")
+            img.add_header("Content-ID", f"<{cid}>")
+            img.add_header("Content-Disposition", "inline")
+            body_root.attach(img)
+    else:
+        body_root = alternative
+
+    # multipart/mixed only when there's a file attachment to carry alongside the body.
+    if attachment is not None:
+        filename, content = attachment
+        outer = MIMEMultipart("mixed")
+        outer.attach(body_root)
+        part = MIMEBase("text", "markdown")
+        part.set_payload(content)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        outer.attach(part)
+        msg = outer
+    else:
+        msg = body_root
+
+    msg["Subject"] = subject
+    msg["From"] = gmail_user
+    msg["To"] = recipient
+
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(gmail_user, gmail_password)
+        server.sendmail(gmail_user, [recipient], msg.as_string())
+
+    tail = ""
+    if attachment is not None:
+        tail += f" (+{attachment[0]})"
+    if inline_images:
+        tail += f" (+{len(inline_images)} inline img)"
+    print(f"Sent email to {recipient}: subject={subject}{tail}", flush=True)
+    return True
+
+
 def _smtp_send_with_attachment(
     subject: str,
     html_body: str,
@@ -696,43 +781,17 @@ def _smtp_send_with_attachment(
     attachment_content: str,
     attachment_filename: str,
 ) -> bool:
-    """Same as _smtp_send but with a text attachment (Obsidian .md file).
+    """Back-compat wrapper (v0.66): a text attachment (Obsidian .md) and no inline images.
 
-    MIMEMultipart('mixed') = an 'alternative' plain/html part + a MIMEBase attachment
-    with Content-Disposition: attachment. Honors MUSIC_TRACKER_EMAIL_DRY_RUN.
+    Delegates to _smtp_send_with_inline_images now that it subsumes the 'mixed' path.
     """
-    if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1":
-        print(f"[email] DRY RUN — subject={subject}", flush=True)
-        print(html_body, flush=True)
-        print(f"[email] DRY RUN — attachment {attachment_filename}:", flush=True)
-        print(attachment_content, flush=True)
-        return True
-
-    gmail_user, gmail_password, recipient = _mail_secrets_or_raise()
-
-    outer = MIMEMultipart("mixed")
-    outer["Subject"] = subject
-    outer["From"] = gmail_user
-    outer["To"] = recipient
-
-    body = MIMEMultipart("alternative")
-    body.attach(MIMEText(plaintext_body, "plain", "utf-8"))
-    body.attach(MIMEText(html_body, "html", "utf-8"))
-    outer.attach(body)
-
-    part = MIMEBase("text", "markdown")
-    part.set_payload(attachment_content.encode("utf-8"))
-    encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
-    outer.attach(part)
-
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.starttls()
-        server.login(gmail_user, gmail_password)
-        server.sendmail(gmail_user, [recipient], outer.as_string())
-
-    print(f"Sent email to {recipient}: subject={subject} (+{attachment_filename})", flush=True)
-    return True
+    return _smtp_send_with_inline_images(
+        subject,
+        html_body,
+        plaintext_body,
+        inline_images={},
+        attachment=(attachment_filename, attachment_content.encode("utf-8")),
+    )
 
 
 def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly", "sweep"]) -> bool:
@@ -755,10 +814,10 @@ def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly"
         today = date.today().isoformat()
         subject = f"music-tracker: {len(events)} playlist updates ({today})"
         markdown_body = build_markdown_digest(events, run_type, conn)
-        return _smtp_send_with_attachment(
+        return _smtp_send_with_inline_images(
             subject, html_body, text_body,
-            attachment_content=markdown_body,
-            attachment_filename=f"digest_{today}.md",
+            inline_images={},
+            attachment=(f"digest_{today}.md", markdown_body.encode("utf-8")),
         )
 
     # sweep: no attachment
