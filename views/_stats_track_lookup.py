@@ -6,6 +6,7 @@ import streamlit as st
 from lib.db import get_connection
 from lib.artist_popularity import get_scores as get_artist_scores
 from lib.track_popularity import get_scores as get_track_scores
+from views._badge_display import render_badge_chips
 from views._skeleton import skeleton_chart, skeleton_metric_row, skeleton_table
 
 
@@ -437,6 +438,16 @@ def render_track_lookup_section() -> None:
             pd.to_datetime(m["last_played"]).strftime("%Y-%m-%d") if m["last_played"] is not None else "—",
         )
         mc4.metric("Days listened", f"{int(m['days_listened']):,}")
+
+    # ── Badge display (v0.70) ─────────────────────────────────────────────────
+    # Pokémon-doos of earned vs. available badges, aggregated across all URI variants
+    # under this canonical. Non-fatal (matches v0.60/v0.61) — a badge-render failure
+    # must never take down the rest of the detail view.
+    # track_uri here is the canonical URI (post-v0.59 search flow).
+    try:
+        render_badge_chips(get_connection(), track_uri)
+    except Exception as e:
+        st.warning(f"Badge display failed: {e}")
 
     # ── URI variant visibility (v0.60) ────────────────────────────────────────
     # Only shown when canonical group contains >1 URI (single-URI tracks are silent).
