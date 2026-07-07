@@ -115,9 +115,15 @@ def main():
     collector = EmailEventCollector()
 
     # v0.65: snapshot creation moved to the dedicated daily create-snapshots cron.
-    # get_managed_playlists() no longer returns snapshots; this filter is a defensive
+    # get_managed_playlists() no longer returns snapshots; the kind filter is a defensive
     # guard so a stray snapshot definition can never be (re)created by the weekly cron.
-    definitions = [d for d in get_managed_playlists(conn, sp) if d.kind != "snapshot"]
+    # v0.72: only "weekly"-cadence updating playlists run here — monthly/mid_month/daily
+    # playlists are refreshed by their own cron entry points (monthly_playlist_refresh.py,
+    # mid_month_playlist_refresh.py, daily_missed_tracks_refresh.py).
+    definitions = [
+        d for d in get_managed_playlists(conn, sp)
+        if d.kind != "snapshot" and d.cadence == "weekly"
+    ]
     total = len(definitions)
     start = time.time()
     for i, definition in enumerate(definitions, start=1):
