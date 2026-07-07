@@ -29,10 +29,10 @@ from lib.email_notify import _smtp_send_with_inline_images
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
-# ── v0.68: badge PNG icons (Defqon.1 hardstyle set, 1024×1024) ────────────────────
-# Maps each badge_type to its PNG file under assets/badges/. late_bloomer's art isn't
-# generated yet: it's intentionally absent from the mapping, so _badge_png_bytes returns
-# None for it and every mail surface falls back to the existing ✓/— text placeholder.
+# ── v0.68: badge PNG icons (Defqon.1 hardstyle set) ───────────────────────────────
+# Maps each badge_type to its PNG file under assets/badges/. Complete at 22/22 as of
+# v0.70 (late_bloomer → slow_burn.png). _badge_png_bytes still returns None for any
+# unmapped/missing file so callers keep their text-placeholder fallback.
 BADGE_ICONS: dict[str, str] = {
     # Play milestones
     "plays_50": "50_plays.png",
@@ -57,7 +57,7 @@ BADGE_ICONS: dict[str, str] = {
     "played_on_day_one": "first_spin.png",
     "day_one_fan": "day_one.png",
     "release_week_fan": "fresh_cut.png",
-    # "late_bloomer": <not yet generated>,   ← intentionally absent
+    "late_bloomer": "slow_burn.png",
     # Behavioral
     "comeback": "revival.png",
     "season_regular": "evergreen.png",
