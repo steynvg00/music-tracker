@@ -34,8 +34,9 @@ snapshots deep** (first row 2026-07-03), so trend arrows are essentially cold-st
    expiry. This is the single biggest behavioural change and needs cron/scheduling work, not just
    constants.
 2. **Rename `Top 50 last 30 days` → `Top 30 last 30 days`** (user request) — 5 positions above the
-   frozen `Top 25 · Month` snapshot, so risers/fallers stay visible. Then **retire the redundant
-   `My Monthly #1 🔄`** and replace it with a **`My Monthly #1 📸` snapshot** on the 1st.
+   frozen `Top 25 · Month` snapshot, so risers/fallers stay visible. Alongside it, **keep
+   `My Monthly #1 🔄` as the live current-month leader** and **add a new `My Monthly #1 📸`**
+   historical chain on the 1st (backfillable to 112 tracks — see finalized tuning).
 3. **Turn badge signals into playlists.** Nothing today consumes `badge_events`. The clearest
    wins: a **"Slow burns"** playlist from `late_bloomer` ([[track_badge_audit]]) and a
    **"Dynasty"** playlist from the artist `multi_top`/dynasty concept ([[artist_badge_workshop]]).
@@ -245,8 +246,9 @@ SQL shape, refresh trigger, data dependencies, live sample, retention notes.
 - **Criteria:** every (year, month)'s #1 track, oldest-first — a chronological "song of each
   month" scroll. Grows by one entry monthly. **Live: 113.**
 - **Trigger:** weekly. Shares the `_monthly_top_one_per_month` query with the family above.
-- **Status:** ⚠️ user-flagged **redundant** vs a deeper 30-day Top; slated for removal + replaced
-  by a `📸` snapshot variant.
+- **Status (finalized):** **kept** and re-coupled to a **monthly 1st-of-month** refresh (request
+  #7), serving as the *live* counterpart to the new `My Monthly #1 📸` historical chain (request
+  #6). Whether the `🔄` should hold one live track or the full rolling series is Design Question 2.
 
 ## `Missed new tracks · popular / other artists`
 
@@ -322,8 +324,11 @@ Useful subsets **not** covered by any current playlist:
 | `#1` playlists | — | ⚠️ **`My Monthly #1` vs `My {Month} #1`** differ by one word and one is a rolling scroll, the other a 12-playlist family — genuinely confusable |
 | Threshold naming | `N+ plays` + one `20-49 plays` band | consistent |
 
-**One real risk:** the `My Monthly #1` / `My {Month} #1` collision. If the rolling one is removed
-(user request) and a `📸` snapshot added, pick a clearly distinct name (e.g. `Monthly #1 archive`).
+**One real risk (now sharper post-finalization):** the finalized plan keeps `My Monthly #1 🔄`
+*and* adds `My Monthly #1 📸` (requests #6/#7), so **three** near-identical names will coexist:
+`My Monthly #1 🔄` (live current-month leader), `My Monthly #1 📸` (historical chain), and the
+12-playlist `My {Month} #1` family. Only the emoji suffix distinguishes the first two. Strongly
+recommend renaming for legibility, e.g. `Monthly #1 — live 🔄` / `Monthly #1 — archive 📸`.
 
 ## Refresh timing map
 
@@ -356,24 +361,117 @@ UTC   Job                                 Cadence          Touches
 
 # User-requested tuning
 
-Open requests already voiced by the user, documented here (not overruled — the analysis above is
-separate). Effort = code change size; Impact = live-count / behaviour delta.
+**Finalized 2026-07-07** — the user has confirmed the seven requests below. This supersedes the
+earlier draft, most notably #6/#7: **`My Monthly #1 🔄` is now KEPT (not removed)** and a *new*
+`My Monthly #1 📸` is added alongside it. Effort = code change size; Impact = live-count /
+behaviour delta; Dependencies = migration / cron / logic / backfill needed.
 
-| # | Playlist | Current criteria | Proposed criteria | User rationale | Effort | Impact |
-|---|---|---|---|---|---|---|
-| 1 | **Forgotten favorites** | ≥50 plays, untouched **365d**, weekly refresh | ≥50 plays, untouched **730d (2yr)**, refresh **15th of month** | 1yr too soon to be "forgotten"; monthly beat | **Low** const + **Med** cron isolation | 388 → **225** tracks; needs a dedicated 15th-of-month invocation |
-| 2 | **Missed new tracks** (both) | releases last 14d, weekly, no delay, no expiry | **daily** refresh; **delay N days** (1–2 wk) before adding a release; tracks **expire 2 months** after release date | avoid adding day-0 noise; let a release settle; auto-drop stale | **High** (new cadence + delay + expiry logic + state) | changes membership timing model; needs per-track age tracking |
-| 3 | **Missed new tracks · popular** | top **20** followed artists (`other` = 21–1000) | top **50** (`other` = 51–1000) | widen the "popular" net | **Low** (two constants) | more popular-artist releases surface; `other` shrinks at the head |
-| 4 | **Top 50 last 30 days** | limit **50**, name `Top 50 last 30 days` | limit **30**, name `Top 30 last 30 days` | 5 above the `Top 25 · Month` snapshot → risers/fallers visible | **Med** (limit + rename + `legacy_names` + `RANK_TRACKED_PLAYLISTS` substring) | list trims to 30; rename must migrate the existing Spotify playlist |
-| 5 | **Top 100 this year / all-time** | weekly refresh | **monthly, 1st of month** | weekly is overkill for slow-moving canons; fixes calendar lag | **Med** (cron isolation for 2 playlists) | fewer refreshes; aligns with month boundary |
-| 6 | **My Monthly #1 🔄** | rolling updating playlist, 113 tracks | **remove** | redundant — `Top 30 last 30 days` shows trending | **Low** (drop from 2 registries; optionally unfollow) | -1 updating playlist |
-| 7 | **My Monthly #1 📸** | does not exist | **add** — snapshot each 1st capturing the month's #1 | keep a frozen monthly-#1 record | **Med–High** (rolling snapshot contradicts "frozen" model — see design Q) | +1 snapshot family |
+| # | Playlist | Current criteria | Proposed criteria | User rationale | Effort | Impact | Dependencies |
+|---|---|---|---|---|---|---|---|
+| 1 | **Forgotten favorites** | ≥50 plays, untouched **365d**, weekly refresh | ≥50 plays, untouched **730d (2yr)**, refresh **15th of month** | 1yr too soon to be "forgotten"; monthly cadence | **Low** const + **Med** cron | 388 → **225** tracks (−42%) | new **15th-of-month cron** + `--only` subset filter; 1 constant flip (`_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS` 365→730) |
+| 2 | **Missed new tracks** (both) | releases last 14d, weekly, no delay, no expiry | **daily** refresh; **7-day delay** before adding an unplayed release; **expire 2 months after release date** | let a release settle; surface only genuinely-missed; auto-drop stale | **High** | membership timing model changes; see **Delay analysis** below (data supports **7d**) | **daily cron** for this family; **logic change** (age-gate + expiry); expiry can be **stateless** (derive from `track_metadata.release_date` each run) — no migration needed |
+| 3 | **Missed new tracks · popular** | top **20** (`other` = 21–1000) | top **50** (`other` = 51–1000) | widen the "popular" net | **Low** | popular ≈ **2× throughput**; net-new to the *union* ≈ **0** (reclassifies band 21–50 from `other` → `popular`) — see **Saturation** below | 2 constants (`_MISSED_NEW_TRACKS_POPULAR_TOP_N` 20→50; `_MISSED_NEW_TRACKS_OTHER_RANGE` (21,1000)→(51,1000)); no migration |
+| 4 | **Top 50 last 30 days** | limit **50**, name `Top 50 last 30 days` | limit **30**, name `Top 30 last 30 days` | 5 above the `Top 25 · Month` snapshot → risers/fallers visible | **Med** | list trims to 30; rename migrates the existing Spotify playlist (URL/followers kept) | `limit` 50→30; add old name to `legacy_names`; **update `RANK_TRACKED_PLAYLISTS`** substring; `_WINDOW_LAST_30_DAYS` unaffected (window unchanged) |
+| 5 | **Top 100 this year / all-time** | weekly refresh | **monthly, 1st of month** | slow-moving canons; fixes 6-day calendar lag | **Med** | fewer refreshes; aligns to month boundary | **monthly cron** (Design Q1); ⚠️ **touches `playlist_rank_history`** — arrows go weekly→monthly (see dependency note below) |
+| 6 | **My Monthly #1 📸** *(new)* | does not exist | each **1st**: append the **#1 of last month's `Top 25 · Month` snapshot**; grows 1/month | frozen historical chain of monthly winners | **Med** + **backfill** | +1 snapshot-style playlist; **backfill ≈ 112 tracks** (see backfill note) | new registry entry; **backfill** from `_monthly_top_one_per_month` / `top_1st_month` badges; append-only "snapshot" (semantic note below) |
+| 7 | **My Monthly #1 🔄** *(kept)* | rolling updating playlist, **113 tracks**, weekly | **KEEP**; re-couple refresh to the **1st of month** (when the new `Top 25 · Month` drops); shows the **current month's leader (in-progress)** | live "who's winning this month" vs the 📸 historical chain | **Low–Med** | stays as the live counterpart to the 📸 archive | move off weekly cron → **1st-of-month cron** (shares #5/#6's monthly job); ⚠️ **scope ambiguity** — "one live track" vs "rolling series" (Design Q2) |
 
-**Interlocks worth calling out:** #4 (rename) touches `RANK_TRACKED_PLAYLISTS` and the digest's
-scope-count window `_WINDOW_LAST_30_DAYS` — both reference the `Top 50 last 30 days` name/window.
-#6 + #7 are a pair: retire the `🔄`, introduce a `📸`. #7's "snapshot that grows monthly" is a
-semantic tension with the frozen-snapshot contract (a true snapshot is created once and never
-updated) — flagged as Design Question 2.
+**Interlocks:**
+- **#4** touches `RANK_TRACKED_PLAYLISTS` (matches the name as a substring) — the rename must land
+  there or rank-history stops recording for the list. The digest scope-count window
+  `_WINDOW_LAST_30_DAYS` is unaffected (the 30-day window itself doesn't change).
+- **#5 ⊕ #6 ⊕ #7 share one monthly 1st-of-month cron.** All three want to fire on the 1st: the two
+  Top 100s refresh, `My Monthly #1 📸` appends last month's winner, `My Monthly #1 🔄` resets to
+  the new month. Sequencing matters — the 📸 must read the `Top 25 · Month` snapshot that
+  `create_snapshots` (05:00) writes *that same morning*, so the monthly refresh must run **after**
+  05:00.
+
+## Delay tuning analysis (request #2)
+
+**Question:** with a delay before an unplayed release is added, is **7 days** right, or does
+**14 days** fit better — i.e. does a meaningful share of tracks get played on their own between
+day 7 and day 14, so a 7-day delay surfaces them just before the user would reach them anyway?
+
+**Method.** For every track the user *eventually played* that has a day-precision release date in
+the tracking era (release_year ≥ 2017, not future-dated) — **21,262 tracks** — measure
+`first_play_date − release_date`. 76 (0.4%) were first played *before* the release date
+(pre-saves / precision noise) and are excluded; **21,186** were played on/after release.
+
+**Distribution — days from release to first play:**
+
+| Bucket | Tracks | % | Cumulative % played within N days |
+|---|---|---|---|
+| day 0 (release day) | 5,464 | 25.8% | ≤0d → **25.8%** |
+| 1–3 days | 1,838 | 8.7% | ≤7d → **40.1%** |
+| 4–7 days | 1,197 | 5.6% | ≤14d → **44.3%** |
+| **8–14 days** | **890** | **4.2%** | ≤30d → 51.2% |
+| 15–30 days | 1,460 | 6.9% | ≤60d → 58.6% |
+| 31–60 days | 1,572 | 7.4% | ≤90d → 64.2% |
+| 61–90 days | 1,177 | 5.6% | ≤180d → 74.2% |
+| 91–365 days | 4,070 | 19.2% | ≤365d → 83.4% |
+| >365 days | 3,518 | 16.6% | |
+
+**Conclusion — 7 days is the better default.** The natural-play wave is heavily front-loaded:
+**25.8% of eventually-played tracks are played on release day**, and **40.1% within 7 days**. The
+"premature surfacing" band the user worried about — tracks played on their own in **days 8–14** —
+is just **890 tracks = 4.2%** of eventually-played tracks (6.5% of the within-90-day population).
+Extending the delay 7→14 days would suppress only that ~4pp of near-term noise, but at the cost of
+**delaying every genuinely-missed track by an extra week** — and genuinely-missed tracks (played
+day 15+, or never) are the entire point of the playlist. A 7-day delay already lets the dominant
+day-0-through-7 wave play out. **Recommendation: ship 7 days** (the user's proposal); revisit to
+14 only if the playlist feels noisy with "about to play anyway" tracks in practice.
+
+## Saturation analysis (request #3 — top 20 → top 50)
+
+**Caveat (flagged, not hidden):** the real feed ranks *followed* artists via the Spotify
+`/me/following` + albums API and counts *unplayed* releases — neither is in Postgres, so an exact
+"extra tracks/week" is not DB-derivable. Below is a **release-velocity proxy**: artists ranked by
+**play count** (the same signal `rank_artists_by_plays` uses), counting distinct tracks *in the
+library* by recent release date. It over-counts (includes played tracks) but is directionally
+sound.
+
+| Recent window | Band 1–20 releases | Band 21–50 releases (incremental) |
+|---|---|---|
+| since 2025-01-01 (~18 mo) | 302 | **294** |
+| since 2026-01-01 (~6 mo) | 83 | **80** |
+
+**Band 21–50 releases at essentially the same cadence as band 1–20** (294 vs 302; 80 vs 83) — the
+tail-of-the-head is Da Tweekaz, Noisecontrollers, Brennan Heart, Frequencerz, Sefa, etc.: heavy,
+frequent releasers. So expanding `popular` to top 50 roughly **doubles the `popular` playlist's
+throughput** (~80 recent releases/6mo ≈ **3/week** proxy, unplayed subset smaller).
+
+**Key insight — it's a reclassification, not new volume.** Those band-21–50 artists are *already
+surfaced today* by `Missed new tracks · other` (range 21–1000). Moving them into `popular` means:
+`popular` ≈ doubles, `other` **loses its most active head** and goes much quieter, and the
+**union of the two playlists gains ~0 net-new tracks**. Saturation risk is therefore low — no
+flood, just a shift of the busiest 30 artists from `other` into `popular`, which is exactly the
+user's intent (see the more-important artists more prominently).
+
+## `My Monthly #1 📸` — backfill consideration (request #6)
+
+**Feasible, and the data already exists.** The 📸 chain is "one track per completed month = that
+month's #1." Three equivalent sources, all already present:
+- **`_monthly_top_one_per_month(conn)`** — the exact query the `🔄` playlist already uses; returns
+  one `(year, month, top_uri)` per month. Excluding the in-progress month yields the completed
+  series.
+- **`top_1st_month` badge rows** — `badge_events` holds **112** of them (one per completed month
+  with plays), each `entity_id` = that month's #1 track ([[track_badge_audit]]).
+- The **112 existing `Top 25 · Month` snapshots** — their rank-1 track.
+
+All three agree on **112 tracks** (the rolling `🔄` shows 113 because it *includes* the current
+in-progress month; snapshots and badges cover completed months only). **Backfill volume = 112
+tracks**, chronological oldest-first — one bulk `playlist_add_items` in ~2 batches. No migration,
+no Spotify re-scan; recompute from `spotify_plays` is authoritative and matches how the snapshots
+were built. **This is a quick, safe backfill** — the historical monthly-winner series can be
+materialised in a single run.
+
+**Semantic note.** A `📸` that *appends monthly* is not a classic frozen snapshot (created once,
+never touched). It's really an **append-only updating** playlist wearing the `📸` badge. That's
+fine — but it means it can't go through the `create_snapshots` "freeze once" path; it belongs on
+the monthly refresh with an append (not replace) semantics, or a replace with the full
+recomputed 112+ chain each month (simpler, idempotent, and what the existing `🔄` already does).
+Recommend the **replace-with-full-chain** approach: identical to the current rolling query, just
+scoped to completed months and named `📸`.
 
 ---
 
@@ -412,24 +510,40 @@ badges, never as something you can press play on.
    `--only <playlist>` filter on `update_managed_playlists.py`, or (b) a single monthly cron that
    refreshes a *named subset*? (a) is more flexible; (b) is fewer moving parts.
 
-2. **`My Monthly #1 📸` semantics.** A snapshot is "created once, frozen forever." A monthly-#1
-   record that *grows every month* isn't a snapshot — it's an updating playlist that only appends.
-   Options: (a) keep it as an **append-only updating** playlist (really just the current
-   `My Monthly #1` renamed — contradicts "remove it"); (b) create a **fresh frozen snapshot each
-   month** (`My #1 · {Month} {YYYY} 📸`, one track each — proliferates playlists); (c) drop the
-   `📸` idea and rely on the per-month `Top 25 · Month` snapshots (whose #1 already carries the
-   `top_1st_month` badge). Which "frozen monthly #1" shape do you actually want?
+2. **`My Monthly #1 🔄` scope, now that it's kept alongside the 📸.** The finalized plan keeps the
+   `🔄` as the *live* counterpart to the `📸` archive. What should the `🔄` actually contain?
+   Options: (a) **one track** — the current in-progress month's leader, reset each 1st (literal
+   "who's winning this month"); (b) the **full rolling chain incl. the live month** (today's
+   behaviour, 113 tracks), just refreshed monthly instead of weekly. The request text ("shows the
+   current month's leader") points to (a), but that's a query change (`query_top_in_month(current,
+   limit=1)`), whereas (b) is only a cadence change. Which did you mean? (The `📸` is settled:
+   append the completed-month winner each 1st — see backfill note.)
 
-3. **`Missed new tracks` expiry state.** A 2-month post-release expiry needs per-track "when did
-   this enter the playlist / what's its release date" tracking. Store it in a new table, or derive
-   release date live from `track_metadata` each run and filter? (Derive-live is stateless and
-   simpler; a table lets you show "added on / expires on" like custom playlists do.)
+3. **Monthly-refresh rank-history cadence (request #5 dependency).** Moving `Top 100 this year` /
+   `all-time` to a monthly refresh means their `playlist_rank_history` snapshots — the source of
+   the digest's ↑/↓/★NEW arrows — become **monthly**, while `Top 30 last 30 days` stays **weekly**.
+   Two knock-ons: (i) in the *weekly* digest, the two Top 100s will show "no change" for ~3 of 4
+   weeks then jump once a month; (ii) if they no longer refresh weekly, they drop out of the weekly
+   digest email entirely (no `TRACKS_ADDED` event) — they'd need a **monthly** digest surface.
+   Options: (a) accept mixed cadence + add a small monthly digest for the two Top 100s
+   *(recommended — matches the monthly-1st snapshot rhythm)*; (b) keep all three rank-tracked lists
+   weekly and only change the *playlist* refresh, decoupling rank-history from refresh (more code);
+   (c) move `Top 30 last 30 days` to monthly too, so all three are consistent (loses the weekly
+   trend signal the resize was meant to sharpen). This is the one genuine **dependency risk** in
+   the seven requests.
 
-4. **`Top 30` rename migration.** Renaming `Top 50 last 30 days` → `Top 30 last 30 days` will
+4. **`Missed new tracks` expiry state.** A 2-month post-release expiry needs per-track "what's its
+   release date" tracking. Store it in a new table, or derive release date live from
+   `track_metadata` each run and filter? (Derive-live is stateless and simpler — **recommended**,
+   since the delay analysis and expiry both key off `release_date` which is already 98.9%
+   day-precise; a table only helps if you want to *display* "added on / expires on" like custom
+   playlists do.)
+
+5. **`Top 30` rename migration.** Renaming `Top 50 last 30 days` → `Top 30 last 30 days` will
    rename the existing Spotify playlist (via `legacy_names`), preserving its URL/followers. Confirm
    you want the same playlist trimmed to 30, not a new one alongside the old.
 
-5. **Badge-driven playlists — build the generic capability, or one-offs?** The 6 recommendations
+6. **Badge-driven playlists — build the generic capability, or one-offs?** The 6 recommendations
    all reduce to "playlist from a `badge_type`." Worth a small generic factory
    (`badge_playlist(badge_type, name)`), or hand-roll just *Slow burns* + *Dynasty* first?
 
@@ -437,33 +551,43 @@ badges, never as something you can press play on.
 
 # Change roadmap
 
-Proposed sequencing by cost and dependency.
+Proposed sequencing of the seven finalized requests by cost and dependency.
 
-### Quick wins (constants only — one small PR)
-- **#3** top-20 → top-50 for `Missed new tracks · popular` (+ shift `other` range to 51–1000).
-- **#6** remove `My Monthly #1 🔄` from `get_managed_playlists` + `get_updating_definitions`.
-- **#1 (partial)** flip the `_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS` constant 365 → 730 (the 15th-of
-  -month scheduling is a separate, larger change).
+### Quick wins (constants only — one small PR, no cron/migration)
+- **#3** top-20 → top-50 for `Missed new tracks · popular` (two constants; + shift `other` to
+  51–1000). Saturation is safe — it reclassifies band 21–50 from `other`, net-new ≈ 0.
+- **#1 (constant half)** flip `_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS` 365 → 730 (388 → 225 tracks).
+  The 15th-of-month scheduling is the separate cron half below.
+- **#4 (resize half)** `limit` 50 → 30 on `Top 50 last 30 days`. Bundle the rename with it.
 
-### Medium (rename / cron isolation)
-- **#4** `Top 50 → Top 30 last 30 days`: change `limit`, add old name to `legacy_names`, update the
-  `RANK_TRACKED_PLAYLISTS` substring and the `_WINDOW_LAST_30_DAYS` digest window reference.
-- **#1 + #5** dated refresh crons (needs the mechanism from Design Q1): FF on the 15th, the two
-  Top 100s on the 1st. Depends on a `--only`/subset filter in `update_managed_playlists.py`.
-- **Coverage-gap quick fills:** a **live current-calendar-month Top 25** updating playlist
-  (`query_top_in_month(current)`), and a **liked-but-never-played** playlist
-  (`liked_songs` − `spotify_plays`).
+### Medium (rename + one shared monthly cron)
+- **#4 (rename half)** `Top 50 → Top 30 last 30 days`: add old name to `legacy_names`, **update the
+  `RANK_TRACKED_PLAYLISTS` substring** (else rank-history stops recording). `_WINDOW_LAST_30_DAYS`
+  needs no change.
+- **The monthly 1st-of-month cron** (Design Q1) is the shared backbone for **#5 + #6 + #7** — it
+  must run **after** the 05:00 `create_snapshots` so #6 can read that morning's `Top 25 · Month`:
+  - **#5** refresh `Top 100 this year` / `all-time` — ⚠️ resolve the **rank-history cadence**
+    dependency first (Design Q3: mixed weekly/monthly arrows + monthly digest surface).
+  - **#7** re-couple `My Monthly #1 🔄` to this cron (drop from weekly) — pending the scope
+    decision (Design Q2).
+- **#1 (cron half)** a **15th-of-month** cron for `Forgotten favorites` — needs the same
+  `--only`/subset filter on `update_managed_playlists.py` (Design Q1).
 
-### Larger (new logic / state)
-- **#2** `Missed new tracks` daily cadence + release-age delay + 2-month expiry (Design Q3).
-- **#7** the frozen `My Monthly #1 📸` (Design Q2 resolves the shape first).
-- **Badge-driven playlists** (Design Q5): generic `badge_playlist()` factory, then *Slow burns*
-  ([[track_badge_audit]]) and *Dynasty* ([[artist_badge_workshop]]) as the first two instances.
+### Larger (new logic / backfill)
+- **#2** `Missed new tracks`: **daily** cadence + **7-day** release-age delay (data-supported
+  above) + **2-month** post-release expiry. Stateless via `track_metadata.release_date` (Design
+  Q4) — biggest single behavioural change, but no migration.
+- **#6** `My Monthly #1 📸`: new registry entry + **one-time backfill of 112 tracks** (recompute
+  from `_monthly_top_one_per_month`, completed months only). Low-risk backfill; replace-with-full-
+  chain each month thereafter (backfill note above).
 
 ### Nice-to-have (analytical, no user request behind them)
+- **Badge-driven playlists** (Design Q6): generic `badge_playlist()` factory, then *Slow burns*
+  ([[track_badge_audit]]) and *Dynasty* ([[artist_badge_workshop]]) as the first two instances.
 - **Risers into the all-time canon** (diff all-time Top 100 vs the last all-time snapshot).
 - Lower/second **Forgotten favorites** tier for dormant 20–49-play tracks.
-- Resolve the `My Monthly #1` / `My {Month} #1` **naming collision** whichever way #6/#7 land.
+- Resolve the `My Monthly #1 🔄` / `My Monthly #1 📸` / `My {Month} #1` **naming collision** once
+  #6/#7 land — three near-identical names (see naming-consistency note).
 
 ---
 
