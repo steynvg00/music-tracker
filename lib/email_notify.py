@@ -255,6 +255,20 @@ def _arrow_for(current_rank: int, previous_rank: int | None) -> tuple[str, str, 
     return ("—", "#666", "[—]")
 
 
+def _should_show_arrows(ranked: list[dict], prev_ranks: dict[str, int] | None) -> bool:
+    """True only when there is a baseline AND at least one track's rank actually changed.
+
+    v0.72: if every track is unchanged (all arrows would be '—'), suppress the arrow column
+    entirely for this playlist. Without this, a monthly-cadence Top list (e.g. Top 100
+    all-time/this-year after v0.72) would render 100 identical '—' rows in every weekly
+    digest between its monthly refreshes. A track absent from prev_ranks (a new entry) reads
+    as a change — prev_ranks.get(uri) is None, which never equals an int rank.
+    """
+    if prev_ranks is None:
+        return False
+    return any(prev_ranks.get(t["uri"]) != t["rank"] for t in ranked)
+
+
 # ── HTML builder ─────────────────────────────────────────────────────────────────
 
 def _summary_line(created, updated, snapshots, deleted, run_type: str) -> str:
@@ -296,9 +310,10 @@ def _html_ranked_table(ranked: list[dict], playcounts, prev_ranks: dict[str, int
     """Top-playlist table: rank [+ arrow] + track + artist + scope-correct plays.
 
     Uses each track's plays_in_context (NOT all-time). The arrow column only appears
-    when prev_ranks is available (i.e. there is a previous weekly snapshot to diff).
+    when there is a previous snapshot to diff AND at least one rank actually changed
+    (v0.72: no all-'—' columns).
     """
-    show_arrows = prev_ranks is not None
+    show_arrows = _should_show_arrows(ranked, prev_ranks)
     rows = []
     for t in ranked:
         rank = t["rank"]
@@ -331,7 +346,7 @@ def _html_ranked_table(ranked: list[dict], playcounts, prev_ranks: dict[str, int
     )
 
 
-def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
+def build_html_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "monthly", "sweep"], conn) -> str:
     aggregates, deleted = _aggregate(events)
     playcounts = _hydrate_playcounts(conn, _collect_hydration_uris(aggregates, deleted))
 
@@ -433,7 +448,7 @@ def _text_track_lines(uris: list[str], playcounts, show_plays: bool) -> list[str
 
 def _text_ranked_lines(ranked: list[dict], playcounts, prev_ranks: dict[str, int] | None) -> list[str]:
     """Top-playlist plaintext lines with scope-correct plays + optional rank arrows."""
-    show_arrows = prev_ranks is not None
+    show_arrows = _should_show_arrows(ranked, prev_ranks)
     lines = []
     for t in ranked:
         rank = t["rank"]
@@ -449,7 +464,7 @@ def _text_ranked_lines(ranked: list[dict], playcounts, prev_ranks: dict[str, int
     return lines
 
 
-def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
+def build_plaintext_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "monthly", "sweep"], conn) -> str:
     aggregates, deleted = _aggregate(events)
     playcounts = _hydrate_playcounts(conn, _collect_hydration_uris(aggregates, deleted))
 
@@ -529,7 +544,7 @@ def _artist_wikilinks(artist_display: str) -> str:
     return ", ".join(_wikilink(a) for a in parts) if parts else _wikilink(artist_display)
 
 
-def build_markdown_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "sweep"], conn) -> str:
+def build_markdown_digest(events: list[PlaylistEvent], run_type: Literal["weekly", "monthly", "sweep"], conn) -> str:
     """Build a Markdown version of the digest for Obsidian vault use.
 
     YAML frontmatter (date, tags, week_number) + h1 + h2 per section, with track
@@ -794,13 +809,16 @@ def _smtp_send_with_attachment(
     )
 
 
-def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly", "sweep"]) -> bool:
+def send_digest(
+    collector: EmailEventCollector, conn, run_type: Literal["weekly", "monthly", "sweep"]
+) -> bool:
     """Sends digest email. Returns True if sent (or dry-run printed), False if skipped.
 
     - Reads GMAIL_USER, GMAIL_APP_PASSWORD, EMAIL_RECIPIENT from os.environ.
       Raises RuntimeError met clear message als er events zijn maar secrets missing.
     - Skip send (return False) als collector geen events heeft.
-    - Weekly digest attaches an Obsidian digest_YYYY-MM-DD.md; sweep mail has no attachment.
+    - Weekly/monthly digests attach an Obsidian digest_YYYY-MM-DD.md; sweep mail has none.
+      "monthly" (v0.72) is the 1st-of-month refresh of the Top 100s + My Monthly #1 rolling.
     - MUSIC_TRACKER_EMAIL_DRY_RUN=1: print HTML body to stdout, no SMTP, return True.
     """
     if not collector.has_events():
@@ -810,9 +828,10 @@ def send_digest(collector: EmailEventCollector, conn, run_type: Literal["weekly"
     html_body = build_html_digest(events, run_type, conn)
     text_body = build_plaintext_digest(events, run_type, conn)
 
-    if run_type == "weekly":
+    if run_type in ("weekly", "monthly"):
         today = date.today().isoformat()
-        subject = f"music-tracker: {len(events)} playlist updates ({today})"
+        label = "monthly" if run_type == "monthly" else "playlist"
+        subject = f"music-tracker: {len(events)} {label} updates ({today})"
         markdown_body = build_markdown_digest(events, run_type, conn)
         return _smtp_send_with_inline_images(
             subject, html_body, text_body,

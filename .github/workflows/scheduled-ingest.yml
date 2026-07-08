@@ -10,6 +10,10 @@ on:
     - cron: "55 3 * * *"  # Daily 03:55 UTC — artist popularity score computation
     - cron: "0 4 * * *"   # Daily 04:00 UTC — sweep expired custom playlists
     - cron: "0 5 * * *"   # Daily 05:00 UTC — create period snapshots (month/season/year/decade)
+    - cron: "0 6 1 * *"   # Monthly 1st 06:00 UTC — Top 100s + My Monthly #1 rolling refresh (v0.72)
+    - cron: "0 6 15 * *"  # Monthly 15th 06:00 UTC — Forgotten favorites refresh (v0.72)
+    # NB (v0.72): the daily Missed New Tracks refresh reuses the existing "0 3 * * *" trigger
+    # above (shared with liked-songs sync) — no separate schedule line needed.
   workflow_dispatch:
 
 permissions:
@@ -222,3 +226,85 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+
+  daily-missed-tracks:
+    name: Daily Missed New Tracks refresh
+    # v0.72: reuses the existing 03:00 trigger (shared with liked-songs sync).
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: daily-missed-tracks
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Refresh Missed New Tracks playlists
+        run: uv run python scripts/daily_missed_tracks_refresh.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+
+  monthly-playlist-refresh:
+    name: Monthly playlist refresh (Top 100s + My Monthly #1)
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 1 * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: monthly-playlist-refresh
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Refresh monthly playlists
+        run: uv run python scripts/monthly_playlist_refresh.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+
+  mid-month-playlist-refresh:
+    name: Mid-month playlist refresh (Forgotten favorites)
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 15 * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: mid-month-playlist-refresh
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Refresh mid-month playlists
+        run: uv run python scripts/mid_month_playlist_refresh.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}

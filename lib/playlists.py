@@ -39,6 +39,10 @@ class PlaylistDefinition:
     query_fn: Callable[[psycopg.Connection], list[str]]  # returns list of track_uris in desired order
     kind: str = "updating"                               # "updating" or "snapshot"
     max_tracks: int = 10000                              # safety cap (Spotify max is 10000 per playlist)
+    # v0.72: which cron refreshes this updating playlist. "weekly" (Mon 06:00) is the default;
+    # "monthly" (1st of month), "mid_month" (15th) and "daily" playlists are routed to their own
+    # cron entry points by filtering on this field. Ignored for snapshots.
+    cadence: str = "weekly"
     legacy_names: list[str] = field(default_factory=list)  # chain of past names, tried in order
     # v0.66: for Top playlists, returns {track_uri: plays_in_the_playlist's_window} for the
     # given uris — the SCOPE-CORRECT count shown in the weekly digest (e.g. last-30-day plays
@@ -203,7 +207,7 @@ _WINDOW_THIS_YEAR = (
 RANK_TRACKED_PLAYLISTS = {
     "Top 100 this year",
     "Top 100 all-time",
-    "Top 50 last 30 days",
+    "Top 30 last 30 days",
 }
 
 
@@ -446,11 +450,13 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         legacy_names=["🤖 Auto · 500+ plays"],
     ),
     PlaylistDefinition(
-        suffix="Top 50 last 30 days",
-        description="Your 50 most-played tracks in the past 30 days.",
-        query_fn=query_top_recent(days=30, limit=50),
+        suffix="Top 30 last 30 days",  # v0.72: was "Top 50 last 30 days" (resize 50→30)
+        description="Your 30 most-played tracks in the past 30 days.",
+        query_fn=query_top_recent(days=30, limit=30),
         kind="updating",
-        legacy_names=["🤖 Auto · Top 50 last 30 days"],
+        max_tracks=30,
+        # v0.72: rename migrates the existing Spotify playlist in place (id/followers kept).
+        legacy_names=["Top 50 last 30 days · Auto 🤖🔄", "🤖 Auto · Top 50 last 30 days"],
         plays_count_fn=count_plays_in_window(_WINDOW_LAST_30_DAYS),
     ),
     PlaylistDefinition(
@@ -458,6 +464,7 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         description="Your 100 most-played tracks in the current calendar year.",
         query_fn=query_top_current_year(limit=100),
         kind="updating",
+        cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
         legacy_names=["🤖 Auto · Top 100 this year"],
         plays_count_fn=count_plays_in_window(_WINDOW_THIS_YEAR),
     ),
@@ -466,6 +473,7 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         description="Your 100 most-played tracks across all time.",
         query_fn=query_top_all_time(limit=100),
         kind="updating",
+        cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
         legacy_names=["🤖 Auto · Top 100 all-time"],
         plays_count_fn=count_plays_in_window(),  # all-time window (no filter)
     ),
@@ -856,11 +864,23 @@ def month_number_one_playlists(conn) -> list[PlaylistDefinition]:
 
 
 def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
-    """One PlaylistDefinition — one track per (year, month) the user had plays in,
-    ordered oldest-first. Grows by one entry each month.
+    """One PlaylistDefinition — the #1 track of every COMPLETED month, chronological
+    (oldest first, newest appended at the bottom). Grows by one entry each month.
+
+    v0.72: the in-progress current month is excluded (its #1 is not final yet), so this
+    playlist is the frozen historical chain that grows on the 1st of each month when the
+    just-ended month's #1 becomes final — equivalent to appending the #1 of that month's
+    Top 25 · Month snapshot. Refreshed by the monthly 1st-of-month cron. Full-chain replace
+    is idempotent (a missed month self-heals) and produces exactly the append-one semantics
+    while the only new element is the just-completed month.
     """
-    rows = _monthly_top_one_per_month(conn)
-    all_uris = [uri for _yr, _mo, uri in rows]
+    rows = _monthly_top_one_per_month(conn)  # yr DESC, mo DESC
+
+    now_local = datetime.now(TZ_AMSTERDAM)
+    current_ym = (now_local.year, now_local.month)
+    completed = [(yr, mo, uri) for yr, mo, uri in rows if (yr, mo) < current_ym]
+    completed.sort(key=lambda r: (r[0], r[1]))  # chronological ascending (oldest first)
+    all_uris = [uri for _yr, _mo, uri in completed]
 
     def query_fn(_conn):
         return all_uris
@@ -868,15 +888,19 @@ def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
     return [
         PlaylistDefinition(
             suffix="My Monthly #1",
-            description=_MONTHLY_NUMBER_ONE_DESCRIPTION,
+            description=(
+                "Auto-managed by music-tracker. The #1 track of each completed month, "
+                "oldest first — one new track appended every 1st of the month."
+            ),
             query_fn=query_fn,
             kind="updating",
+            cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
         )
     ]
 
 
 _FORGOTTEN_FAVORITES_MIN_PLAYS = 50
-_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS = 365
+_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS = 730  # v0.72: 365 → 730 (2 years — a real "forgotten" bar)
 
 
 def forgotten_favorites_playlist(conn) -> list[PlaylistDefinition]:
@@ -910,113 +934,116 @@ def forgotten_favorites_playlist(conn) -> list[PlaylistDefinition]:
         )
         return [row[0] for row in cur.fetchall()]
 
+    years = days // 365
     return [
         PlaylistDefinition(
             suffix="Forgotten favorites",
             description=(
                 f"Auto-managed by music-tracker. Tracks with {min_plays}+ plays you haven't "
-                f"returned to in {days} days. Re-discovery candidates."
+                f"returned to in {years} years. Re-discovery candidates."
             ),
             query_fn=query_fn,
             kind="updating",
+            cadence="mid_month",  # v0.72: weekly → 15th-of-month refresh
         )
     ]
 
 
-# ── Missed new tracks ─────────────────────────────────────────────────────────
-# Cache keyed by id(rank_fn) so both factories share one followed-artist fetch
-# per interpreter run when they use the same ranker.
-_followed_artists_cache: dict[int, tuple[list[str], dict[str, str]]] = {}
+# ── Missed new tracks (v0.72: daily, age-windowed, classified by popular artist set) ──
+# Module-level cache so the two factories share ONE Spotify sweep per interpreter run
+# (populated lazily on the first query_fn call — building the definitions is free, so the
+# weekly/monthly crons that filter these out never touch Spotify).
+_missed_split_cache: tuple[list[str], list[str]] | None = None
 
 
-def _get_ranked_followed_artists(
-    conn, sp, rank_fn
-) -> tuple[list[str], dict[str, str]]:
-    """Fetch + rank followed artists, caching the result per rank_fn identity.
+def _get_missed_split(conn, sp) -> tuple[list[str], list[str]]:
+    """Compute (popular_uris, other_uris) once per run and cache it.
 
-    Returns (ranked_names, artist_id_by_name). The cache is module-level and
-    lives only for the current interpreter run — no cross-run persistence.
+    popular = unplayed releases in the [7, 60]-day age window credited to any of the
+    user's top-50 most-played artists (last 2 years); other = the rest. Both come from a
+    single scan of every followed artist's recent releases.
     """
-    cache_key = id(rank_fn)
-    if cache_key in _followed_artists_cache:
-        return _followed_artists_cache[cache_key]
+    global _missed_split_cache
+    if _missed_split_cache is not None:
+        return _missed_split_cache
 
-    from lib.missed_new_tracks import fetch_followed_artists
-    print("[playlists] Fetching followed artists...", flush=True)
-    artists = fetch_followed_artists(sp)
-    names = [a["name"] for a in artists]
-    id_by_name = {a["name"]: a["id"] for a in artists}
-    print(f"[playlists] Ranking {len(names)} followed artists...", flush=True)
-    ranked = rank_fn(conn, names)
-    result = (ranked, id_by_name)
-    _followed_artists_cache[cache_key] = result
-    return result
-
-
-def missed_new_tracks_popular_playlist(conn, sp, rank_fn=None) -> list[PlaylistDefinition]:
-    """One PlaylistDefinition — unplayed new releases (last 14 days) from the user's
-    top 20 followed artists by play count.
-    """
     from lib.missed_new_tracks import (
-        find_missed_tracks,
-        _MISSED_NEW_TRACKS_RECENCY_DAYS,
+        fetch_followed_artists,
+        top_played_artist_ids,
+        find_missed_tracks_classified,
+        _MISSED_NEW_TRACKS_MIN_AGE_DAYS,
+        _MISSED_NEW_TRACKS_MAX_AGE_DAYS,
+        _MISSED_NEW_TRACKS_POPULAR_TOP_N,
+        _MISSED_NEW_TRACKS_POPULAR_WINDOW_DAYS,
+    )
+    print("[playlists] Fetching followed artists...", flush=True)
+    followed = fetch_followed_artists(sp)
+    print(
+        f"[playlists] Building popular set (top {_MISSED_NEW_TRACKS_POPULAR_TOP_N} artists "
+        f"by {_MISSED_NEW_TRACKS_POPULAR_WINDOW_DAYS}-day plays)...",
+        flush=True,
+    )
+    popular_ids = top_played_artist_ids(
+        conn, _MISSED_NEW_TRACKS_POPULAR_TOP_N, _MISSED_NEW_TRACKS_POPULAR_WINDOW_DAYS
+    )
+    print(f"[playlists] Scanning {len(followed)} followed artists for missed releases...", flush=True)
+    popular, other = find_missed_tracks_classified(
+        conn, sp, followed, popular_ids,
+        _MISSED_NEW_TRACKS_MIN_AGE_DAYS, _MISSED_NEW_TRACKS_MAX_AGE_DAYS,
+    )
+    print(f"[playlists] Missed releases: {len(popular)} popular, {len(other)} other.", flush=True)
+    _missed_split_cache = (popular, other)
+    return _missed_split_cache
+
+
+def missed_new_tracks_popular_playlist(conn, sp) -> list[PlaylistDefinition]:
+    """Unplayed new releases (7-60 days old) credited to a top-50 most-played artist."""
+    from lib.missed_new_tracks import (
+        _MISSED_NEW_TRACKS_MIN_AGE_DAYS,
+        _MISSED_NEW_TRACKS_MAX_AGE_DAYS,
         _MISSED_NEW_TRACKS_POPULAR_TOP_N,
     )
-    from lib.artist_popularity import rank_artists_by_composite  # v0.45: composite default
-    if rank_fn is None:
-        rank_fn = rank_artists_by_composite
-
-    ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
-    top_n = _MISSED_NEW_TRACKS_POPULAR_TOP_N
-    slice_names = ranked_names[:top_n]
-    days = _MISSED_NEW_TRACKS_RECENCY_DAYS
 
     def query_fn(_conn):
-        return find_missed_tracks(_conn, sp, slice_names, artist_id_by_name, days_window=days)
+        return _get_missed_split(_conn, sp)[0]
 
     return [
         PlaylistDefinition(
             suffix="Missed new tracks · popular artists",
             description=(
-                f"Auto-managed. New releases (last {days} days) from your top {top_n} "
-                "followed artists that you haven't played yet."
+                f"Auto-managed. Unplayed new releases ({_MISSED_NEW_TRACKS_MIN_AGE_DAYS}–"
+                f"{_MISSED_NEW_TRACKS_MAX_AGE_DAYS} days old) from your top "
+                f"{_MISSED_NEW_TRACKS_POPULAR_TOP_N} most-played artists (last 2 years)."
             ),
             query_fn=query_fn,
             kind="updating",
+            cadence="daily",  # v0.72: weekly → daily refresh
         )
     ]
 
 
-def missed_new_tracks_other_playlist(conn, sp, rank_fn=None) -> list[PlaylistDefinition]:
-    """One PlaylistDefinition — unplayed new releases (last 14 days) from followed
-    artists ranked 21-1000 by play count.
-    """
+def missed_new_tracks_other_playlist(conn, sp) -> list[PlaylistDefinition]:
+    """Unplayed new releases (7-60 days old) from followed artists outside the top-50."""
     from lib.missed_new_tracks import (
-        find_missed_tracks,
-        _MISSED_NEW_TRACKS_RECENCY_DAYS,
-        _MISSED_NEW_TRACKS_OTHER_RANGE,
+        _MISSED_NEW_TRACKS_MIN_AGE_DAYS,
+        _MISSED_NEW_TRACKS_MAX_AGE_DAYS,
+        _MISSED_NEW_TRACKS_POPULAR_TOP_N,
     )
-    from lib.artist_popularity import rank_artists_by_composite  # v0.45: composite default
-    if rank_fn is None:
-        rank_fn = rank_artists_by_composite
-
-    ranked_names, artist_id_by_name = _get_ranked_followed_artists(conn, sp, rank_fn)
-    start, end = _MISSED_NEW_TRACKS_OTHER_RANGE
-    slice_names = ranked_names[start - 1 : end]  # convert 1-based inclusive to 0-based slice
-    days = _MISSED_NEW_TRACKS_RECENCY_DAYS
 
     def query_fn(_conn):
-        return find_missed_tracks(_conn, sp, slice_names, artist_id_by_name, days_window=days)
+        return _get_missed_split(_conn, sp)[1]
 
     return [
         PlaylistDefinition(
             suffix="Missed new tracks · other artists",
             description=(
-                f"Auto-managed. New releases (last {days} days) from your followed artists "
-                f"ranked {start}-{end} that you haven't played yet."
+                f"Auto-managed. Unplayed new releases ({_MISSED_NEW_TRACKS_MIN_AGE_DAYS}–"
+                f"{_MISSED_NEW_TRACKS_MAX_AGE_DAYS} days old) from your followed artists "
+                f"outside your top-{_MISSED_NEW_TRACKS_POPULAR_TOP_N} most-played."
             ),
             query_fn=query_fn,
             kind="updating",
+            cadence="daily",  # v0.72: weekly → daily refresh
         )
     ]
 
@@ -1248,12 +1275,14 @@ def get_updating_definitions(conn) -> list[PlaylistDefinition]:
         description="",
         query_fn=lambda _: [],
         kind="updating",
+        cadence="daily",
     ))
     defs.append(PlaylistDefinition(
         suffix="Missed new tracks · other artists",
         description="",
         query_fn=lambda _: [],
         kind="updating",
+        cadence="daily",
     ))
     return defs
 
