@@ -36,7 +36,17 @@ from lib.playlists import (
     create_year_snapshot,
     create_decade_snapshot,
 )
-from lib.badges import award_top_1st_badge, award_special_badge, detect_season_regular_badge
+from lib.badges import (
+    award_top_1st_badge,
+    award_special_badge,
+    detect_season_regular_badge,
+    detect_dominant_sovereign_badges,  # v0.74: A5/A6 meta-badges over top_1st_month
+)
+from lib.artist_badges import (        # v0.74: Part B — artist ranking on snapshot creation
+    compute_top_artist_from_snapshot,
+    award_artist_badge,
+    artist_display_name,
+)
 from lib.snapshot_notify import build_and_send_snapshot_mail
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
@@ -153,6 +163,30 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
         build_and_send_snapshot_mail(conn, kind, display_name, playlist_name, ranked)
     else:
         print(f"[create-snapshots] top_1st_{kind} for {display_name} already existed — skipping mail.", flush=True)
+
+    # v0.74: artist-of-period ranking — award top_1st_artist_{kind} to the artist with the
+    # most in-period plays across this snapshot's tracks (all-credited). Multi-fire per
+    # period window. Non-fatal — never breaks snapshot creation.
+    try:
+        top_artist = compute_top_artist_from_snapshot(conn, ranked)
+        if top_artist is not None:
+            artist_id, artist_plays = top_artist
+            artist_ctx = {"window": display_name, "plays": artist_plays}
+            if award_artist_badge(conn, artist_id, f"top_1st_artist_{kind}", artist_ctx, send_mail=True):
+                print(f"[create-snapshots] Awarded top_1st_artist_{kind} to "
+                      f"'{artist_display_name(conn, artist_id)}'.", flush=True)
+    except Exception as e:
+        print(f"WARNING: artist ranking for {display_name} ({kind}) failed: {e}", file=sys.stderr)
+
+    # v0.74: dominant / sovereign — a fresh top_1st_month may push its winning track over
+    # the ≥2 / ≥3 monthly-#1 threshold. Scoped to just that track. Non-fatal.
+    if kind == "month" and inserted:
+        try:
+            for track_uri, badge_type, ctx in detect_dominant_sovereign_badges(conn, [top["track_uri"]]):
+                if award_special_badge(conn, track_uri, badge_type, ctx, send_mail=True):
+                    print(f"[create-snapshots] Awarded {badge_type} to '{top['track_name']}'.", flush=True)
+        except Exception as e:
+            print(f"WARNING: dominant/sovereign detection failed: {e}", file=sys.stderr)
 
     # v0.67: a fresh season snapshot may push a track over the season_regular threshold
     # (top 25 of ≥3 seasons). Detection recomputes all past seasons, so we scope it to

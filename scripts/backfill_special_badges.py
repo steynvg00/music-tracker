@@ -46,6 +46,9 @@ from lib.badges import (
     detect_season_regular_badge,
     detect_multi_top_badge,
     detect_release_timing_at_50_plays,
+    detect_late_bloomer_badges,          # v0.74: A1 — now a standalone full-mode detector
+    detect_on_repeat_badges,             # v0.74: A4
+    detect_dominant_sovereign_badges,    # v0.74: A5/A6 — reads existing top_1st_month rows
     _has_badge,
 )
 
@@ -73,14 +76,20 @@ def _release_timing_at_50_full(conn):
 
 
 # Each entry: (label, full-mode callable(conn) -> list[(track_uri, badge_type, context)]).
+# v0.74: late_bloomer moved out of the @50-plays sweep into its own standalone detector
+# (fixes the correctness gap — it no longer requires ≥50 total plays). dominant/sovereign
+# run LAST since they read the top_1st_month rows already in badge_events.
 _DETECTORS = [
-    ("streaks", detect_streak_badges),
-    ("daily intensity", detect_daily_intensity_badges),
+    ("streaks (5/8/10y)", detect_streak_badges),
+    ("daily intensity (20/40/60)", detect_daily_intensity_badges),
     ("release timing (on-release-day)", detect_release_timing_badges),
     ("release timing (@50 plays)", _release_timing_at_50_full),
+    ("late_bloomer (standalone)", detect_late_bloomer_badges),
+    ("on_repeat", detect_on_repeat_badges),
     ("comeback", detect_comeback_badges),
     ("season_regular", detect_season_regular_badge),
     ("multi_top", detect_multi_top_badge),
+    ("dominant/sovereign", detect_dominant_sovereign_badges),
 ]
 
 

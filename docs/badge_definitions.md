@@ -218,10 +218,19 @@ SELECT track_uri, run_start, run_len FROM best WHERE run_len >= 5
 track with two separate 5-year runs is dated by the longest one. Consecutiveness is by calendar
 year in Europe/Amsterdam, not rolling 365-day windows.
 
+The Python award loop runs thresholds `n ∈ {5, 8, 10}` against each track's longest run.
+
 ### streak_5_years
 **Semantic**: ≥1 play in each of 5 consecutive calendar years. **Multi-fire**: No.
 **Trigger**: ingest cron / backfill. **Mail subject**: `music-tracker: '{track}' just hit a
 5-year streak`
+
+### streak_8_years (v0.74)
+**Semantic**: ≥1 play in each of 8 consecutive calendar years. **Multi-fire**: No. **Trigger**:
+ingest cron / backfill. **Rationale**: the audit found a flat 5–9-year plateau with ~2,285
+tracks unrecognised between the 5y and 10y tiers; the geometric midpoint √(3570·500) ≈ 1,336
+lands closest to `≥8 = 1,633`. **Mail subject**: `music-tracker: '{track}' — 8-year streak
+achievement`. **Backfill volume**: 1,633.
 
 ### streak_10_years
 **Semantic**: ≥1 play in each of 10 consecutive calendar years. **Multi-fire**: No.
@@ -260,12 +269,20 @@ ORDER BY d.track_uri, d.day
 **Backfill logic**: `awarded_at` = end of that day (23:59:59 local). A day with ≥40 plays
 awards **both** `plays_20_in_day` and `plays_40_in_day` (cascade by design).
 
+The detection query runs once per threshold `n ∈ {20, 40, 60}` (v0.74 added 60).
+
 ### plays_20_in_day
 **Semantic**: ≥20 plays of one track on one local day. **Multi-fire**: Yes (`window` = date).
 **Trigger**: ingest cron / backfill.
 
 ### plays_40_in_day
 **Semantic**: ≥40 plays of one track on one local day. **Multi-fire**: Yes.
+
+### plays_60_in_day (v0.74)
+**Semantic**: ≥60 plays of one track on one local day — an "obsession day". **Multi-fire**: Yes.
+**Rationale**: the audit found real single-day obsession peaks (max 224 plays/day) that the 40
+ceiling left unrecognised (119 distinct tracks ≥60/day). Cascade: a ≥60 day also awards 20 & 40.
+**Backfill volume**: 146 instances.
 
 ---
 
@@ -275,11 +292,16 @@ How a track relates to its release date. **v0.67.1 tightened this whole family**
 plays *within the time window* rather than total plays. All require **day-precision**
 `release_date` in `track_metadata` (`release_date_precision = 'day'`, ~99% of the catalog).
 
-`played_on_day_one` is detected on the ingest cron (`detect_release_timing_badges`). The other
-three are evaluated when a track crosses **plays_50** (`detect_release_timing_at_50_plays`,
-called from `record_and_notify_milestone`), which returns **all applicable badges** — `day_one_fan`
-and `release_week_fan` can both fire; `late_bloomer` is mutually exclusive with them (a >2y gap
-means zero release-day/week plays).
+`played_on_day_one` is detected on the ingest cron (`detect_release_timing_badges`).
+`day_one_fan` and `release_week_fan` are evaluated when a track crosses **plays_50**
+(`detect_release_timing_at_50_plays`, called from `record_and_notify_milestone`) — both can
+fire (they genuinely require ≥50 plays, so the gate is intentional).
+
+**v0.74 — `late_bloomer` decoupled.** It no longer runs at the plays_50 crossing. `late_bloomer`
+has no total-play requirement, so gating it on plays_50 silently dropped qualifiers with 30–49
+total plays (audit: 19 qualify, only 15 earned). It now runs independently on the ingest cron
+(batch mode) and backfill (full mode) via the standalone `detect_late_bloomer_badges`, rescuing
+the 4 missing tracks (15 → 19).
 
 **`played_on_day_one` query** (verbatim from `detect_release_timing_badges`):
 
@@ -453,6 +475,121 @@ prestigious against ~10 years of data; the broad universe (~160 playlists) makes
 common. Enumeration cost (~160 rank recomputations) is paid only at weekly-cron completion and in
 the backfill, never on the ingest hot path.
 
+### on_repeat (v0.74)
+**Semantic**: the track was played back-to-back in **≥5 separate loop sessions of ≥10
+consecutive plays each** (no other track in between). **Multi-fire**: No. **Trigger**: ingest
+cron (batch mode) / backfill. **Context**: `{qualifying_sessions, longest_run, example_dates}`.
+
+**Detection** (`detect_on_repeat_badges`): gaps-and-islands over the global play timeline — a new
+session starts whenever the previous play was a different `track_uri`; a run of ≥10 qualifies;
+≥5 such runs earns the badge. `awarded_at` = start of the 5th qualifying session.
+
+```sql
+WITH consecutive AS (
+    SELECT sp.track_uri, sp.played_at,
+           LAG(sp.track_uri) OVER (ORDER BY sp.played_at) AS prev_uri
+    FROM spotify_plays sp WHERE sp.track_uri IS NOT NULL
+),
+grouped AS (
+    SELECT track_uri, played_at,
+           SUM(CASE WHEN prev_uri IS DISTINCT FROM track_uri THEN 1 ELSE 0 END)
+               OVER (ORDER BY played_at) AS session_group
+    FROM consecutive
+),
+runs AS (
+    SELECT track_uri, session_group, COUNT(*) AS run_length, MIN(played_at) AS run_start
+    FROM grouped GROUP BY track_uri, session_group HAVING COUNT(*) >= 10
+)
+SELECT track_uri, COUNT(*) AS qualifying_sessions
+FROM runs GROUP BY track_uri HAVING COUNT(*) >= 5
+```
+
+**Backfill volume**: 53.
+
+---
+
+## Rankings meta (v0.74)
+
+Meta-badges over the existing `top_1st_month` data — a track that owned the monthly #1 in
+multiple months (not necessarily consecutive). Single-fire lifetime achievements. **Trigger**:
+`create_snapshots.py`, checked on each fresh `top_1st_month` award (scoped to the winning track);
+full mode in backfill via `detect_dominant_sovereign_badges`. `awarded_at` = the awarded_at of
+the 2nd (dominant) / 3rd (sovereign) monthly-#1 win. **Context**: `{months_won: [...]}`.
+
+```sql
+SELECT entity_id,
+       array_agg(context->>'window' ORDER BY awarded_at) AS windows,
+       array_agg(awarded_at ORDER BY awarded_at) AS ats
+FROM badge_events
+WHERE entity_type = 'track' AND badge_type = 'top_1st_month'
+GROUP BY entity_id HAVING COUNT(*) >= 2
+```
+
+### dominant
+**Semantic**: the track was the #1 track of **≥2 different months**. **Mail subject**:
+`music-tracker: '{track}' is Dominant (2+ monthly #1s)`. **Backfill volume**: 2.
+
+### sovereign
+**Semantic**: the track was the #1 track of **≥3 different months**. **Mail subject**:
+`music-tracker: '{track}' is Sovereign (3+ monthly #1s)`. **Backfill volume**: 1.
+
+---
+
+## Artist badges (v0.74)
+
+A parallel badge arc keyed on Spotify `artist_id` (`entity_type='artist'` — `badge_events`
+already permits it, migration 0014 CHECK, so **no schema change**). 21 types across 6 categories,
+implemented in `lib/artist_badges.py`. Attribution basis = **all-credited**: a play counts for
+every credited artist via `unnest(track_metadata.artist_ids)`. Detection mirrors the track
+two-mode contract (a list of `artist_id`s scopes it; `None` = full backfill sweep). Displayed in
+the dashboard's **Artist lookup** (Track lookup tab → "Artist") via the shared badge grid
+(`render_badge_chips(conn, artist_id, entity_type='artist')`).
+
+The shared per-artist aggregate:
+
+```sql
+SELECT aid AS artist_id, COUNT(*) AS plays,
+       COUNT(DISTINCT sp.track_uri) AS tracks, MIN(sp.played_at) AS first_played
+FROM spotify_plays sp
+JOIN track_metadata tm ON tm.track_uri = sp.track_uri
+CROSS JOIN LATERAL unnest(tm.artist_ids) AS aid
+WHERE sp.track_uri IS NOT NULL
+GROUP BY aid
+```
+
+### Cumulative plays — `artist_plays_{100,250,500,1000,2500,5000}`
+Single-fire. `plays >= n` on the aggregate above. Geometric pyramid (per the track-audit lesson).
+**Trigger**: ingest cron (scoped to the batch's credited artists) / backfill. **Context**:
+`{total_plays, distinct_tracks_played, first_played, basis}`.
+
+### Distinct tracks — `artist_tracks_{5,15,30,50,100}`
+Single-fire. `tracks >= n`. Breadth of catalogue explored (no track analog). **Context**:
+`{distinct_tracks, cumulative_plays}`.
+
+### Streaks — `artist_streak_{3,5,10}_years`
+Single-fire. Gaps-and-islands over distinct calendar years per `artist_id` (≥1 play of ANY track
+by the artist per year — the looser entry rule). A 3-year entry is added (artist streaks are
+proportionally more common than track streaks). `awarded_at` = first play of the crossing year.
+**Context**: `{consecutive_years, streak_start_year, streak_end_year}`.
+
+### Rankings — `top_1st_artist_{month,season,year,alltime,decade}`
+Multi-fire (`window` = period). The artist with the most in-period plays across a snapshot's
+tracks (all-credited), via `compute_top_artist_from_snapshot`. **Trigger**: `create_snapshots.py`
+at period end; backfill recomputes every completed period from `spotify_plays`. Podium (2nd/3rd)
+is a **future extension** — v0.74 ships #1 only. `decade` = 0 until 2030.
+
+### Dynasty — `dynasty`
+Single-fire live state. An artist with **≥3 distinct tracks in the current all-time Top 100**.
+**Trigger**: weekly cron end (`update_managed_playlists.py`), after the Top playlists refresh.
+**Context**: `{tracks_in_alltime_top_100, count, basis}`.
+
+### Rediscovery — `rediscovery`
+Multi-fire (`window` = revival month). An artist with **prior ≥50 total plays** who went **≥12
+consecutive months with 0 plays**, then returned with **≥20 plays in a single month**.
+Deliberately not "comeback" — the workshop proved established-artist comeback doesn't exist in
+this data (max prior 81 plays), so this looser framing catches minor-artist rediscoveries.
+**Context**: `{window, plays, last_active, prior_total}`.
+
 ---
 
 ## Volume expectations (post-v0.67.1 backfill dry-run, 2026-07-03)
@@ -474,19 +611,36 @@ the backfill, never on the ingest hot path.
 | top_1st_alltime | 0 | — |
 | top_1st_decade | 0 | — |
 | streak_5_years | 3570 | 12.2% |
+| streak_8_years *(v0.74)* | 1633 | 5.6% |
 | streak_10_years | 499 | 1.7% |
 | plays_20_in_day | 841 *(instances)* | — |
 | plays_40_in_day | 285 *(instances)* | — |
+| plays_60_in_day *(v0.74)* | 146 *(instances)* | — |
 | played_on_day_one | 5461 | 18.6% |
 | day_one_fan | 266 | 0.91% |
 | release_week_fan | 330 | 1.1% |
-| late_bloomer | 15 | 0.051% |
+| late_bloomer *(v0.74 fix: 15 → 19)* | 19 | 0.065% |
 | comeback | 20 *(instances)* | — |
 | season_regular | 13 | 0.044% |
 | multi_top | 23 | 0.078% |
+| on_repeat *(v0.74)* | 53 | 0.18% |
+| dominant *(v0.74)* | 2 | — |
+| sovereign *(v0.74)* | 1 | — |
 
 *top_1st_* / play-milestone counts are current `badge_events` rows; special-badge counts are the
-v0.67.1 backfill dry-run (not yet applied to production at the time of writing).*
+v0.67.1 backfill dry-run (not yet applied to production at the time of writing). v0.74 counts are
+its production backfill.*
+
+### Artist badge volumes (v0.74 production backfill)
+
+| Category | Volumes |
+|---|---|
+| Cumulative plays | 100→691, 250→360, 500→230, 1000→133, 2500→53, 5000→20 |
+| Distinct tracks | 5→1316, 15→551, 30→330, 50→207, 100→86 |
+| Streaks | 3y→1792, 5y→1207, 10y→434 |
+| Rankings *(instances)* | month→112, season→38, year→9, alltime→1, decade→0 |
+| Dynasty | 10 |
+| Rediscovery *(instances)* | 2 |
 
 ## Change log
 
@@ -500,3 +654,21 @@ v0.67.1 backfill dry-run (not yet applied to production at the time of writing).
   `release_week_fan` (≥50 plays in release week); tightened `late_bloomer` to require ≥30 plays
   within 90 days of first play. `detect_release_timing_at_50_plays` now returns a **list** of
   applicable badges. Total special badges: **11**; Special strip shows "N of 11 earned".
+- **v0.68**: badge PNG icons (Defqon.1 hardstyle set) embedded into mails via CID.
+- **v0.70**: Track-lookup badge grid ("Pokémon-doos") in the dashboard (`_badge_display.py`).
+- **v0.74 — Track retuning + Artist badges arc.**
+  - **Track (5 new + 1 fix)**: `late_bloomer` decoupled from the plays_50 gate (standalone
+    `detect_late_bloomer_badges`, rescues 4 tracks, 15 → 19); `streak_8_years` (geometric-midpoint
+    tier, 1633); `plays_60_in_day` (obsession tier, 146 instances); `on_repeat` (≥5 loop sessions
+    of ≥10 consecutive plays, 53); `dominant` / `sovereign` (≥2 / ≥3 monthly #1s, 2 / 1). Total
+    track special badges: **16**; the Special strip's "N of X earned" is computed from
+    `len(SPECIAL_BADGE_TYPES)`. New Special-strip rows: Streaks 3 slots, Daily intensity 3 slots,
+    Behavioral 4 slots, and a new "Rankings meta" row (dominant/sovereign).
+  - **Artist (21 new)** — `lib/artist_badges.py`, `entity_type='artist'` (no migration): cumulative
+    plays (6), distinct tracks (5), streaks 3/5/10y (3), rankings `top_1st_artist_*` (5, #1 only —
+    podium deferred), Dynasty (1), Rediscovery (1). All-credited attribution; artist-streak entry
+    rule = ≥1 play per year. Detection wired into the 30-min ingest (cumulative/distinct/streaks/
+    rediscovery), daily snapshot (rankings), and weekly (Dynasty) crons; coalesced into the same
+    ingest digest via an extended `BadgeAwardCollector`. Artist lookup added to the dashboard.
+  - Backfills: `backfill_special_badges.py` extended; new `backfill_artist_badges.py` (bulk chunked
+    inserts). Both idempotent, `--dry-run`, `send_mail=False`. Executed against production.

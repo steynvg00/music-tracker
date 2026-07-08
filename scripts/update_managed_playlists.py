@@ -14,6 +14,7 @@ from lib.spotify import get_spotify_client
 from lib.playlists import get_managed_playlists, update_managed_playlist, get_full_name
 from lib.email_notify import EmailEventCollector, send_digest
 from lib.badges import award_special_badge, detect_multi_top_badge
+from lib.artist_badges import award_artist_badge, detect_dynasty_badges  # v0.74: Part B — Dynasty
 
 _INGEST_SCRIPT = Path(__file__).resolve().parent / "ingest_spotify_recent.py"
 
@@ -154,6 +155,19 @@ def main():
                 print(f"Awarded {n_multi} multi_top badge(s).", flush=True)
         except Exception as e:
             print(f"WARNING: multi_top detection failed: {e}", file=sys.stderr)
+
+        # v0.74: Dynasty (artist) — ≥3 tracks in the current all-time Top 100. Runs at the
+        # same weekly-cron end, after every Top playlist has been refreshed, so it reflects
+        # the live state. Non-fatal.
+        try:
+            n_dynasty = 0
+            for artist_id, badge_type, context in detect_dynasty_badges(conn):
+                if award_artist_badge(conn, artist_id, badge_type, context, send_mail=True):
+                    n_dynasty += 1
+            if n_dynasty > 0:
+                print(f"Awarded {n_dynasty} dynasty badge(s).", flush=True)
+        except Exception as e:
+            print(f"WARNING: dynasty detection failed: {e}", file=sys.stderr)
 
     # Email digest is best-effort: playlist ops already succeeded above, so a mail
     # failure must NOT change the script's exit code (a failed step would read as

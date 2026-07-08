@@ -163,21 +163,29 @@ _TOP_1ST_LABELS: list[tuple[str, str]] = [
 # context['window'] so the migration-0015 windowed unique index lets a track earn
 # them repeatedly (once per day/month). Every other special badge is once-per-track
 # lifetime with a NULL window.
-STREAK_BADGE_TYPES = ["streak_5_years", "streak_10_years"]
-DAILY_INTENSITY_BADGE_TYPES = ["plays_20_in_day", "plays_40_in_day"]
+# v0.74: streak_8_years = geometric-midpoint tier between 5y and 10y (audit ≥8 ≈ 1633
+# tracks). Kept in ascending threshold order so the detection loop and strip share it.
+STREAK_BADGE_TYPES = ["streak_5_years", "streak_8_years", "streak_10_years"]
+# v0.74: plays_60_in_day = extreme daily-intensity top tier above 20/40.
+DAILY_INTENSITY_BADGE_TYPES = ["plays_20_in_day", "plays_40_in_day", "plays_60_in_day"]
 # v0.67.1: release-timing family now scopes on plays WITHIN the time window (not total
 # plays). played_on_day_one = heard it on release day; day_one_fan = ≥20 plays on release
 # day itself; release_week_fan = ≥50 plays across release week (days 0-7, inclusive of day
 # one — cascade is by design); late_bloomer = discovered >2y late AND ≥30 plays in the
 # first 90 days after first play.
 RELEASE_TIMING_BADGE_TYPES = ["played_on_day_one", "day_one_fan", "release_week_fan", "late_bloomer"]
-BEHAVIORAL_BADGE_TYPES = ["comeback", "season_regular", "multi_top"]
+# v0.74: on_repeat joins the behavioral family (≥5 loop-sessions of ≥10 consecutive plays).
+BEHAVIORAL_BADGE_TYPES = ["comeback", "season_regular", "multi_top", "on_repeat"]
+# v0.74: rankings-meta family — a track that owned the monthly #1 in multiple months.
+# dominant = ≥2 top_1st_month wins, sovereign = ≥3. Single-fire lifetime achievements.
+META_BADGE_TYPES = ["dominant", "sovereign"]
 
 SPECIAL_BADGE_TYPES = (
     STREAK_BADGE_TYPES
     + DAILY_INTENSITY_BADGE_TYPES
     + RELEASE_TIMING_BADGE_TYPES
     + BEHAVIORAL_BADGE_TYPES
+    + META_BADGE_TYPES
 )
 
 # v0.67.2: badge types that are awarded to badge_events but NEVER trigger a mail on live
@@ -190,8 +198,16 @@ SILENT_BADGE_TYPES = {"played_on_day_one"}
 # Special strip layout — 4 category rows, each a (emoji-label, [(badge_type, slot_label)]).
 # Kept parallel to the *_BADGE_TYPES lists so the strip and detection share one order.
 _SPECIAL_STRIP: list[tuple[str, list[tuple[str, str]]]] = [
-    ("🔥 Streaks", [("streak_5_years", "5-year"), ("streak_10_years", "10-year")]),
-    ("⚡ Daily intensity", [("plays_20_in_day", "20 in a day"), ("plays_40_in_day", "40 in a day")]),
+    ("🔥 Streaks", [
+        ("streak_5_years", "5-year"),
+        ("streak_8_years", "8-year"),
+        ("streak_10_years", "10-year"),
+    ]),
+    ("⚡ Daily intensity", [
+        ("plays_20_in_day", "20 in a day"),
+        ("plays_40_in_day", "40 in a day"),
+        ("plays_60_in_day", "60 in a day"),
+    ]),
     ("🎬 Release timing", [
         ("played_on_day_one", "Played on day one"),
         ("day_one_fan", "Day-one fan"),
@@ -202,6 +218,11 @@ _SPECIAL_STRIP: list[tuple[str, list[tuple[str, str]]]] = [
         ("comeback", "Comeback"),
         ("season_regular", "Season regular"),
         ("multi_top", "Multi-top"),
+        ("on_repeat", "On repeat"),
+    ]),
+    ("👑 Rankings meta", [
+        ("dominant", "Dominant"),
+        ("sovereign", "Sovereign"),
     ]),
 ]
 
@@ -802,17 +823,24 @@ class BadgeAwardCollector:
 
     Silent badges (SILENT_BADGE_TYPES, e.g. played_on_day_one) are excluded entirely —
     they are row-only and never mailed, so they never enter the digest.
+
+    v0.74: also coalesces artist badges (entity_type='artist') into the same digest via
+    artist_awards / add_artist. The digest renders a track section then an artist section.
     """
 
     awards: list[tuple[str, str, dict]] = field(default_factory=list)  # (track_uri, badge_type, context)
+    artist_awards: list[tuple[str, str, dict]] = field(default_factory=list)  # (artist_id, badge_type, context)
 
     def add(self, track_uri: str, badge_type: str, context: dict) -> None:
         if badge_type in SILENT_BADGE_TYPES:
             return
         self.awards.append((track_uri, badge_type, context))
 
+    def add_artist(self, artist_id: str, badge_type: str, context: dict) -> None:
+        self.artist_awards.append((artist_id, badge_type, context))
+
     def has_awards(self) -> bool:
-        return len(self.awards) > 0
+        return len(self.awards) > 0 or len(self.artist_awards) > 0
 
 
 def award_special_badge_to_collector(
@@ -839,9 +867,11 @@ def _badge_digest_metric(badge_type: str, context: dict) -> str:
     """Short per-badge context line for the coalesced ingest digest."""
     if badge_type == "streak_5_years":
         return "5-year streak reached"
+    if badge_type == "streak_8_years":
+        return "8-year streak reached"
     if badge_type == "streak_10_years":
         return "10-year streak reached"
-    if badge_type in ("plays_20_in_day", "plays_40_in_day"):
+    if badge_type in ("plays_20_in_day", "plays_40_in_day", "plays_60_in_day"):
         n, day = context.get("plays_that_day"), context.get("window")
         return f"{n} plays on {day}" if n and day else "daily-intensity milestone"
     if badge_type == "comeback":
@@ -857,6 +887,11 @@ def _badge_digest_metric(badge_type: str, context: dict) -> str:
         return f"top 25 of {context.get('count', '?')} seasons"
     if badge_type == "multi_top":
         return f"in {context.get('count', '?')} Top playlists"
+    if badge_type == "on_repeat":
+        return f"{context.get('qualifying_sessions', '?')} loop sessions"
+    if badge_type in ("dominant", "sovereign"):
+        won = context.get("months_won") or []
+        return f"#1 in {len(won)} months" if won else "multiple monthly #1s"
     if badge_type == "played_on_day_one":
         return "played on release day"
     return ""
@@ -930,14 +965,37 @@ def _build_badge_digest(conn, awards: list[tuple[str, str, dict]]) -> tuple[str,
 def send_badge_digest_mail(conn, collector: BadgeAwardCollector) -> bool:
     """Send one coalesced mail for all badges awarded in this ingest run. Returns False and
     sends nothing when the collector has no (non-silent) awards. Non-fatal: a mail failure is
-    logged and swallowed so the ingest cron never fails on notification."""
+    logged and swallowed so the ingest cron never fails on notification.
+
+    v0.74: track badges render first; artist badges (if any) render as a second section
+    built by lib.artist_badges (imported lazily to avoid a module-load cycle)."""
     if not collector.has_awards():
         return False
 
-    n = len(collector.awards)
-    subject = f"music-tracker: {n} new special badge{'s' if n != 1 else ''}"
+    n_track = len(collector.awards)
+    n_artist = len(collector.artist_awards)
+    n = n_track + n_artist
+    subject = f"music-tracker: {n} new badge{'s' if n != 1 else ''}"
     try:
-        html, plaintext, inline_images = _build_badge_digest(conn, collector.awards)
+        html_parts: list[str] = []
+        plain_parts: list[str] = []
+        inline_images: dict[str, bytes] = {}
+
+        if n_track:
+            t_html, t_plain, t_imgs = _build_badge_digest(conn, collector.awards)
+            html_parts.append(t_html)
+            plain_parts.append(t_plain)
+            inline_images.update(t_imgs)
+
+        if n_artist:
+            from lib.artist_badges import build_artist_badge_digest_section
+            a_html, a_plain, a_imgs = build_artist_badge_digest_section(conn, collector.artist_awards)
+            html_parts.append(a_html)
+            plain_parts.append(a_plain)
+            inline_images.update(a_imgs)
+
+        html = "\n".join(html_parts)
+        plaintext = "\n\n".join(plain_parts)
         return _smtp_send_with_inline_images(subject, html, plaintext, inline_images)
     except Exception as e:
         print(f"WARNING: badge digest mail failed: {e}", file=sys.stderr)
@@ -988,7 +1046,7 @@ def detect_streak_badges(conn, batch_track_uris: list[str] | None = None) -> lis
 
     results: list[tuple[str, str, dict]] = []
     for track_uri, run_start, run_len in rows:
-        for n in (5, 10):
+        for n in (5, 8, 10):  # v0.74: 8-year geometric-midpoint tier added
             if run_len < n:
                 continue
             badge_type = f"streak_{n}_years"
@@ -1016,7 +1074,7 @@ def detect_daily_intensity_badges(conn, batch_track_uris: list[str] | None = Non
         batch_params = [batch_track_uris]
 
     results: list[tuple[str, str, dict]] = []
-    for n in (20, 40):
+    for n in (20, 40, 60):  # v0.74: 60-in-a-day extreme tier added
         sql = f"""
         WITH daily AS (
             SELECT sp.track_uri,
@@ -1099,19 +1157,22 @@ def detect_release_timing_badges(conn, batch_track_uris: list[str] | None = None
 
 
 def detect_release_timing_at_50_plays(conn, track_uri: str) -> list[tuple[str, dict]]:
-    """Called when a track just crossed plays_50. Runs three INDEPENDENT window-scoped
-    checks and returns every applicable release-timing badge (possibly several, possibly
+    """Called when a track just crossed plays_50. Runs two INDEPENDENT window-scoped
+    checks and returns every applicable release-timing badge (possibly both, possibly
     none):
 
       - day_one_fan      ≥20 plays ON release day itself (gap 0)
       - release_week_fan ≥50 plays within release week (days 0-7, inclusive of day one)
-      - late_bloomer     first play >730 days after release AND ≥30 plays within the
-                         first 90 days after that first play
 
-    day_one_fan and release_week_fan can BOTH apply (a 50-on-day-0 track earns both — the
-    cascade is by design). late_bloomer is mutually exclusive with them: a >2y gap means
-    zero release-day/week plays. All three are once-per-track. Requires day-precision
-    release_date; returns [] if none apply.
+    Both can apply (a 50-on-day-0 track earns both — the cascade is by design); both are
+    once-per-track and genuinely require ≥50 plays, so they stay gated on this crossing.
+
+    v0.74: late_bloomer is NO LONGER evaluated here. It has no ≥50-total requirement, so
+    gating it on the plays_50 crossing silently dropped qualifiers with 30–49 total plays
+    (audit correctness gap). It now runs independently — see detect_late_bloomer_badges,
+    called directly from the ingest cron like the other release-timing detections.
+
+    Requires day-precision release_date; returns [] if none apply.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -1140,11 +1201,8 @@ def detect_release_timing_at_50_plays(conn, track_uri: str) -> list[tuple[str, d
         return []
 
     release_date = date.fromisoformat(row[0])
-    first_play_at = row[1]
     plays_on_release_day = row[2]
     plays_in_release_week = row[3]
-    first_play_date = first_play_at.astimezone(TZ_AMSTERDAM).date()
-    gap_days = (first_play_date - release_date).days
 
     results: list[tuple[str, dict]] = []
 
@@ -1164,27 +1222,73 @@ def detect_release_timing_at_50_plays(conn, track_uri: str) -> list[tuple[str, d
             "awarded_at": _end_of_day_iso(release_date + timedelta(days=7)),
         }))
 
-    # >2y discovery gap AND a real binge (≥30 plays in first 90 days) → late_bloomer.
-    if gap_days > 730:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM spotify_plays
-                WHERE track_uri = %s
-                  AND played_at BETWEEN %s AND %s
-                """,
-                (track_uri, first_play_at, first_play_at + timedelta(days=90)),
-            )
-            plays_within_90d = cur.fetchone()[0]
-        if plays_within_90d >= 30:
-            results.append(("late_bloomer", {
-                "gap_days": gap_days,
-                "plays_within_90d_of_first_play": plays_within_90d,
-                "release_date": release_date.isoformat(),
-                "first_played": first_play_date.isoformat(),
-                "awarded_at": first_play_at.isoformat(),
-            }))
+    return results
 
+
+def detect_late_bloomer_badges(conn, batch_track_uris: list[str] | None = None) -> list[tuple[str, str, dict]]:
+    """late_bloomer — first play landed >730 days (2y) after release AND ≥30 plays within
+    the first 90 days after that first play. Once per track (NULL window).
+
+    v0.74: standalone, decoupled from the plays_50 gate. late_bloomer has no total-play
+    requirement, so the old "only evaluated at the plays_50 crossing" trigger silently
+    dropped qualifiers that never reach 50 total plays (audit: 19 qualify, only 15 earned).
+    Runs directly against every batch track, mirroring detect_release_timing_badges — a
+    two-mode detector (batch list scopes it; None = full backfill sweep).
+    """
+    where_batch = ""
+    params: list = []
+    if batch_track_uris is not None:
+        where_batch = "AND sp.track_uri = ANY(%s)"
+        params = [batch_track_uris]
+
+    # First find first-play + release-date with a >730d gap, then filter on the 90-day
+    # engagement window. Both in one pass: the correlated COUNT scopes to each track's own
+    # first-play window.
+    sql = f"""
+    WITH firsts AS (
+        SELECT sp.track_uri, MIN(sp.played_at) AS first_play_at
+        FROM spotify_plays sp
+        WHERE sp.track_uri IS NOT NULL
+          {where_batch}
+        GROUP BY sp.track_uri
+    ),
+    gapped AS (
+        SELECT f.track_uri, f.first_play_at, tm.release_date,
+               ((f.first_play_at AT TIME ZONE 'Europe/Amsterdam')::date - tm.release_date::date) AS gap_days
+        FROM firsts f
+        JOIN track_metadata tm ON tm.track_uri = f.track_uri
+        LEFT JOIN badge_events be
+          ON be.entity_type = 'track' AND be.entity_id = f.track_uri
+          AND be.badge_type = 'late_bloomer' AND be.context->>'window' IS NULL
+        WHERE tm.release_date_precision = 'day'
+          AND tm.release_date IS NOT NULL
+          AND be.id IS NULL
+          AND ((f.first_play_at AT TIME ZONE 'Europe/Amsterdam')::date - tm.release_date::date) > 730
+    )
+    SELECT g.track_uri, g.first_play_at, g.release_date, g.gap_days,
+           (SELECT COUNT(*) FROM spotify_plays p
+             WHERE p.track_uri = g.track_uri
+               AND p.played_at BETWEEN g.first_play_at AND g.first_play_at + INTERVAL '90 days'
+           ) AS plays_within_90d
+    FROM gapped g
+    ORDER BY g.track_uri
+    """
+    results: list[tuple[str, str, dict]] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    for track_uri, first_play_at, release_date, gap_days, plays_within_90d in rows:
+        if plays_within_90d < 30:
+            continue
+        first_play_date = first_play_at.astimezone(TZ_AMSTERDAM).date()
+        ctx = {
+            "gap_days": gap_days,
+            "plays_within_90d_of_first_play": plays_within_90d,
+            "release_date": str(release_date),
+            "first_played": first_play_date.isoformat(),
+            "awarded_at": first_play_at.isoformat(),
+        }
+        results.append((track_uri, "late_bloomer", ctx))
     return results
 
 
@@ -1404,15 +1508,139 @@ def detect_multi_top_badge(conn, batch_track_uris: list[str] | None = None) -> l
     return results
 
 
+# ── Detection: on_repeat (loop sessions) ─────────────────────────────────────────
+
+def detect_on_repeat_badges(conn, batch_track_uris: list[str] | None = None) -> list[tuple[str, str, dict]]:
+    """on_repeat — a track played back-to-back (≥10 consecutive plays of the SAME
+    track_uri, no other track in between) in ≥5 separate loop sessions across all history.
+
+    Gaps-and-islands over the global play timeline: a "session" is a maximal run of
+    consecutive plays of one track_uri (a new run starts whenever the previous play was a
+    different track). Runs of length ≥10 qualify; a track with ≥5 such runs earns the
+    badge. Single-fire (NULL window) — it's a threshold-crossing lifetime achievement.
+
+    v0.74. Batch scoping filters the FINAL result to the batch tracks (the run detection
+    itself must see the full ordered timeline, so it can't pre-filter by track_uri).
+    """
+    sql = """
+    WITH consecutive AS (
+        SELECT sp.track_uri, sp.played_at,
+               LAG(sp.track_uri) OVER (ORDER BY sp.played_at) AS prev_uri
+        FROM spotify_plays sp
+        WHERE sp.track_uri IS NOT NULL
+    ),
+    grouped AS (
+        SELECT track_uri, played_at,
+               SUM(CASE WHEN prev_uri IS DISTINCT FROM track_uri THEN 1 ELSE 0 END)
+                   OVER (ORDER BY played_at) AS session_group
+        FROM consecutive
+    ),
+    runs AS (
+        SELECT track_uri, session_group,
+               COUNT(*) AS run_length,
+               MIN(played_at) AS run_start
+        FROM grouped
+        GROUP BY track_uri, session_group
+        HAVING COUNT(*) >= 10
+    )
+    SELECT track_uri,
+           COUNT(*) AS qualifying_sessions,
+           MAX(run_length) AS longest_run,
+           array_agg(run_start ORDER BY run_start) AS starts
+    FROM runs
+    GROUP BY track_uri
+    HAVING COUNT(*) >= 5
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+
+    batch = set(batch_track_uris) if batch_track_uris is not None else None
+    results: list[tuple[str, str, dict]] = []
+    for track_uri, qualifying_sessions, longest_run, starts in rows:
+        if batch is not None and track_uri not in batch:
+            continue
+        if _has_badge(conn, track_uri, "on_repeat"):
+            continue
+        example_dates = [s.astimezone(TZ_AMSTERDAM).date().isoformat() for s in (starts or [])[:3]]
+        # awarded_at = start of the 5th qualifying session (the crossing point).
+        crossing = starts[4] if starts and len(starts) >= 5 else None
+        ctx = {
+            "qualifying_sessions": qualifying_sessions,
+            "longest_run": longest_run,
+            "example_dates": example_dates,
+        }
+        if crossing is not None:
+            ctx["awarded_at"] = crossing.isoformat()
+        results.append((track_uri, "on_repeat", ctx))
+    return results
+
+
+# ── Detection: dominant / sovereign (monthly-#1 meta) ─────────────────────────────
+
+def detect_dominant_sovereign_badges(conn, batch_track_uris: list[str] | None = None) -> list[tuple[str, str, dict]]:
+    """dominant / sovereign — meta-badges over the existing top_1st_month data.
+
+      - dominant  = track was the #1 track of ≥2 different months in history
+      - sovereign = track was the #1 track of ≥3 different months
+
+    Both single-fire (NULL window). awarded_at = the awarded_at of the 2nd (dominant) /
+    3rd (sovereign) monthly-#1 win, i.e. the true crossing time. context.months_won lists
+    every month the track topped, chronologically.
+
+    v0.74. Two-mode: a batch list scopes to those tracks (used by create_snapshots right
+    after a top_1st_month award); None sweeps every qualifying track (backfill).
+    """
+    where_batch = ""
+    params: list = []
+    if batch_track_uris is not None:
+        where_batch = "AND entity_id = ANY(%s)"
+        params = [batch_track_uris]
+
+    sql = f"""
+    SELECT entity_id,
+           array_agg(context->>'window' ORDER BY awarded_at) AS windows,
+           array_agg(awarded_at ORDER BY awarded_at) AS ats
+    FROM badge_events
+    WHERE entity_type = 'track' AND badge_type = 'top_1st_month'
+      {where_batch}
+    GROUP BY entity_id
+    HAVING COUNT(*) >= 2
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    results: list[tuple[str, str, dict]] = []
+    for track_uri, windows, ats in rows:
+        months_won = [w for w in (windows or []) if w]
+        n = len(ats or [])
+        # dominant at the 2nd win.
+        if n >= 2 and not _has_badge(conn, track_uri, "dominant"):
+            results.append((track_uri, "dominant", {
+                "months_won": months_won,
+                "awarded_at": ats[1].isoformat(),
+            }))
+        # sovereign at the 3rd win.
+        if n >= 3 and not _has_badge(conn, track_uri, "sovereign"):
+            results.append((track_uri, "sovereign", {
+                "months_won": months_won,
+                "awarded_at": ats[2].isoformat(),
+            }))
+    return results
+
+
 # ── Per-badge mail template ──────────────────────────────────────────────────────
 
 def _special_subject(badge_type: str, track_name: str, context: dict) -> str:
     window = context.get("window", "")
     return {
         "streak_5_years": f"music-tracker: '{track_name}' just hit a 5-year streak",
+        "streak_8_years": f"music-tracker: '{track_name}' — 8-year streak achievement",
         "streak_10_years": f"music-tracker: '{track_name}' — 10-year streak achievement",
         "plays_20_in_day": f"music-tracker: '{track_name}' — 20 plays in one day ({window})",
         "plays_40_in_day": f"music-tracker: '{track_name}' — 40 plays in one day ({window})",
+        "plays_60_in_day": f"music-tracker: '{track_name}' — 60 plays in one day ({window})",
         "played_on_day_one": f"music-tracker: '{track_name}' played on day one",
         "day_one_fan": f"music-tracker: Day-one fan achievement — '{track_name}'",
         "release_week_fan": f"music-tracker: Release-week fan — '{track_name}'",
@@ -1420,15 +1648,20 @@ def _special_subject(badge_type: str, track_name: str, context: dict) -> str:
         "comeback": f"music-tracker: '{track_name}' is having a comeback",
         "season_regular": f"music-tracker: '{track_name}' — Season regular achievement",
         "multi_top": f"music-tracker: '{track_name}' hit 10+ Top playlists simultaneously",
+        "on_repeat": f"music-tracker: '{track_name}' — On repeat achievement",
+        "dominant": f"music-tracker: '{track_name}' is Dominant (2+ monthly #1s)",
+        "sovereign": f"music-tracker: '{track_name}' is Sovereign (3+ monthly #1s)",
     }[badge_type]
 
 
 # Human-readable headline per badge type, paired with its category emoji at render time.
 _SPECIAL_HEADLINE = {
     "streak_5_years": "5-year listening streak",
+    "streak_8_years": "8-year listening streak",
     "streak_10_years": "10-year listening streak",
     "plays_20_in_day": "20 plays in a single day",
     "plays_40_in_day": "40 plays in a single day",
+    "plays_60_in_day": "60 plays in a single day",
     "played_on_day_one": "Played on day one",
     "day_one_fan": "Day-one fan",
     "release_week_fan": "Release-week fan",
@@ -1436,6 +1669,9 @@ _SPECIAL_HEADLINE = {
     "comeback": "Comeback",
     "season_regular": "Season regular",
     "multi_top": "Multi-top (10+ Top playlists)",
+    "on_repeat": "On repeat (5+ loop sessions)",
+    "dominant": "Dominant (2+ monthly #1s)",
+    "sovereign": "Sovereign (3+ monthly #1s)",
 }
 
 
@@ -1446,9 +1682,11 @@ def _context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
 
     keys: list[tuple[str, str]] = {
         "streak_5_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
+        "streak_8_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
         "streak_10_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
         "plays_20_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
         "plays_40_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
+        "plays_60_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
         "played_on_day_one": [("release_date", "Release date"), ("first_played_at", "First played")],
         "day_one_fan": [("plays_on_release_day", "Plays on release day"), ("release_date", "Release date")],
         "release_week_fan": [("plays_in_release_week", "Plays within release week (day 0-7)"), ("release_date", "Release date")],
@@ -1459,6 +1697,9 @@ def _context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
         "comeback": [("window", "Comeback month"), ("plays_that_month", "Plays that month"), ("dormant_since", "Dormant since")],
         "season_regular": [("count", "Seasons in top 25"), ("seasons_qualified", "Seasons")],
         "multi_top": [("count", "Top playlists"), ("playlists", "In")],
+        "on_repeat": [("qualifying_sessions", "Loop sessions (10+ in a row)"), ("longest_run", "Longest loop"), ("example_dates", "Example dates")],
+        "dominant": [("months_won", "Months won")],
+        "sovereign": [("months_won", "Months won")],
     }.get(badge_type, [])
     rows = []
     for key, label in keys:

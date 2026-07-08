@@ -19,6 +19,15 @@ from lib.badges import (
     detect_daily_intensity_badges,
     detect_release_timing_badges,
     detect_comeback_badges,
+    detect_late_bloomer_badges,   # v0.74: A1 — decoupled from the plays_50 gate
+    detect_on_repeat_badges,      # v0.74: A4
+)
+from lib.artist_badges import (   # v0.74: Part B — artist badges piggyback the same cron
+    award_artist_badge_to_collector,
+    detect_artist_play_milestones,
+    detect_artist_distinct_tracks_milestones,
+    detect_artist_streaks,
+    detect_rediscovery_badges,
 )
 
 
@@ -71,13 +80,40 @@ def main() -> None:
                     detect_daily_intensity_badges,
                     detect_release_timing_badges,
                     detect_comeback_badges,
+                    detect_late_bloomer_badges,   # v0.74: A1 standalone (was plays_50-gated)
+                    detect_on_repeat_badges,       # v0.74: A4
                 ):
                     for track_uri, badge_type, context in detector_fn(conn, batch_track_uris):
                         award_special_badge_to_collector(conn, collector, track_uri, badge_type, context)
 
+                # v0.74: artist badges — resolve the batch's credited artist_ids from
+                # track_metadata, then run the artist detectors (each evaluates over the
+                # artist's FULL history, scoped to just these artists for blast-radius
+                # safety). Coalesced into the same digest via the shared collector.
+                batch_artist_ids: set[str] = set()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT unnest(artist_ids) FROM track_metadata "
+                        "WHERE track_uri = ANY(%s) AND artist_ids IS NOT NULL",
+                        (batch_track_uris,),
+                    )
+                    batch_artist_ids = {row[0] for row in cur.fetchall() if row[0]}
+
+                if batch_artist_ids:
+                    artist_ids_list = list(batch_artist_ids)
+                    for artist_detector in (
+                        detect_artist_play_milestones,
+                        detect_artist_distinct_tracks_milestones,
+                        detect_artist_streaks,
+                        detect_rediscovery_badges,
+                    ):
+                        for artist_id, badge_type, context in artist_detector(conn, artist_ids_list):
+                            award_artist_badge_to_collector(conn, collector, artist_id, badge_type, context)
+
                 if collector.has_awards():
+                    n_awards = len(collector.awards) + len(collector.artist_awards)
                     if send_badge_digest_mail(conn, collector):
-                        print(f"Sent badge digest with {len(collector.awards)} awards.", flush=True)
+                        print(f"Sent badge digest with {n_awards} awards.", flush=True)
         except Exception as e:
             print(
                 f"WARNING: Badge milestone detection/notification failed: {e}",
