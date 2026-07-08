@@ -1,7 +1,7 @@
 """One-off backfill: populate the rolling "My Monthly #1" playlist with its full history.
 
-v0.72: the rolling My Monthly #1 playlist holds the #1 track of every COMPLETED month,
-oldest first (equivalent to the #1 of each Top 25 · Month snapshot). This script materialises
+v0.72.1: the rolling My Monthly #1 playlist holds the #1 track of every COMPLETED month,
+newest first (equivalent to the #1 of each Top 25 · Month snapshot). This script materialises
 that whole chain in one shot — one track per completed month with plays (~112) — so the user
 doesn't have to wait for the monthly cron to build it up one entry at a time.
 
@@ -52,13 +52,13 @@ def main() -> None:
     playcounts = _hydrate_playcounts(conn, uris[:3] + uris[-3:])
 
     print(f"=== backfill My Monthly #1 rolling ({'DRY-RUN' if args.dry_run else 'LIVE'}) ===", flush=True)
-    print(f"Would add {len(uris)} tracks to '{full_name}' in chronological order "
-          "(one per completed month, oldest first).", flush=True)
+    print(f"Would add {len(uris)} tracks to '{full_name}' in reverse-chronological order "
+          "(one per completed month, newest first).", flush=True)
     if uris:
-        print("First 3 (oldest):", flush=True)
+        print("First 3 (newest month):", flush=True)
         for uri in uris[:3]:
             print(f"    {_preview_line(uri, playcounts)}", flush=True)
-        print("Last 3 (newest):", flush=True)
+        print("Last 3 (oldest month):", flush=True)
         for uri in uris[-3:]:
             print(f"    {_preview_line(uri, playcounts)}", flush=True)
 

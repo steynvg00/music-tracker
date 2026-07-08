@@ -864,14 +864,17 @@ def month_number_one_playlists(conn) -> list[PlaylistDefinition]:
 
 
 def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
-    """One PlaylistDefinition — the #1 track of every COMPLETED month, chronological
-    (oldest first, newest appended at the bottom). Grows by one entry each month.
+    """One PlaylistDefinition — the #1 track of every COMPLETED month, reverse-chronological
+    (newest month first, newest prepended at the top). Grows by one entry each month.
+
+    v0.72.1: newest-month-first so Spotify's "Sort by: Recently added" surfaces the most
+    recent monthly #1 at the top. (v0.72 shipped oldest-first, which fought that sort.)
 
     v0.72: the in-progress current month is excluded (its #1 is not final yet), so this
     playlist is the frozen historical chain that grows on the 1st of each month when the
-    just-ended month's #1 becomes final — equivalent to appending the #1 of that month's
+    just-ended month's #1 becomes final — equivalent to prepending the #1 of that month's
     Top 25 · Month snapshot. Refreshed by the monthly 1st-of-month cron. Full-chain replace
-    is idempotent (a missed month self-heals) and produces exactly the append-one semantics
+    is idempotent (a missed month self-heals) and produces exactly the prepend-one semantics
     while the only new element is the just-completed month.
     """
     rows = _monthly_top_one_per_month(conn)  # yr DESC, mo DESC
@@ -879,7 +882,7 @@ def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
     now_local = datetime.now(TZ_AMSTERDAM)
     current_ym = (now_local.year, now_local.month)
     completed = [(yr, mo, uri) for yr, mo, uri in rows if (yr, mo) < current_ym]
-    completed.sort(key=lambda r: (r[0], r[1]))  # chronological ascending (oldest first)
+    completed.sort(key=lambda r: (r[0], r[1]), reverse=True)  # reverse-chronological (newest first)
     all_uris = [uri for _yr, _mo, uri in completed]
 
     def query_fn(_conn):
@@ -890,7 +893,7 @@ def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
             suffix="My Monthly #1",
             description=(
                 "Auto-managed by music-tracker. The #1 track of each completed month, "
-                "oldest first — one new track appended every 1st of the month."
+                "newest first — one new track added to the top every 1st of the month."
             ),
             query_fn=query_fn,
             kind="updating",
