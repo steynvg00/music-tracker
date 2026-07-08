@@ -41,6 +41,24 @@ def main() -> None:
                 if n_sent > 0:
                     print(f"Sent {n_sent} milestone mail(s).", flush=True)
 
+                # v0.73: Recently Added Tracks maintenance — piggybacks on the
+                # 30-min cron after play-milestone detection and before special
+                # badge detection. Non-fatal: a failure here must never fail the
+                # ingest cron. Sends no mail (matches v0.72 quiet-cron convention).
+                try:
+                    from lib.spotify import get_spotify_client
+                    from lib.recently_added_manager import manage_recently_added_tracks
+                    sp = get_spotify_client()
+                    summary = manage_recently_added_tracks(sp, conn)
+                    if summary.get("playlist_found"):
+                        print(
+                            f"[recently-added] Managed {summary['total_tracks_in_playlist']} tracks: "
+                            f"purged {summary['purged_count']}, auto-liked {summary['liked_added_count']}.",
+                            flush=True,
+                        )
+                except Exception as e:
+                    print(f"WARNING: recently added tracks management failed: {e}", file=sys.stderr)
+
                 # v0.67.2: ingest-driven special badges — streaks / daily intensity /
                 # release timing / comeback. Batch-scoped for the same blast-radius safety
                 # as the play-milestone detection above. Instead of one mail per crossing
