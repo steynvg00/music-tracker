@@ -3,7 +3,8 @@
 v0.72: these playlists moved off the weekly refresh onto their own monthly cadence:
   - Top 100 this year   (updating, rank-tracked)
   - Top 100 all-time    (updating, rank-tracked)
-  - My Monthly #1       (rolling chain — appends the just-completed month's #1)
+  - My Monthly #1       (rolling chain — prepends the just-completed month's #1 at the top;
+                         v0.72.1: newest-month-first via a full-chain replace, not a raw append)
 
 Runs AFTER the daily 05:00 create-snapshots cron so the just-ended month is already
 final in spotify_plays (and its Top 25 · Month snapshot exists) before My Monthly #1
