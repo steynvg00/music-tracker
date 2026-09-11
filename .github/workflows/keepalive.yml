@@ -1,0 +1,57 @@
+name: Keepalive
+
+# GitHub disables a repository's scheduled workflows after 60 days of inactivity,
+# and only *pushes* count as activity — scheduled runs themselves do not. This
+# workflow exists solely to push one empty commit a month so that timer never
+# reaches 60 days.
+#
+# Why it exists: on 2026-09-11 every cron in scheduled-ingest.yml was found to
+# have been silent since ~6 September, because the last push to the repo was in
+# July. Roughly 5.5 days of listening history were lost for good —
+# /me/player/recently-played only returns the last 50 tracks.
+#
+# Deliberately a separate workflow file rather than a job inside
+# scheduled-ingest.yml, so that a failure in either one cannot take down the other.
+
+on:
+  schedule:
+    # Monthly, 1st of the month at 07:17 UTC. Minute 17 stays clear of the
+    # every-30-minutes Spotify ingest (which fires on :00 and :30 of every hour),
+    # and 07:00 is past the 03:00-06:00 band where every other cron lives.
+    - cron: "17 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: Push empty keepalive commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure git identity
+        # A bare runner has no user.name / user.email, and git refuses to commit
+        # without them.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Push empty commit to main
+        run: |
+          git commit --allow-empty \
+            -m "chore(keepalive): reset GitHub's 60-day scheduled-workflow inactivity timer" \
+            -m "This commit is intentionally empty and changes nothing. GitHub disables
+          scheduled workflows after 60 days without a push to the repository; scheduled
+          runs do not themselves count as activity. This monthly empty commit keeps the
+          crons in .github/workflows/scheduled-ingest.yml alive. Pushed automatically by
+          .github/workflows/keepalive.yml — safe to ignore."
+          git push origin HEAD:main

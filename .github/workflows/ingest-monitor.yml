@@ -1,0 +1,48 @@
+name: Ingest freshness monitor
+
+# Daily check that the Spotify play ingest is still landing rows. The 2026-09
+# outage was not that the crons stopped — it was that nobody noticed for five
+# days. This workflow is the noticing.
+#
+# Deliberately a separate workflow file rather than a job inside
+# scheduled-ingest.yml: the monitor must keep running even when the thing it
+# monitors is broken.
+
+on:
+  schedule:
+    # Daily at 21:13 UTC (23:13 Europe/Amsterdam). Minute 13 stays clear of the
+    # every-30-minutes Spotify ingest (:00 and :30), and 21:00 is far from the
+    # 03:00-06:00 band where every other cron lives. Late evening also means the
+    # check lands at the end of an active listening day, so a >6h gap really
+    # does mean the ingest is broken rather than that nothing was played.
+    - cron: "13 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-ingest-freshness:
+    name: Check Spotify ingest freshness
+    runs-on: ubuntu-latest
+    concurrency:
+      group: check-ingest-freshness
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check ingest freshness
+        run: uv run python -m scripts.check_ingest_freshness
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
