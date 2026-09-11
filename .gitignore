@@ -223,3 +223,5 @@ __marimo__/
 data/
 data/spotify_extended/
 *.zip
+.DS_Store
+cover_backup/mosaic/

@@ -11,21 +11,29 @@ from __future__ import annotations
 import base64
 import json
 from collections import defaultdict
+from typing import Literal
 
 import streamlit as st
 
 from lib.badges import _badge_png_bytes
+from lib.artist_badges import (
+    ARTIST_BADGE_CATEGORY_ORDER,
+    ARTIST_BADGE_DISPLAY_LABELS,
+    ARTIST_MULTI_FIRE_BADGE_TYPES,
+)
 from lib.db import get_connection
 
 # Category render order: (display name, badge_types in slot order, category emoji).
 # Mirrors the mail Special/Rankings strips and docs/badge_definitions.md categories.
+# v0.74: streak_8_years, plays_60_in_day, on_repeat + a "Rankings meta" row (dominant/sovereign).
 BADGE_CATEGORY_ORDER = [
     ("Play milestones", ["plays_50", "plays_100", "plays_200", "plays_300", "plays_400", "plays_500"], "🏆"),
     ("Rankings", ["top_1st_month", "top_1st_season", "top_1st_year", "top_1st_alltime", "top_1st_decade"], "🥇"),
-    ("Streaks", ["streak_5_years", "streak_10_years"], "🔥"),
-    ("Daily intensity", ["plays_20_in_day", "plays_40_in_day"], "⚡"),
+    ("Rankings meta", ["dominant", "sovereign"], "👑"),
+    ("Streaks", ["streak_5_years", "streak_8_years", "streak_10_years"], "🔥"),
+    ("Daily intensity", ["plays_20_in_day", "plays_40_in_day", "plays_60_in_day"], "⚡"),
     ("Release timing", ["played_on_day_one", "day_one_fan", "release_week_fan", "late_bloomer"], "🎬"),
-    ("Behavioral", ["comeback", "season_regular", "multi_top"], "🎭"),
+    ("Behavioral", ["comeback", "season_regular", "multi_top", "on_repeat"], "🎭"),
 ]
 
 BADGE_DISPLAY_LABELS = {
@@ -33,11 +41,13 @@ BADGE_DISPLAY_LABELS = {
     "plays_300": "300+", "plays_400": "400+", "plays_500": "500+",
     "top_1st_month": "#1 Month", "top_1st_season": "#1 Season",
     "top_1st_year": "#1 Year", "top_1st_alltime": "#1 All-time", "top_1st_decade": "#1 Decade",
-    "streak_5_years": "5-year", "streak_10_years": "10-year",
-    "plays_20_in_day": "20/day", "plays_40_in_day": "40/day",
+    "dominant": "Dominant", "sovereign": "Sovereign",
+    "streak_5_years": "5-year", "streak_8_years": "8-year", "streak_10_years": "10-year",
+    "plays_20_in_day": "20/day", "plays_40_in_day": "40/day", "plays_60_in_day": "60/day",
     "played_on_day_one": "Day one", "day_one_fan": "Day-one fan",
     "release_week_fan": "Release week", "late_bloomer": "Late bloomer",
     "comeback": "Comeback", "season_regular": "Season regular", "multi_top": "Multi-top",
+    "on_repeat": "On repeat",
 }
 
 # Once-per-track-lifetime badges (NULL context window). Canonical aggregation collapses
@@ -45,9 +55,10 @@ BADGE_DISPLAY_LABELS = {
 # is still ONE achievement — its chip shows no ×N and no window line.
 SINGLE_FIRE_BADGE_TYPES = {
     "plays_50", "plays_100", "plays_200", "plays_300", "plays_400", "plays_500",
-    "streak_5_years", "streak_10_years",
+    "dominant", "sovereign",
+    "streak_5_years", "streak_8_years", "streak_10_years",
     "played_on_day_one", "day_one_fan", "release_week_fan", "late_bloomer",
-    "season_regular", "multi_top",
+    "season_regular", "multi_top", "on_repeat",
 }
 
 # Multi-fire badges (per-window rows) — the ×N count and window values are meaningful and
@@ -56,6 +67,13 @@ MULTI_FIRE_BADGE_TYPES = {
     bt for _name, badge_types, _emoji in BADGE_CATEGORY_ORDER
     for bt in badge_types
     if bt not in SINGLE_FIRE_BADGE_TYPES
+}
+
+# v0.74: per-entity-type render config, selected in render_badge_chips.
+# (category_order, display_labels, multi_fire_set).
+_ENTITY_CONFIG = {
+    "track": (BADGE_CATEGORY_ORDER, BADGE_DISPLAY_LABELS, MULTI_FIRE_BADGE_TYPES),
+    "artist": (ARTIST_BADGE_CATEGORY_ORDER, ARTIST_BADGE_DISPLAY_LABELS, ARTIST_MULTI_FIRE_BADGE_TYPES),
 }
 
 
@@ -82,6 +100,30 @@ def _fetch_track_badges(canonical_track_uri: str) -> list[dict]:
             ORDER BY be.badge_type, be.awarded_at ASC
             """,
             (canonical_track_uri,),
+        )
+        return [
+            {"badge_type": bt, "entity_id": eid, "awarded_at": aw, "context": ctx or {}}
+            for bt, eid, aw, ctx in cur.fetchall()
+        ]
+
+
+@st.cache_data(ttl=60)
+def _fetch_artist_badges(artist_id: str) -> list[dict]:
+    """Every badge_event for one artist_id (entity_type='artist'), badge_type-ordered.
+
+    No canonical aggregation — an artist_id is already the single identity (unlike tracks,
+    which fan out across URI variants). Returns picklable plain dicts for st.cache_data.
+    """
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT be.badge_type, be.entity_id, be.awarded_at, be.context
+            FROM badge_events be
+            WHERE be.entity_type = 'artist' AND be.entity_id = %s
+            ORDER BY be.badge_type, be.awarded_at ASC
+            """,
+            (artist_id,),
         )
         return [
             {"badge_type": bt, "entity_id": eid, "awarded_at": aw, "context": ctx or {}}
@@ -126,8 +168,8 @@ def _format_badge_context(badge_type: str, context: dict) -> str:
         return " · ".join(parts)
 
     # ── Streaks — N consecutive calendar years from the run start.
-    if badge_type in ("streak_5_years", "streak_10_years"):
-        n = 5 if badge_type == "streak_5_years" else 10
+    if badge_type in ("streak_5_years", "streak_8_years", "streak_10_years"):
+        n = int(badge_type.split("_")[1])
         start = c.get("streak_start_year")
         if start is not None:
             return f"{n} consecutive years from {start} to {int(start) + n - 1}"
@@ -135,10 +177,32 @@ def _format_badge_context(badge_type: str, context: dict) -> str:
         return f"{n} consecutive years (longest run {longest})"
 
     # ── Daily intensity — "20 plays on 2026-06-04"
-    if badge_type in ("plays_20_in_day", "plays_40_in_day"):
+    if badge_type in ("plays_20_in_day", "plays_40_in_day", "plays_60_in_day"):
         plays = c.get("plays_that_day", "?")
         day = c.get("window", "?")
         return f"{plays} plays on {day}"
+
+    # ── Rankings meta (v0.74)
+    if badge_type in ("dominant", "sovereign"):
+        won = c.get("months_won") or []
+        return f"#1 track of {len(won)} months: {', '.join(won)}" if won else "multiple monthly #1s"
+
+    # ── Artist badges (v0.74)
+    if badge_type.startswith("artist_plays_"):
+        return f"{c.get('total_plays', '?')} cumulative plays · {c.get('distinct_tracks_played', '?')} tracks"
+    if badge_type.startswith("artist_tracks_"):
+        return f"{c.get('distinct_tracks', '?')} distinct tracks · {c.get('cumulative_plays', '?')} plays"
+    if badge_type.startswith("artist_streak_"):
+        yrs = c.get("consecutive_years", "?")
+        start = c.get("streak_start_year")
+        return f"{yrs} consecutive years from {start}" if start is not None else f"{yrs} consecutive years"
+    if badge_type.startswith("top_1st_artist_"):
+        return f"{c.get('window', 'this period')} · {c.get('plays', '?')} plays"
+    if badge_type == "dynasty":
+        tracks = c.get("tracks_in_alltime_top_100") or []
+        return f"{c.get('count', '?')} tracks in the all-time Top 100" + (f": {', '.join(tracks)}" if tracks else "")
+    if badge_type == "rediscovery":
+        return f"{c.get('plays', '?')} plays in {c.get('window', '?')} (dormant since {c.get('last_active', '?')})"
 
     # ── Release timing
     if badge_type == "played_on_day_one":
@@ -179,7 +243,13 @@ def _format_badge_context(badge_type: str, context: dict) -> str:
     return json.dumps(c)
 
 
-def _render_chip(badge_type: str, earned_count: int, earned_windows: list[str] | None = None) -> str:
+def _render_chip(
+    badge_type: str,
+    earned_count: int,
+    earned_windows: list[str] | None = None,
+    labels: dict[str, str] = BADGE_DISPLAY_LABELS,
+    multi_fire_set: set[str] = MULTI_FIRE_BADGE_TYPES,
+) -> str:
     """HTML for a single badge chip.
 
     earned_count == 0  → not earned (desaturated PNG + grey label).
@@ -189,9 +259,11 @@ def _render_chip(badge_type: str, earned_count: int, earned_windows: list[str] |
                          canonical aggregation collapses several URI variants that each
                          earned the badge, the chip shows a plain earned state — no ×N, no
                          windows.
+
+    labels / multi_fire_set are the per-entity-type config (track or artist).
     """
-    label = BADGE_DISPLAY_LABELS[badge_type]
-    is_multi_fire = badge_type in MULTI_FIRE_BADGE_TYPES
+    label = labels[badge_type]
+    is_multi_fire = badge_type in multi_fire_set
     png_bytes = _badge_png_bytes(badge_type, size=64, desaturated=(earned_count == 0))
 
     if png_bytes is None:
@@ -231,31 +303,40 @@ def _render_chip(badge_type: str, earned_count: int, earned_windows: list[str] |
     """
 
 
-def render_badge_chips(conn, canonical_track_uri: str) -> None:
-    """Render the Pokémon-doos badge grid for a canonical track in Streamlit.
+def render_badge_chips(
+    conn,
+    entity_id: str,
+    entity_type: Literal["track", "artist"] = "track",
+) -> None:
+    """Render the Pokémon-doos badge grid for a track or artist in Streamlit.
 
-    Aggregates every badge_event across all URI variants under this canonical, then draws
-    6 category rows (earned in colour + label, not-earned desaturated) followed by a
-    collapsible "Badge details" section. A track with zero earned badges renders only a
-    compact "No badges yet 🎯" line — no empty grid.
+    For tracks, entity_id is the canonical URI and badges are aggregated across all URI
+    variants under it. For artists, entity_id is the Spotify artist_id and badges are read
+    directly (an artist_id is already the single identity). Draws one row per category
+    (earned in colour + label, not-earned desaturated) then a collapsible "Badge details"
+    section; a zero-badge entity renders only a compact "No badges yet 🎯" line.
 
     `conn` is accepted for API symmetry with the other detail renderers; the underlying
-    query is cached in _fetch_track_badges, which manages its own pooled connection.
+    query is cached, managing its own pooled connection.
     """
-    rows = _fetch_track_badges(canonical_track_uri)
+    category_order, labels, multi_fire_set = _ENTITY_CONFIG[entity_type]
+    if entity_type == "artist":
+        rows = _fetch_artist_badges(entity_id)
+    else:
+        rows = _fetch_track_badges(entity_id)
 
     badges_by_type: dict[str, list] = defaultdict(list)
     for r in rows:
         badges_by_type[r["badge_type"]].append((r["entity_id"], r["awarded_at"], r["context"]))
 
-    # Empty state — no clutter for tracks with no achievements.
+    # Empty state — no clutter for entities with no achievements.
     if not badges_by_type:
         st.caption("No badges yet 🎯")
         return
 
     st.subheader("Badges")
 
-    for category_name, badge_types, emoji in BADGE_CATEGORY_ORDER:
+    for category_name, badge_types, emoji in category_order:
         st.markdown(
             f'<h4 style="font-size:14px;color:#888;font-weight:600;margin:12px 0 2px 0;">'
             f'{emoji} {category_name}</h4>',
@@ -267,20 +348,20 @@ def render_badge_chips(conn, canonical_track_uri: str) -> None:
             awards = badges_by_type.get(badge_type, [])
             earned_count = len(awards)
             earned_windows = [ctx.get("window") for _e, _a, ctx in awards if ctx.get("window")]
-            chip_html = _render_chip(badge_type, earned_count, earned_windows or None)
+            chip_html = _render_chip(badge_type, earned_count, earned_windows or None, labels, multi_fire_set)
             with cols[i % ncols]:
                 st.markdown(chip_html, unsafe_allow_html=True)
 
     # ── Details expander ──────────────────────────────────────────────────────
     with st.expander("📋 Badge details", expanded=False):
-        for category_name, badge_types, emoji in BADGE_CATEGORY_ORDER:
+        for category_name, badge_types, emoji in category_order:
             earned_in_category = [(bt, badges_by_type[bt]) for bt in badge_types if bt in badges_by_type]
             if not earned_in_category:
                 continue
             st.markdown(f"**{emoji} {category_name}**")
             for badge_type, awards in earned_in_category:
                 for _entity_id, awarded_at, context in awards:
-                    label = BADGE_DISPLAY_LABELS[badge_type]
+                    label = labels[badge_type]
                     date_str = awarded_at.strftime("%Y-%m-%d")
                     context_str = _format_badge_context(badge_type, context)
                     st.markdown(f"- **{label}** — {date_str}  \n  {context_str}")

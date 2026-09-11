@@ -17,6 +17,7 @@ from views._skeleton import (
 from views._stats_phantom_plays import render_phantom_plays_tab
 from views._stats_album_lookup import render_album_lookup_section
 from views._stats_track_lookup import render_track_lookup_section
+from views._stats_artist_lookup import render_artist_lookup_section
 
 
 @st.cache_data(ttl=60)
@@ -1276,12 +1277,14 @@ with tab_highlights:
 # ── Tab 10: Lookup (Track / Album toggle) ────────────────────────────────────
 
 with tab_tracklookup:
-    lookup_mode = st.radio("Search type", ["Track", "Album"], horizontal=True, key="lookup_mode")
+    lookup_mode = st.radio("Search type", ["Track", "Album", "Artist"], horizontal=True, key="lookup_mode")
     st.divider()
     if lookup_mode == "Track":
         render_track_lookup_section()
-    else:
+    elif lookup_mode == "Album":
         render_album_lookup_section()
+    else:
+        render_artist_lookup_section()
 
 # ── Tab 11: Spotify ───────────────────────────────────────────────────────────
 
