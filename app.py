@@ -31,6 +31,7 @@ with st.sidebar:
 
 stats = st.Page("views/stats.py", title="Stats")
 playlists = st.Page("views/playlist_modification.py", title="Playlist Modification")
+playlist_rules = st.Page("views/playlist_rules.py", title="Playlist Rules")
 
-pg = st.navigation([stats, playlists])
+pg = st.navigation([stats, playlists, playlist_rules])
 pg.run()

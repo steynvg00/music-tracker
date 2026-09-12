@@ -1,3 +1,4 @@
+import inspect
 import psycopg
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -5,7 +6,13 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, _is_top_playlist, _hydrate_playcounts
-from lib.seasons import build_season_description, season_end, season_start, season_display_year
+from lib.seasons import (
+    build_season_description,
+    get_season_containing,
+    season_display_year,
+    season_end,
+    season_start,
+)
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
@@ -29,6 +36,105 @@ AUTO_PLAYLIST_DESCRIPTION_SNAPSHOT = (
 )
 
 
+# ── C1-01: rule categories ────────────────────────────────────────────────────
+#
+# ~200 managed playlists, but only 16 distinct selection rules. Every
+# PlaylistDefinition carries one of these keys in its `category` field; the
+# read-only overview (describe_playlist_categories) groups on it.
+
+CAT_STREAMS_THRESHOLD = "streams_threshold"
+CAT_STREAMS_BAND = "streams_band"
+CAT_TOP_RECENT_30D = "top_recent_30d"
+CAT_TOP_CURRENT_YEAR = "top_current_year"
+CAT_TOP_ALL_TIME = "top_all_time"
+CAT_YEAR_DISCOVERED = "year_discovered"
+CAT_YEAR_RELEASED = "year_released"
+CAT_MONTH_NUMBER_ONE = "month_number_one"
+CAT_ROLLING_MONTHLY_NUMBER_ONE = "rolling_monthly_number_one"
+CAT_FORGOTTEN_FAVORITES = "forgotten_favorites"
+CAT_MISSED_NEW_TRACKS = "missed_new_tracks"
+CAT_SNAPSHOT_MONTH = "snapshot_month"
+CAT_SNAPSHOT_SEASON = "snapshot_season"
+CAT_SNAPSHOT_YEAR = "snapshot_year"
+CAT_SNAPSHOT_ALL_TIME_YEAR = "snapshot_all_time_year"
+CAT_SNAPSHOT_DECADE = "snapshot_decade"
+
+# Maps the create_*_snapshot() period kinds onto their rule category.
+SNAPSHOT_KIND_TO_CATEGORY: dict[str, str] = {
+    "month": CAT_SNAPSHOT_MONTH,
+    "season": CAT_SNAPSHOT_SEASON,
+    "year": CAT_SNAPSHOT_YEAR,
+    "decade": CAT_SNAPSHOT_DECADE,
+}
+
+# Plain-language (Dutch) selection rule per category. Set on every definition via
+# PlaylistDefinition.rule_nl, so the prose travels with the data rather than living
+# only in the presentation layer.
+PLAYLIST_RULE_NL: dict[str, str] = {
+    CAT_STREAMS_THRESHOLD: (
+        "Alle tracks met minimaal N streams, gesorteerd op streams aflopend — N verschilt "
+        "per playlist in de serie."
+    ),
+    CAT_STREAMS_BAND: (
+        "Tracks met 20 t/m 49 streams, gesorteerd op streams aflopend — de "
+        "'nog aan het uitvinden'-tier."
+    ),
+    CAT_TOP_RECENT_30D: (
+        "Je 30 meest gestreamde tracks van de afgelopen 30 dagen, gerekend vanaf het moment "
+        "dat de cron loopt (rollend venster, geen kalendermaand)."
+    ),
+    CAT_TOP_CURRENT_YEAR: (
+        "Je 100 meest gestreamde tracks in het huidige kalenderjaar (Europe/Amsterdam)."
+    ),
+    CAT_TOP_ALL_TIME: "Je 100 meest gestreamde tracks over je hele geschiedenis.",
+    CAT_YEAR_DISCOVERED: (
+        "Leuk gevonden tracks die je in dat jaar voor het eerst hoorde, op datum van de eerste "
+        "stream; de bucket 'Undefined' bevat tracks waarvan de eerste stream binnen 30 dagen na "
+        "de datastart valt, zodat het ontdekkingsjaar niet vast te stellen is."
+    ),
+    CAT_YEAR_RELEASED: (
+        "Leuk gevonden tracks met dat releasejaar, op releasedatum binnen het jaar; alles van "
+        "vóór 2013 valt in één 'Pre-2013'-bucket en releasejaren in de toekomst worden "
+        "overgeslagen."
+    ),
+    CAT_MONTH_NUMBER_ONE: (
+        "Per kalendermaand de #1-track van elk jaar waarin die maand voorkomt, zodat je "
+        "bijvoorbeeld al je januari-nummers-1 naast elkaar hebt."
+    ),
+    CAT_ROLLING_MONTHLY_NUMBER_ONE: (
+        "De #1-track van elke afgeronde maand in één playlist, nieuwste bovenaan; de lopende "
+        "maand blijft eruit tot hij voorbij is."
+    ),
+    CAT_FORGOTTEN_FAVORITES: (
+        "Leuk gevonden tracks met minimaal 50 streams die je in 730 dagen (2 jaar) niet meer "
+        "hebt gehoord, gesorteerd op streams aflopend."
+    ),
+    CAT_MISSED_NEW_TRACKS: (
+        "Nog niet beluisterde releases van 7 tot 60 dagen oud van artiesten die je volgt, "
+        "gesplitst over twee playlists: één voor je top-50 meest gestreamde artiesten van de "
+        "laatste 2 jaar, één voor alle overige gevolgde artiesten."
+    ),
+    CAT_SNAPSHOT_MONTH: (
+        "Je 25 meest gestreamde tracks in die ene afgeronde kalendermaand, eenmalig vastgezet "
+        "en daarna nooit meer herschreven."
+    ),
+    CAT_SNAPSHOT_SEASON: (
+        "Je 50 meest gestreamde tracks in dat astronomische seizoen (winter is benoemd naar het "
+        "eindjaar, dus Winter 2026 loopt van december 2025 tot maart 2026), eenmalig vastgezet."
+    ),
+    CAT_SNAPSHOT_YEAR: (
+        "Je 100 meest gestreamde tracks in dat afgeronde kalenderjaar, eenmalig vastgezet."
+    ),
+    CAT_SNAPSHOT_ALL_TIME_YEAR: (
+        "Je 100 meest gestreamde tracks all-time, gerekend tot en met 31 december van dat jaar — "
+        "een tijdcapsule van hoe je all-time top er op dat moment uitzag."
+    ),
+    CAT_SNAPSHOT_DECADE: (
+        "Je 100 meest gestreamde tracks van dat decennium, eenmalig vastgezet."
+    ),
+}
+
+
 # ── Dataclass ─────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -48,6 +154,18 @@ class PlaylistDefinition:
     # given uris — the SCOPE-CORRECT count shown in the weekly digest (e.g. last-30-day plays
     # for "Top 50 last 30 days"). None → digest renders "—" instead of a misleading all-time count.
     plays_count_fn: Optional[Callable[[psycopg.Connection, list[str]], dict[str, int]]] = None
+    # C1-01: which rule CATEGORY this definition belongs to (one of the CAT_* constants).
+    # ~200 playlists collapse onto a handful of rules; this is the grouping key used by
+    # describe_playlist_categories() for the read-only rules overview.
+    category: str = ""
+    # C1-01: plain-language (Dutch) statement of the category's selection rule. Identical
+    # for every member of a category — deliberately a SECOND source of truth next to the
+    # query source, so drift between the prose and the code becomes visible.
+    rule_nl: str = ""
+    # C1-01: for a series whose members differ in the rule itself (the Streams thresholds,
+    # the two Missed-new-tracks artist sets, the period of a snapshot), the parameter that
+    # distinguishes THIS member. Empty when the category has only one rule.
+    rule_param: str = ""
 
 
 # ── Name/description helpers ───────────────────────────────────────────────────
@@ -406,6 +524,8 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_band(20, 49),
         kind="updating",
         legacy_names=["🤖 Auto · 20-49 plays"],
+        category=CAT_STREAMS_BAND,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_BAND],
     ),
     PlaylistDefinition(
         suffix="50+ plays",
@@ -413,6 +533,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(50),
         kind="updating",
         legacy_names=["🤖 Auto · 50+ plays", "[test] music-tracker — 50+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 50 streams",
     ),
     PlaylistDefinition(
         suffix="100+ plays",
@@ -420,6 +543,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(100),
         kind="updating",
         legacy_names=["🤖 Auto · 100+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 100 streams",
     ),
     PlaylistDefinition(
         suffix="200+ plays",
@@ -427,6 +553,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(200),
         kind="updating",
         legacy_names=["🤖 Auto · 200+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 200 streams",
     ),
     PlaylistDefinition(
         suffix="300+ plays",
@@ -434,6 +563,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(300),
         kind="updating",
         legacy_names=["🤖 Auto · 300+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 300 streams",
     ),
     PlaylistDefinition(
         suffix="400+ plays",
@@ -441,6 +573,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(400),
         kind="updating",
         legacy_names=["🤖 Auto · 400+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 400 streams",
     ),
     PlaylistDefinition(
         suffix="500+ plays",
@@ -448,6 +583,9 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         query_fn=query_plays_threshold_at_least(500),
         kind="updating",
         legacy_names=["🤖 Auto · 500+ plays"],
+        category=CAT_STREAMS_THRESHOLD,
+        rule_nl=PLAYLIST_RULE_NL[CAT_STREAMS_THRESHOLD],
+        rule_param="minimaal 500 streams",
     ),
     PlaylistDefinition(
         suffix="Top 30 last 30 days",  # v0.72: was "Top 50 last 30 days" (resize 50→30)
@@ -458,6 +596,8 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         # v0.72: rename migrates the existing Spotify playlist in place (id/followers kept).
         legacy_names=["Top 50 last 30 days · Auto 🤖🔄", "🤖 Auto · Top 50 last 30 days"],
         plays_count_fn=count_plays_in_window(_WINDOW_LAST_30_DAYS),
+        category=CAT_TOP_RECENT_30D,
+        rule_nl=PLAYLIST_RULE_NL[CAT_TOP_RECENT_30D],
     ),
     PlaylistDefinition(
         suffix="Top 100 this year",
@@ -467,6 +607,8 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
         legacy_names=["🤖 Auto · Top 100 this year"],
         plays_count_fn=count_plays_in_window(_WINDOW_THIS_YEAR),
+        category=CAT_TOP_CURRENT_YEAR,
+        rule_nl=PLAYLIST_RULE_NL[CAT_TOP_CURRENT_YEAR],
     ),
     PlaylistDefinition(
         suffix="Top 100 all-time",
@@ -476,6 +618,8 @@ STATIC_PLAYLISTS: list[PlaylistDefinition] = [
         cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
         legacy_names=["🤖 Auto · Top 100 all-time"],
         plays_count_fn=count_plays_in_window(),  # all-time window (no filter)
+        category=CAT_TOP_ALL_TIME,
+        rule_nl=PLAYLIST_RULE_NL[CAT_TOP_ALL_TIME],
     ),
 ]
 
@@ -542,6 +686,13 @@ def year_discovered_playlists(conn) -> list[PlaylistDefinition]:
                 description=description,
                 query_fn=query_year_discovered_tracks(discovered_year),
                 kind="updating",
+                category=CAT_YEAR_DISCOVERED,
+                rule_nl=PLAYLIST_RULE_NL[CAT_YEAR_DISCOVERED],
+                rule_param=(
+                    "ontdekkingsjaar onbekend (eerste stream binnen 30 dagen na de datastart)"
+                    if discovered_year == "Undefined"
+                    else f"ontdekkingsjaar {discovered_year}"
+                ),
             )
         )
 
@@ -597,6 +748,13 @@ def year_released_playlists(conn) -> list[PlaylistDefinition]:
                 description=description,
                 query_fn=query_year_released_tracks(release_bucket),
                 kind="updating",
+                category=CAT_YEAR_RELEASED,
+                rule_nl=PLAYLIST_RULE_NL[CAT_YEAR_RELEASED],
+                rule_param=(
+                    "releasejaar vóór 2013"
+                    if release_bucket == "Pre-2013"
+                    else f"releasejaar {release_bucket}"
+                ),
             )
         )
 
@@ -642,6 +800,9 @@ def monthly_top_snapshots(conn) -> list[PlaylistDefinition]:
                 query_fn=query_top_in_month(yr, mo, limit=25),
                 kind="snapshot",
                 max_tracks=25,
+                category=CAT_SNAPSHOT_MONTH,
+                rule_nl=PLAYLIST_RULE_NL[CAT_SNAPSHOT_MONTH],
+                rule_param=f"periode {month_name} {yr}",
             )
         )
     return definitions
@@ -721,6 +882,9 @@ def seasonal_top_snapshots(conn) -> list[PlaylistDefinition]:
                     query_fn=query_top_in_date_range(start, end, limit=50),
                     kind="snapshot",
                     max_tracks=50,
+                    category=CAT_SNAPSHOT_SEASON,
+                    rule_nl=PLAYLIST_RULE_NL[CAT_SNAPSHOT_SEASON],
+                    rule_param=f"periode {name} {year}",
                 )
             )
 
@@ -753,6 +917,9 @@ def yearly_top_snapshots(conn) -> list[PlaylistDefinition]:
                 query_fn=query_top_in_year(year, limit=100),
                 kind="snapshot",
                 max_tracks=100,
+                category=CAT_SNAPSHOT_YEAR,
+                rule_nl=PLAYLIST_RULE_NL[CAT_SNAPSHOT_YEAR],
+                rule_param=f"periode {year}",
             )
         )
     return definitions
@@ -785,6 +952,9 @@ def all_time_top_yearly_snapshots(conn) -> list[PlaylistDefinition]:
                 query_fn=query_top_through_year_end(year, limit=100),
                 kind="snapshot",
                 max_tracks=100,
+                category=CAT_SNAPSHOT_ALL_TIME_YEAR,
+                rule_nl=PLAYLIST_RULE_NL[CAT_SNAPSHOT_ALL_TIME_YEAR],
+                rule_param=f"peildatum 31 dec {year}",
             )
         )
     return definitions
@@ -857,6 +1027,9 @@ def month_number_one_playlists(conn) -> list[PlaylistDefinition]:
                 description=_MONTHLY_NUMBER_ONE_DESCRIPTION,
                 query_fn=make_query_fn(month_uris),
                 kind="updating",
+                category=CAT_MONTH_NUMBER_ONE,
+                rule_nl=PLAYLIST_RULE_NL[CAT_MONTH_NUMBER_ONE],
+                rule_param=f"kalendermaand {month_name}",
             )
         )
 
@@ -898,6 +1071,8 @@ def rolling_monthly_number_one_playlist(conn) -> list[PlaylistDefinition]:
             query_fn=query_fn,
             kind="updating",
             cadence="monthly",  # v0.72: weekly → monthly 1st-of-month refresh
+            category=CAT_ROLLING_MONTHLY_NUMBER_ONE,
+            rule_nl=PLAYLIST_RULE_NL[CAT_ROLLING_MONTHLY_NUMBER_ONE],
         )
     ]
 
@@ -948,6 +1123,8 @@ def forgotten_favorites_playlist(conn) -> list[PlaylistDefinition]:
             query_fn=query_fn,
             kind="updating",
             cadence="mid_month",  # v0.72: weekly → 15th-of-month refresh
+            category=CAT_FORGOTTEN_FAVORITES,
+            rule_nl=PLAYLIST_RULE_NL[CAT_FORGOTTEN_FAVORITES],
         )
     ]
 
@@ -1021,6 +1198,12 @@ def missed_new_tracks_popular_playlist(conn, sp) -> list[PlaylistDefinition]:
             query_fn=query_fn,
             kind="updating",
             cadence="daily",  # v0.72: weekly → daily refresh
+            category=CAT_MISSED_NEW_TRACKS,
+            rule_nl=PLAYLIST_RULE_NL[CAT_MISSED_NEW_TRACKS],
+            rule_param=(
+                f"top-{_MISSED_NEW_TRACKS_POPULAR_TOP_N} meest gestreamde artiesten "
+                "(laatste 2 jaar)"
+            ),
         )
     ]
 
@@ -1047,6 +1230,12 @@ def missed_new_tracks_other_playlist(conn, sp) -> list[PlaylistDefinition]:
             query_fn=query_fn,
             kind="updating",
             cadence="daily",  # v0.72: weekly → daily refresh
+            category=CAT_MISSED_NEW_TRACKS,
+            rule_nl=PLAYLIST_RULE_NL[CAT_MISSED_NEW_TRACKS],
+            rule_param=(
+                f"gevolgde artiesten buiten de top-{_MISSED_NEW_TRACKS_POPULAR_TOP_N} "
+                "meest gestreamde"
+            ),
         )
     ]
 
@@ -1201,6 +1390,9 @@ def _create_period_snapshot(sp, user_id, conn, kind: str, identifier) -> tuple[s
         query_fn=lambda _conn: [],  # unused — tracks come from rank_period_tracks
         kind="snapshot",
         max_tracks=spec["limit"],
+        category=SNAPSHOT_KIND_TO_CATEGORY[kind],
+        rule_nl=PLAYLIST_RULE_NL[SNAPSHOT_KIND_TO_CATEGORY[kind]],
+        rule_param=f"periode {spec['display_name']}",
     )
     ranked_tracks = rank_period_tracks(conn, kind, identifier)
     uris = [t["track_uri"] for t in ranked_tracks]
@@ -1279,6 +1471,9 @@ def get_updating_definitions(conn) -> list[PlaylistDefinition]:
         query_fn=lambda _: [],
         kind="updating",
         cadence="daily",
+        category=CAT_MISSED_NEW_TRACKS,
+        rule_nl=PLAYLIST_RULE_NL[CAT_MISSED_NEW_TRACKS],
+        rule_param="top-50 meest gestreamde artiesten (laatste 2 jaar)",
     ))
     defs.append(PlaylistDefinition(
         suffix="Missed new tracks · other artists",
@@ -1286,6 +1481,9 @@ def get_updating_definitions(conn) -> list[PlaylistDefinition]:
         query_fn=lambda _: [],
         kind="updating",
         cadence="daily",
+        category=CAT_MISSED_NEW_TRACKS,
+        rule_nl=PLAYLIST_RULE_NL[CAT_MISSED_NEW_TRACKS],
+        rule_param="gevolgde artiesten buiten de top-50 meest gestreamde",
     ))
     return defs
 
@@ -1632,3 +1830,535 @@ def replace_playlist_tracks(sp, playlist_id: str, uris: list[str]) -> None:
         sp.playlist_add_items(playlist_id, batch)
         print("[playlists]   Batch added.", flush=True)
     print("[playlists] Replace complete.", flush=True)
+
+
+# ── C1-01: read-only rule/schedule overview ───────────────────────────────────
+#
+# describe_playlist_categories() answers one question: "for each KIND of managed
+# playlist, what is the selection rule and how often does it refresh?"
+#
+# Deliberately pure data: no Streamlit, no formatting, no writes, no Spotify. The
+# Streamlit rendering on top of it is throwaway (the frontend moves to SvelteKit),
+# this function is not.
+#
+# The category → cron mapping below did not previously exist anywhere: playlist
+# definitions live in this module, cron times live in
+# .github/workflows/scheduled-ingest.yml, and nothing connected them. It was traced
+# workflow job → script → the subset of the registry that script actually processes:
+#
+#   0 6 * * 1   ingest                      scripts/update_managed_playlists.py
+#                                           kind != snapshot AND cadence == "weekly"
+#   0 6 1 * *   monthly-playlist-refresh    scripts/monthly_playlist_refresh.py
+#                                           kind != snapshot AND cadence == "monthly"
+#   0 6 15 * *  mid-month-playlist-refresh  scripts/mid_month_playlist_refresh.py
+#                                           kind != snapshot AND cadence == "mid_month"
+#   0 3 * * *   daily-missed-tracks         scripts/daily_missed_tracks_refresh.py
+#                                           kind != snapshot AND cadence == "daily"
+#   0 5 * * *   create-snapshots            scripts/create_snapshots.py
+#                                           month/season/year/decade period-ends only
+#
+# NOTE the gap this makes visible: scripts/create_snapshots.py dispatches on
+# "month" | "season" | "year" | "decade" only. There is no "alltime" kind anywhere
+# in the creation path, so CAT_SNAPSHOT_ALL_TIME_YEAR ("Top 100 · All-Time · YYYY")
+# is touched by NO cron. The 9 that exist were created by the pre-v0.65 weekly path,
+# which no longer creates snapshots. See that category's `notes`.
+
+@dataclass(frozen=True)
+class QuerySource:
+    """The source of one function that carries a category's selection SQL."""
+    function: str      # qualified function name, e.g. "lib.playlists.query_top_in_month"
+    source: str         # inspect.getsource() output ("" if unavailable)
+    error: str = ""     # why the source is unavailable ("" when fine)
+
+
+@dataclass(frozen=True)
+class PlaylistCategoryVariant:
+    """One member of a series whose members differ in the rule itself."""
+    label: str          # the PlaylistDefinition suffix, e.g. "50+ plays"
+    full_name: str      # the name as it appears on Spotify
+    rule_param: str     # what differs, e.g. "minimaal 50 streams"
+
+
+@dataclass(frozen=True)
+class PlaylistCategory:
+    """One rule category: what it selects, how it is named, when it refreshes."""
+    key: str
+    name: str                       # as a user would say it
+    source: str                     # factory/constant that produces it
+    kind: str                       # "updating" | "snapshot"
+    playlist_count: int             # how many playlists currently fall under it
+    name_form: str                  # suffix form as it appears on Spotify
+    rule_nl: str                    # plain-language rule (primary)
+    query_sources: list[QuerySource]  # raw query source (secondary)
+    schedule_kind: str              # "refresh" | "next_creation" | "none"
+    schedule_nl: str                # refresh frequency, or when the next one is created
+    next_creation_nl: str           # concrete next snapshot moment ("" for updating)
+    cron: str                       # cron expression ("" if no cron touches it)
+    cron_job: str                   # workflow job name ("" if none)
+    cron_script: str                # script the job invokes ("" if none)
+    member_variation: str           # how members differ ("" if they don't)
+    variants: list[PlaylistCategoryVariant]  # populated where a table is warranted
+    example_names: list[str]        # up to 3 current full playlist names
+    notes: str                      # caveats/findings worth reading
+
+
+@dataclass(frozen=True)
+class _CategorySpec:
+    """Static metadata per category — the half that can't be read off a definition."""
+    key: str
+    name: str
+    source: str
+    kind: str
+    name_form: str
+    schedule_kind: str
+    schedule_nl: str
+    cron: str
+    cron_job: str
+    cron_script: str
+    query_source_fns: tuple
+    member_variation: str = ""
+    variant_table: bool = False
+    notes: str = ""
+
+
+_WEEKLY_CRON = ("0 6 * * 1", "ingest", "scripts/update_managed_playlists.py")
+_MONTHLY_CRON = ("0 6 1 * *", "monthly-playlist-refresh", "scripts/monthly_playlist_refresh.py")
+_MID_MONTH_CRON = ("0 6 15 * *", "mid-month-playlist-refresh", "scripts/mid_month_playlist_refresh.py")
+_DAILY_CRON = ("0 3 * * *", "daily-missed-tracks", "scripts/daily_missed_tracks_refresh.py")
+_SNAPSHOT_CRON = ("0 5 * * *", "create-snapshots", "scripts/create_snapshots.py")
+
+_WEEKLY_NL = "elke maandag 06:00 UTC"
+_MONTHLY_NL = "de 1e van elke maand om 06:00 UTC"
+_MID_MONTH_NL = "de 15e van elke maand om 06:00 UTC"
+_DAILY_NL = "elke dag 03:00 UTC"
+
+_SNAPSHOT_CRON_NOTE = (
+    "De create-snapshots cron draait elke dag om 05:00 UTC maar doet niets tenzij er de dag "
+    "ervoor een periode is afgelopen."
+)
+
+CATEGORY_SPECS: list[_CategorySpec] = [
+    _CategorySpec(
+        key=CAT_STREAMS_THRESHOLD,
+        name="Streams-drempel 50+ t/m 500+",
+        source="query_plays_threshold_at_least() via STATIC_PLAYLISTS",
+        kind="updating",
+        name_form="{N}+ plays" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(query_plays_threshold_at_least,),
+        member_variation="Eén regel met een oplopende drempel: 50, 100, 200, 300, 400 en 500 streams.",
+        variant_table=True,
+    ),
+    _CategorySpec(
+        key=CAT_STREAMS_BAND,
+        name="Streams-band 20–49",
+        source="query_plays_threshold_band(20, 49) via STATIC_PLAYLISTS",
+        kind="updating",
+        name_form="20-49 plays" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(query_plays_threshold_band,),
+        notes=(
+            "Apart van de drempel-serie omdat de SQL echt verschilt: BETWEEN 20 AND 49 in plaats "
+            "van >= N. Het is de enige categorie met een bovengrens."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_TOP_RECENT_30D,
+        name="Top 30 laatste 30 dagen",
+        source="query_top_recent(days=30, limit=30) via STATIC_PLAYLISTS",
+        kind="updating",
+        name_form="Top 30 last 30 days" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(query_top_recent,),
+        notes=(
+            "Het venster is rollend vanaf NOW() op het moment van de cron-run, niet de laatste "
+            "30 kalenderdagen tot middernacht."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_TOP_CURRENT_YEAR,
+        name="Top 100 dit jaar",
+        source="query_top_current_year(limit=100) via STATIC_PLAYLISTS",
+        kind="updating",
+        name_form="Top 100 this year" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_MONTHLY_NL,
+        cron=_MONTHLY_CRON[0], cron_job=_MONTHLY_CRON[1], cron_script=_MONTHLY_CRON[2],
+        query_source_fns=(query_top_current_year,),
+        notes=(
+            "Verschuift op 1 januari naar het nieuwe jaar: de eerste refresh van een jaar leegt "
+            "de playlist vrijwel volledig."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_TOP_ALL_TIME,
+        name="Top 100 all-time",
+        source="query_top_all_time(limit=100) via STATIC_PLAYLISTS",
+        kind="updating",
+        name_form="Top 100 all-time" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_MONTHLY_NL,
+        cron=_MONTHLY_CRON[0], cron_job=_MONTHLY_CRON[1], cron_script=_MONTHLY_CRON[2],
+        query_source_fns=(query_top_all_time,),
+    ),
+    _CategorySpec(
+        key=CAT_YEAR_DISCOVERED,
+        name="Ontdekt per jaar",
+        source="year_discovered_playlists()",
+        kind="updating",
+        name_form="{jaar} · Discovered" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(query_year_discovered_tracks,),
+        member_variation=(
+            "Eén playlist per ontdekkingsjaar, plus een afwijkende 'Undefined'-bucket die een "
+            "eigen SQL-tak heeft (eerste stream binnen 30 dagen na de datastart)."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_YEAR_RELEASED,
+        name="Uitgebracht per jaar",
+        source="year_released_playlists()",
+        kind="updating",
+        name_form="{jaar} · Released" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(query_year_released_tracks,),
+        member_variation=(
+            "Eén playlist per releasejaar vanaf 2013, plus een verzamelbucket 'Pre-2013' die "
+            "een eigen SQL-tak heeft (alles met release_year < 2013)."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_MONTH_NUMBER_ONE,
+        name="Mijn #1 per kalendermaand",
+        source="month_number_one_playlists()",
+        kind="updating",
+        name_form="My {maand} #1" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_WEEKLY_NL,
+        cron=_WEEKLY_CRON[0], cron_job=_WEEKLY_CRON[1], cron_script=_WEEKLY_CRON[2],
+        query_source_fns=(_monthly_top_one_per_month, month_number_one_playlists),
+        member_variation="Eén playlist per kalendermaand: januari t/m december, 12 stuks.",
+        notes=(
+            "Afwijkend van de andere updating playlists: de query_fn geeft een lijst terug die "
+            "bij het bouwen van de definitie al is berekend, de SQL zit in "
+            "_monthly_top_one_per_month(). Deze categorie neemt de lopende, nog niet afgeronde "
+            "maand WEL mee — de #1 van de huidige maand kan dus nog wisselen."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_ROLLING_MONTHLY_NUMBER_ONE,
+        name="My Monthly #1 (doorlopende keten)",
+        source="rolling_monthly_number_one_playlist()",
+        kind="updating",
+        name_form="My Monthly #1" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_MONTHLY_NL,
+        cron=_MONTHLY_CRON[0], cron_job=_MONTHLY_CRON[1], cron_script=_MONTHLY_CRON[2],
+        query_source_fns=(_monthly_top_one_per_month, rolling_monthly_number_one_playlist),
+        notes=(
+            "Technisch een updating playlist (de hele keten wordt elke maand opnieuw "
+            "weggeschreven), in de praktijk groeit hij met één track per maand. De lopende maand "
+            "blijft eruit, in tegenstelling tot 'Mijn #1 per kalendermaand'."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_FORGOTTEN_FAVORITES,
+        name="Forgotten favorites",
+        source="forgotten_favorites_playlist()",
+        kind="updating",
+        name_form="Forgotten favorites" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_MID_MONTH_NL,
+        cron=_MID_MONTH_CRON[0], cron_job=_MID_MONTH_CRON[1], cron_script=_MID_MONTH_CRON[2],
+        query_source_fns=(forgotten_favorites_playlist,),
+        notes=(
+            "De docstring in de code zegt nog '365 days', maar de constante "
+            "_FORGOTTEN_FAVORITES_UNTOUCHED_DAYS staat sinds v0.72 op 730. De 730 klopt; de "
+            "docstring is achtergebleven."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_MISSED_NEW_TRACKS,
+        name="Missed new tracks",
+        source="missed_new_tracks_popular_playlist() + missed_new_tracks_other_playlist()",
+        kind="updating",
+        name_form="Missed new tracks · {populaire|overige} artiesten" + UPDATING_NAME_SUFFIX,
+        schedule_kind="refresh",
+        schedule_nl=_DAILY_NL,
+        cron=_DAILY_CRON[0], cron_job=_DAILY_CRON[1], cron_script=_DAILY_CRON[2],
+        query_source_fns=(_get_missed_split,),
+        member_variation=(
+            "Eén regel met één parameter die verschilt: de artiestenset. 'popular artists' = je "
+            "top-50 meest gestreamde artiesten van de laatste 2 jaar, 'other artists' = alle "
+            "overige gevolgde artiesten."
+        ),
+        variant_table=True,
+        notes=(
+            "De enige categorie die de Spotify API nodig heeft (gevolgde artiesten + hun recente "
+            "releases), dus de enige waarvan de inhoud niet uit Postgres alleen te bepalen is. In "
+            "het dashboard staan hiervoor stubs met een lege query. De echte selectie zit in "
+            "lib/missed_new_tracks.py:find_missed_tracks_classified(). Deze cron deelt zijn "
+            "03:00-trigger met de liked-songs sync."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_SNAPSHOT_MONTH,
+        name="Top 25 per maand",
+        source="monthly_top_snapshots() — aangemaakt via create_month_snapshot()",
+        kind="snapshot",
+        name_form="Top 25 · {maand} {jaar}" + SNAPSHOT_NAME_SUFFIX,
+        schedule_kind="next_creation",
+        schedule_nl="de 1e van elke maand om 05:00 UTC, voor de afgelopen maand",
+        cron=_SNAPSHOT_CRON[0], cron_job=_SNAPSHOT_CRON[1], cron_script=_SNAPSHOT_CRON[2],
+        query_source_fns=(query_top_in_month,),
+        notes=(
+            _SNAPSHOT_CRON_NOTE + " De aangemaakte playlist wordt gevuld via "
+            "snapshot_period_spec('month', …) + _ranked_with_plays(), niet via de query_fn "
+            "hierboven; die twee paden hebben voor maanden dezelfde WHERE-clause."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_SNAPSHOT_SEASON,
+        name="Top 50 per seizoen",
+        source="seasonal_top_snapshots() — aangemaakt via create_season_snapshot()",
+        kind="snapshot",
+        name_form="Top 50 · {seizoen} {jaar}" + SNAPSHOT_NAME_SUFFIX,
+        schedule_kind="next_creation",
+        schedule_nl=(
+            "de dag na het einde van een seizoen om 05:00 UTC (rond 20 mrt, 21 jun, 22 sep en "
+            "21 dec), voor het afgelopen seizoen"
+        ),
+        cron=_SNAPSHOT_CRON[0], cron_job=_SNAPSHOT_CRON[1], cron_script=_SNAPSHOT_CRON[2],
+        query_source_fns=(query_top_in_date_range, seasonal_top_snapshots),
+        notes=(
+            _SNAPSHOT_CRON_NOTE + " LET OP — twee bronnen van waarheid voor de seizoensgrenzen: "
+            "de cron die de playlist aanmaakt gebruikt de astronomische tabel in lib/seasons.py "
+            "(exacte equinox/zonnewende per jaar), terwijl seasonal_top_snapshots() hierboven "
+            "vaste datums hardcodeert (21 dec – 20 mrt, 21 mrt – 20 jun, 21 jun – 22 sep, "
+            "23 sep – 20 dec). Die lopen in sommige jaren een dag uit elkaar. De werkelijk "
+            "aangemaakte playlists volgen lib/seasons.py; de definities hierboven worden alleen "
+            "door het dashboard gebruikt."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_SNAPSHOT_YEAR,
+        name="Top 100 per jaar",
+        source="yearly_top_snapshots() — aangemaakt via create_year_snapshot()",
+        kind="snapshot",
+        name_form="Top 100 · {jaar}" + SNAPSHOT_NAME_SUFFIX,
+        schedule_kind="next_creation",
+        schedule_nl="1 januari om 05:00 UTC, voor het afgelopen kalenderjaar",
+        cron=_SNAPSHOT_CRON[0], cron_job=_SNAPSHOT_CRON[1], cron_script=_SNAPSHOT_CRON[2],
+        query_source_fns=(query_top_in_year,),
+        notes=_SNAPSHOT_CRON_NOTE,
+    ),
+    _CategorySpec(
+        key=CAT_SNAPSHOT_ALL_TIME_YEAR,
+        name="Top 100 all-time per jaareinde",
+        source="all_time_top_yearly_snapshots() — GEEN create_*_snapshot()",
+        kind="snapshot",
+        name_form="Top 100 · All-Time · {jaar}" + SNAPSHOT_NAME_SUFFIX,
+        schedule_kind="none",
+        schedule_nl="nooit — geen enkele cron maakt deze categorie aan",
+        cron="", cron_job="", cron_script="",
+        query_source_fns=(query_top_through_year_end,),
+        notes=(
+            "BEVINDING: deze categorie wordt door geen enkele cron aangeraakt. "
+            "scripts/create_snapshots.py dispatcht alleen op 'month', 'season', 'year' en "
+            "'decade'; snapshot_period_spec() kent geen 'alltime'-kind en zou erop een "
+            "ValueError gooien. De bestaande playlists zijn aangemaakt door het oude wekelijkse "
+            "pad, dat sinds v0.65 (2 juli 2026) geen snapshots meer maakt. Er komt dus op "
+            "1 januari 2027 géén 'Top 100 · All-Time · 2026' bij, en zonder codewijziging ook "
+            "nooit daarna. De definities hieronder bestaan nog wel en worden door het dashboard "
+            "gebruikt, wat het gat maskeert."
+        ),
+    ),
+    _CategorySpec(
+        key=CAT_SNAPSHOT_DECADE,
+        name="Top 100 per decennium",
+        source="snapshot_period_spec('decade', …) + create_decade_snapshot() — geen definition-builder",
+        kind="snapshot",
+        name_form="Top 100 · {decennium}s" + SNAPSHOT_NAME_SUFFIX,
+        schedule_kind="next_creation",
+        schedule_nl=(
+            "1 januari van een nieuw decennium om 05:00 UTC, voor het afgelopen decennium"
+        ),
+        cron=_SNAPSHOT_CRON[0], cron_job=_SNAPSHOT_CRON[1], cron_script=_SNAPSHOT_CRON[2],
+        query_source_fns=(snapshot_period_spec, _ranked_with_plays),
+        notes=(
+            _SNAPSHOT_CRON_NOTE + " Nul playlists is hier geen fout: de eerste decennium-snapshot "
+            "wordt pas op 1 januari 2030 aangemaakt (voor de 2020s). Anders dan de andere "
+            "snapshot-categorieën heeft deze géén *_snapshots() definition-builder, dus hij komt "
+            "ook niet voor in get_snapshot_definitions() of elders in het dashboard."
+        ),
+    ),
+]
+
+_DUTCH_MONTHS_NL = [
+    "januari", "februari", "maart", "april", "mei", "juni",
+    "juli", "augustus", "september", "oktober", "november", "december",
+]
+
+
+def _format_date_nl(d: date) -> str:
+    """'1 oktober 2026' — for the next-creation moments."""
+    return f"{d.day} {_DUTCH_MONTHS_NL[d.month - 1]} {d.year}"
+
+
+def _next_snapshot_creation(category_key: str, today: date) -> str:
+    """When the NEXT snapshot in this category gets created, and which one it will be.
+
+    Snapshots are written once and never rewritten, so a refresh frequency is the wrong
+    frame for them. Returns "" for a category with no creation path.
+    """
+    if category_key == CAT_SNAPSHOT_MONTH:
+        creation = (
+            date(today.year + 1, 1, 1) if today.month == 12
+            else date(today.year, today.month + 1, 1)
+        )
+        period = (today.year, today.month)
+    elif category_key == CAT_SNAPSHOT_SEASON:
+        try:
+            season, start_year = get_season_containing(today)
+            creation = season_end(season, start_year) + timedelta(days=1)
+        except ValueError:
+            return ""  # outside the 2015-2040 boundary table
+        period = (season, start_year)
+    elif category_key == CAT_SNAPSHOT_YEAR:
+        creation = date(today.year + 1, 1, 1)
+        period = today.year
+    elif category_key == CAT_SNAPSHOT_DECADE:
+        next_decade_start = (today.year // 10 + 1) * 10
+        creation = date(next_decade_start, 1, 1)
+        period = next_decade_start - 10
+    else:
+        return ""
+
+    kind = {
+        CAT_SNAPSHOT_MONTH: "month",
+        CAT_SNAPSHOT_SEASON: "season",
+        CAT_SNAPSHOT_YEAR: "year",
+        CAT_SNAPSHOT_DECADE: "decade",
+    }[category_key]
+    spec = snapshot_period_spec(kind, period)
+    full_name = f"{spec['suffix']}{SNAPSHOT_NAME_SUFFIX}"
+    return f"{_format_date_nl(creation)} om 05:00 UTC → \"{full_name}\""
+
+
+def _collect_query_sources(fns) -> list[QuerySource]:
+    """inspect.getsource() for each function that carries a category's selection SQL.
+
+    The hand-written rule_nl and this raw source are shown side by side on purpose: the
+    prose is a second source of truth and can silently drift from the code, and putting
+    them next to each other is what makes that drift visible.
+    """
+    out = []
+    for fn in fns:
+        name = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', repr(fn))}"
+        try:
+            out.append(QuerySource(function=name, source=inspect.getsource(fn)))
+        except (OSError, TypeError) as exc:
+            out.append(QuerySource(function=name, source="", error=str(exc)))
+    return out
+
+
+def describe_playlist_categories(conn) -> list[PlaylistCategory]:
+    """Read-only: one entry per playlist rule CATEGORY — rule, schedule, current count.
+
+    Pure data in, pure data out: no Streamlit, no formatting, no writes, no Spotify
+    calls. Runs the same registry queries the dashboard's playlist pages already run
+    (get_updating_definitions + get_snapshot_definitions) and adds no queries of its own.
+
+    A category whose definitions all disappeared still shows up with count 0 — that is
+    information, not an empty row to hide. Definitions carrying a category key that no
+    spec claims are surfaced in a trailing "Niet gecategoriseerd" entry so a newly added
+    factory can't silently fall out of this overview.
+    """
+    definitions = get_updating_definitions(conn) + get_snapshot_definitions(conn)
+
+    by_category: dict[str, list[PlaylistDefinition]] = {}
+    for definition in definitions:
+        by_category.setdefault(definition.category, []).append(definition)
+
+    today = datetime.now(TZ_AMSTERDAM).date()
+    categories: list[PlaylistCategory] = []
+
+    for spec in CATEGORY_SPECS:
+        members = by_category.pop(spec.key, [])
+        # rule_nl travels on the definitions; fall back to the constant for a category
+        # that currently has no members (e.g. the decade snapshots before 2030).
+        rule_nl = members[0].rule_nl if members else PLAYLIST_RULE_NL.get(spec.key, "")
+        variants = [
+            PlaylistCategoryVariant(
+                label=m.suffix,
+                full_name=get_full_name(m),
+                rule_param=m.rule_param,
+            )
+            for m in members
+        ] if spec.variant_table else []
+
+        categories.append(PlaylistCategory(
+            key=spec.key,
+            name=spec.name,
+            source=spec.source,
+            kind=spec.kind,
+            playlist_count=len(members),
+            name_form=spec.name_form,
+            rule_nl=rule_nl,
+            query_sources=_collect_query_sources(spec.query_source_fns),
+            schedule_kind=spec.schedule_kind,
+            schedule_nl=spec.schedule_nl,
+            next_creation_nl=(
+                _next_snapshot_creation(spec.key, today)
+                if spec.schedule_kind == "next_creation" else ""
+            ),
+            cron=spec.cron,
+            cron_job=spec.cron_job,
+            cron_script=spec.cron_script,
+            member_variation=spec.member_variation,
+            variants=variants,
+            example_names=[get_full_name(m) for m in members[:3]],
+            notes=spec.notes,
+        ))
+
+    leftovers = [d for defs in by_category.values() for d in defs]
+    if leftovers:
+        categories.append(PlaylistCategory(
+            key="uncategorised",
+            name="Niet gecategoriseerd",
+            source="onbekend — deze definities hebben geen category uit CATEGORY_SPECS",
+            kind=leftovers[0].kind,
+            playlist_count=len(leftovers),
+            name_form="",
+            rule_nl="",
+            query_sources=[],
+            schedule_kind="none",
+            schedule_nl="onbekend",
+            next_creation_nl="",
+            cron="", cron_job="", cron_script="",
+            member_variation="",
+            variants=[
+                PlaylistCategoryVariant(
+                    label=d.suffix, full_name=get_full_name(d), rule_param=d.category or "(leeg)"
+                )
+                for d in leftovers
+            ],
+            example_names=[get_full_name(d) for d in leftovers[:3]],
+            notes=(
+                "Deze playlists vallen buiten elke categorie in CATEGORY_SPECS. Dat betekent "
+                "meestal dat er een factory is toegevoegd zonder category-veld; vul dat aan zodat "
+                "de regel hier zichtbaar wordt."
+            ),
+        ))
+
+    return categories
