@@ -1,8 +1,23 @@
 name: Ingest freshness monitor
 
-# Daily check that the Spotify play ingest is still landing rows. The 2026-09
-# outage was not that the crons stopped — it was that nobody noticed for five
-# days. This workflow is the noticing.
+# Daily check that the Spotify play ingest is not missing plays. It asks Spotify
+# for the newest play in /me/player/recently-played and compares it with
+# max(played_at) in spotify_plays: only when Spotify is more than 2h ahead of
+# the DB (plays exist upstream that never landed) is the ingest STALE. The
+# 2026-09 outage was not that the crons stopped — it was that nobody noticed
+# for five days. This workflow is the noticing.
+#
+# The previous check compared max(played_at) with now() (>6h = stale) and
+# assumed this run would land at the end of an active listening day. That was
+# wrong: listening is irregular, and GitHub cron runs are often hours late, so
+# a normal evening without music (last play 19:14, monitor starting 02:57)
+# looked identical to a dead ingest. Comparing against Spotify measures what we
+# actually care about — plays we failed to capture — regardless of quiet time.
+#
+# Exit codes: a STALE finding emails an alert and emits a ::warning::
+# annotation but exits 0 (no duplicate GitHub "Run failed" email). The run goes
+# red only when the Spotify API/auth call fails, spotify_plays is empty, or the
+# script itself errors (including SMTP failure).
 #
 # Deliberately a separate workflow file rather than a job inside
 # scheduled-ingest.yml: the monitor must keep running even when the thing it
@@ -12,9 +27,8 @@ on:
   schedule:
     # Daily at 21:13 UTC (23:13 Europe/Amsterdam). Minute 13 stays clear of the
     # every-30-minutes Spotify ingest (:00 and :30), and 21:00 is far from the
-    # 03:00-06:00 band where every other cron lives. Late evening also means the
-    # check lands at the end of an active listening day, so a >6h gap really
-    # does mean the ingest is broken rather than that nothing was played.
+    # 03:00-06:00 band where every other cron lives. The time of day no longer
+    # matters for correctness: the Spotify-vs-DB comparison is valid at any hour.
     - cron: "13 21 * * *"
   workflow_dispatch:
 
@@ -46,3 +60,6 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
