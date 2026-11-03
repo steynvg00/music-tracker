@@ -1,28 +1,38 @@
 name: Keepalive
 
-# GitHub disables a repository's scheduled workflows after 60 days of inactivity,
-# and only *pushes* count as activity — scheduled runs themselves do not. This
-# workflow exists solely to push one empty commit a month so that timer never
-# reaches 60 days.
+# GitHub disables a public repository's scheduled workflows after 60 days without
+# repository activity, and scheduled runs themselves do not count as activity.
+# This workflow re-enables every scheduled workflow through the REST API
+# ("Enable a workflow" sets its state to active), which resets that inactivity
+# counter without creating any commit.
 #
 # Why it exists: on 2026-09-11 every cron in scheduled-ingest.yml was found to
 # have been silent since ~6 September, because the last push to the repo was in
 # July. Roughly 5.5 days of listening history were lost for good —
 # /me/player/recently-played only returns the last 50 tracks.
 #
+# Why not an empty commit: the first version (v0.77) pushed one to main every
+# month, but main's ruleset only accepts changes through a pull request, so every
+# run was rejected with GH013 and nothing ever reset the timer.
+#
+# The verify step fails the run (and GitHub emails a failure) if any of the three
+# workflows is not active. keepalive.yml re-enables itself as well, because it is
+# a scheduled workflow too and would otherwise be disabled along with the others.
+#
 # Deliberately a separate workflow file rather than a job inside
 # scheduled-ingest.yml, so that a failure in either one cannot take down the other.
 
 on:
   schedule:
-    # Monthly, 1st of the month at 07:17 UTC. Minute 17 stays clear of the
-    # every-30-minutes Spotify ingest (which fires on :00 and :30 of every hour),
-    # and 07:00 is past the 03:00-06:00 band where every other cron lives.
-    - cron: "17 7 1 * *"
+    # Weekly, Mondays at 07:17 UTC. Minute 17 stays clear of the every-30-minutes
+    # Spotify ingest (which fires on :00 and :30 of every hour), and 07:00 is past
+    # the 03:00-06:00 band and the Monday 06:00 weekly refresh. Weekly instead of
+    # monthly: a run costs seconds, and a few missed runs still stay far inside 60 days.
+    - cron: "17 7 * * 1"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  actions: write
 
 concurrency:
   group: keepalive
@@ -30,28 +40,31 @@ concurrency:
 
 jobs:
   keepalive:
-    name: Push empty keepalive commit
+    name: Re-enable scheduled workflows
     runs-on: ubuntu-latest
 
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      WORKFLOWS: scheduled-ingest.yml ingest-monitor.yml keepalive.yml
+
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Configure git identity
-        # A bare runner has no user.name / user.email, and git refuses to commit
-        # without them.
+      - name: Re-enable workflows
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for wf in $WORKFLOWS; do
+            gh api --method PUT "repos/$REPO/actions/workflows/$wf/enable"
+            echo "Re-enabled $wf"
+          done
 
-      - name: Push empty commit to main
+      - name: Verify all workflows are active
         run: |
-          git commit --allow-empty \
-            -m "chore(keepalive): reset GitHub's 60-day scheduled-workflow inactivity timer" \
-            -m "This commit is intentionally empty and changes nothing. GitHub disables
-          scheduled workflows after 60 days without a push to the repository; scheduled
-          runs do not themselves count as activity. This monthly empty commit keeps the
-          crons in .github/workflows/scheduled-ingest.yml alive. Pushed automatically by
-          .github/workflows/keepalive.yml — safe to ignore."
-          git push origin HEAD:main
+          failed=0
+          for wf in $WORKFLOWS; do
+            state="$(gh api "repos/$REPO/actions/workflows/$wf" --jq .state)"
+            echo "$wf: $state"
+            if [ "$state" != "active" ]; then
+              echo "::error::$wf is '$state', expected 'active'"
+              failed=1
+            fi
+          done
+          exit "$failed"
