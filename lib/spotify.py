@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import spotipy
 import spotipy.oauth2
 
-from scripts.spotify_auth import REDIRECT_URI, SPOTIFY_SCOPES
+from scripts.spotify_auth import REDIRECT_URI
 
 load_dotenv()
 
@@ -43,11 +43,14 @@ def get_spotify_client() -> spotipy.Spotify:
         )
 
     print("[spotify] Building OAuth client...", flush=True)
+    # No scope here on purpose. A refresh never sends scopes; spotipy only uses this
+    # value to check the cached token, and when the token lacks a requested scope it
+    # silently falls back to the interactive browser login, which crashes on a CI
+    # runner. The scopes a token has are fixed when scripts/spotify_auth.py mints it.
     auth_manager = spotipy.oauth2.SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=REDIRECT_URI,
-        scope=SPOTIFY_SCOPES,
         cache_path=None,
     )
     print("[spotify] Refreshing access token...", flush=True)
