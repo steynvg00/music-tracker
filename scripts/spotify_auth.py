@@ -22,8 +22,11 @@ SPOTIFY_SCOPES = (
     "user-library-modify "  # Recently Added auto-like (lib/recently_added_manager.py)
     "user-top-read "
     "user-read-recently-played "
-    "user-follow-read"
+    "user-follow-read "
+    "playlist-read-collaborative"  # playlist mirror lists collaborative playlists (v0.81)
 )
+# Keep in sync with CRON_SCOPES in hub/src/lib/server/spotify/oauth.ts: Rotor's
+# "Connect crons" mints the same token through the hub (option A, v0.81).
 
 REFRESH_TOKEN_LIFETIME = timedelta(days=182)  # Spotify: 6 months from authorization
 

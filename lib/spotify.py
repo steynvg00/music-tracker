@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import spotipy
 import spotipy.oauth2
 
+from lib import token_store
+from lib.db import get_connection
 from scripts.spotify_auth import REDIRECT_URI
 
 load_dotenv()
@@ -21,6 +23,64 @@ _LIKED_BATCH_SLEEP_S = 0.5
 _LIKED_BATCH_SIZE = 40
 
 
+def _refresh_from_hub_store(auth_manager, client_id: str) -> bool:
+    """Option A (v0.81): refresh with the 'cron' token Rotor keeps in hub_oauth_tokens.
+
+    Returns True when the access token was refreshed from the DB row. Returns False —
+    and the caller falls back to SPOTIFY_REFRESH_TOKEN — when TOKEN_ENC_KEY or
+    DATABASE_URL is unset, the row doesn't exist, belongs to another Spotify app, or
+    the refresh fails (e.g. invalid_grant after the 6-month expiry; recorded on the row
+    so Rotor's Settings › Connections shows it).
+    """
+    try:
+        key = token_store.key_from_env()
+    except token_store.TokenStoreError as e:
+        print(f"[spotify] WARNING: {e}. Using SPOTIFY_REFRESH_TOKEN.", file=sys.stderr, flush=True)
+        return False
+    if key is None or not os.environ.get("DATABASE_URL"):
+        return False
+
+    try:
+        conn = get_connection()
+    except Exception as e:
+        print(f"[spotify] WARNING: token store unreachable ({e}). Using SPOTIFY_REFRESH_TOKEN.",
+              file=sys.stderr, flush=True)
+        return False
+    try:
+        try:
+            stored = token_store.load_token(conn, "cron", key)
+        except Exception as e:  # missing table (0019 not applied), bad blob, wrong key
+            conn.rollback()
+            print(f"[spotify] WARNING: can't read the cron token from hub_oauth_tokens ({e}). "
+                  "Using SPOTIFY_REFRESH_TOKEN.", file=sys.stderr, flush=True)
+            return False
+        if stored is None:
+            return False
+        if stored.spotify_client_id != client_id:
+            print("[spotify] WARNING: hub_oauth_tokens 'cron' row was minted for another Spotify "
+                  "app than SPOTIFY_CLIENT_ID. Using SPOTIFY_REFRESH_TOKEN.", file=sys.stderr, flush=True)
+            return False
+
+        print(f"[spotify] Refreshing access token (hub_oauth_tokens, authorized "
+              f"{stored.authorized_at:%Y-%m-%d})...", flush=True)
+        try:
+            info = auth_manager.refresh_access_token(stored.refresh_token)
+        except spotipy.oauth2.SpotifyOauthError as e:
+            reason = getattr(e, "error", None) or str(e)
+            token_store.record_error(conn, "cron", str(reason))
+            print(f"[spotify] WARNING: stored cron token refused ({reason}). Reconnect the crons "
+                  "in Rotor › Settings. Trying SPOTIFY_REFRESH_TOKEN.", file=sys.stderr, flush=True)
+            return False
+
+        rotated = (info or {}).get("refresh_token")
+        token_store.record_refresh(
+            conn, "cron", key, rotated if rotated and rotated != stored.refresh_token else None
+        )
+        return True
+    finally:
+        conn.close()
+
+
 def get_spotify_client() -> spotipy.Spotify:
     client_id = os.environ.get("SPOTIFY_CLIENT_ID", "")
     client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
@@ -31,15 +91,13 @@ def get_spotify_client() -> spotipy.Spotify:
         for name, val in [
             ("SPOTIFY_CLIENT_ID", client_id),
             ("SPOTIFY_CLIENT_SECRET", client_secret),
-            ("SPOTIFY_REFRESH_TOKEN", refresh_token),
         ]
         if not val
     ]
     if missing:
         raise RuntimeError(
             f"Missing Spotify env vars: {', '.join(missing)}. "
-            "Run `uv run python scripts/spotify_auth.py` to mint a refresh token, "
-            "then paste SPOTIFY_REFRESH_TOKEN into .env."
+            "Create an app at https://developer.spotify.com/dashboard and put its ID/secret in .env."
         )
 
     print("[spotify] Building OAuth client...", flush=True)
@@ -53,8 +111,16 @@ def get_spotify_client() -> spotipy.Spotify:
         redirect_uri=REDIRECT_URI,
         cache_path=None,
     )
-    print("[spotify] Refreshing access token...", flush=True)
-    auth_manager.refresh_access_token(refresh_token)
+    if not _refresh_from_hub_store(auth_manager, client_id):
+        if not refresh_token:
+            raise RuntimeError(
+                "No usable Spotify refresh token: hub_oauth_tokens has no 'cron' row (or "
+                "TOKEN_ENC_KEY is unset) and SPOTIFY_REFRESH_TOKEN is empty. Connect the crons "
+                "in Rotor › Settings, or run `uv run python scripts/spotify_auth.py` and paste "
+                "SPOTIFY_REFRESH_TOKEN into .env."
+            )
+        print("[spotify] Refreshing access token (SPOTIFY_REFRESH_TOKEN)...", flush=True)
+        auth_manager.refresh_access_token(refresh_token)
     print("[spotify] Access token refreshed.", flush=True)
 
     print("[spotify] Creating Spotify client...", flush=True)

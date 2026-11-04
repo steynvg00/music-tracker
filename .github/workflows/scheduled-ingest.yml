@@ -9,6 +9,8 @@ on:
     - cron: "50 3 * * *"  # Daily 03:50 UTC — track popularity score computation
     - cron: "55 3 * * *"  # Daily 03:55 UTC — artist popularity score computation
     - cron: "0 4 * * *"   # Daily 04:00 UTC — sweep expired custom playlists
+    - cron: "15 4 * * *"  # Daily 04:15 UTC — Spotify playlist mirror for the Rotor hub (v0.81)
+    - cron: "30 4 * * *"  # Daily 04:30 UTC — Rotor daily-pick candidates (v0.81, DB only)
     - cron: "0 5 * * *"   # Daily 05:00 UTC — create period snapshots (month/season/year/decade)
     - cron: "0 6 1 * *"   # Monthly 1st 06:00 UTC — Top 100s + My Monthly #1 rolling refresh (v0.72)
     - cron: "0 6 15 * *"  # Monthly 15th 06:00 UTC — Forgotten favorites refresh (v0.72)
@@ -46,6 +48,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
@@ -73,6 +76,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
@@ -102,6 +106,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
 
   enrich-track-metadata:
     name: Spotify track metadata enrichment
@@ -128,6 +133,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
 
   compute-track-popularity:
     name: Track popularity score computation
@@ -197,6 +203,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
 
   create-snapshots:
     name: Create period snapshots
@@ -223,6 +230,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
@@ -253,6 +261,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
 
   monthly-playlist-refresh:
     name: Monthly playlist refresh (Top 100s + My Monthly #1)
@@ -279,6 +288,7 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
@@ -308,3 +318,57 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
+
+  sync-playlist-mirror:
+    name: Spotify playlist mirror (Rotor)
+    # v0.81: read-only towards Spotify. Feeds the daily-pick rotation and the hub.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '15 4 * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sync-playlist-mirror
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Mirror playlists
+        run: uv run python scripts/sync_playlist_mirror.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
+
+  generate-daily-picks:
+    name: Rotor daily-pick candidates
+    # v0.81: 5 candidates per Europe/Amsterdam day. DB only, no Spotify calls. Runs after
+    # the popularity scores (03:50/03:55) and the mirror (04:15); skips a day that exists.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 4 * * *'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: generate-daily-picks
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Generate daily picks
+        run: uv run python scripts/generate_daily_picks.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

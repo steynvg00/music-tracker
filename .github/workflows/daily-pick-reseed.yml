@@ -1,0 +1,51 @@
+name: Daily pick reseed
+
+# "Shuffle the deck" in the Rotor hub (v0.81, R1). The hub dispatches this workflow
+# with the pick date; the Python generator appends 5 new candidates to that day
+# (ranks 6..10, 11..15, …) and the hub picks them up within ~1 minute.
+#
+# Dispatch only (no schedule), and deliberately NOT a job in scheduled-ingest.yml:
+# every job there runs on workflow_dispatch. DB only, no Spotify calls. R2 replaces
+# this with the generic hub-jobs.yml (docs/hub-redesign/04-architecture.md §4).
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Pick date (YYYY-MM-DD, Europe/Amsterdam)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-pick-reseed
+  cancel-in-progress: false
+
+jobs:
+  reseed:
+    name: Append daily-pick candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate date
+        env:
+          PICK_DATE: ${{ inputs.date }}
+        run: |
+          [[ "$PICK_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::bad date: $PICK_DATE"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Reseed
+        run: uv run python scripts/generate_daily_picks.py --date "$PICK_DATE" --reseed
+        env:
+          PICK_DATE: ${{ inputs.date }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
