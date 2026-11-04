@@ -63,3 +63,4 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens

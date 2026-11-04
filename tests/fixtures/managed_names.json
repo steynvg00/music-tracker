@@ -1,0 +1,31 @@
+{
+  "_comment": "Managed-suffix classification cases, shared by tests/test_playlist_mirror.py and hub/src/lib/server/spotify/write-guard.test.ts. kind null = read + play only.",
+  "cases": [
+    { "name": "Top 30 last 30 days · Auto 🤖🔄", "kind": "auto_updating" },
+    { "name": "Daily pick · Auto 🤖🔄", "kind": "auto_updating" },
+    { "name": "Missed new tracks · popular artists · Auto 🤖🔄", "kind": "auto_updating" },
+    { "name": "Top 25 · October 2026 · Auto 🤖📸", "kind": "auto_snapshot" },
+    { "name": "Late night hardstyle · Custom 🎧", "kind": "custom" },
+    { "name": "x · Custom 🎧 · Auto 🤖🔄", "kind": "auto_updating" },
+    { "name": "Road trip Italy 2022", "kind": null },
+    { "name": "Liked Songs", "kind": null },
+    { "name": "", "kind": null },
+    { "name": " · Custom 🎧", "kind": null },
+    { "name": " · Auto 🤖🔄", "kind": null },
+    { "name": "x · Custom 🎧 (copy)", "kind": null },
+    { "name": "x · Auto 🤖🔄 · Custom 🎧 (copy)", "kind": null },
+    { "name": "x · Custom 🎧 ", "kind": null },
+    { "name": "x · Custom🎧", "kind": null },
+    { "name": "x ·  Custom 🎧", "kind": null },
+    { "name": "x ∙ Custom 🎧", "kind": null },
+    { "name": "x • Auto 🤖🔄", "kind": null },
+    { "name": "x · Custom 🎧", "kind": null },
+    { "name": "x · custom 🎧", "kind": null },
+    { "name": "x · AUTO 🤖🔄", "kind": null },
+    { "name": "x · Auto 🤖🔄​", "kind": null },
+    { "name": "x · Auto 🤖🔄️", "kind": null },
+    { "name": "x · Auto 🔄", "kind": null },
+    { "name": "x · Auto 🤖📸 2", "kind": null },
+    { "name": "x · Auto 🤖🔄", "kind": "auto_updating" }
+  ]
+}

@@ -1,0 +1,40 @@
+import adapter from '@sveltejs/adapter-vercel';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+
+// Spotify CDNs: cover art (i.scdn.co, mosaic.scdn.co, image-cdn-*.spotifycdn.com) and the
+// Web Playback SDK (sdk.scdn.co), which runs its player inside its own iframe.
+const SPOTIFY_IMG = ['https://i.scdn.co', 'https://mosaic.scdn.co', 'https://*.scdn.co', 'https://*.spotifycdn.com'];
+
+/** @type {import('@sveltejs/kit').Config} */
+const config = {
+	preprocess: vitePreprocess(),
+	kit: {
+		// Vercel Hobby, functions next to Supabase eu-central-1 (04-architecture.md §1).
+		adapter: adapter({ runtime: 'nodejs22.x', regions: ['fra1'] }),
+		csp: {
+			mode: 'auto',
+			directives: {
+				'default-src': ['self'],
+				'script-src': ['self', 'https://sdk.scdn.co'],
+				// Svelte's style="" attributes need unsafe-inline; no inline scripts are allowed.
+				'style-src': ['self', 'unsafe-inline'],
+				'img-src': ['self', 'data:', ...SPOTIFY_IMG],
+				'font-src': ['self'],
+				'connect-src': ['self', 'https://api.spotify.com', 'https://*.spotify.com', 'wss://*.spotify.com', 'https://*.scdn.co'],
+				'frame-src': ['https://sdk.scdn.co'],
+				'media-src': ['self', 'blob:', 'https://*.scdn.co'],
+				'worker-src': ['self'],
+				'manifest-src': ['self'],
+				'object-src': ['none'],
+				'base-uri': ['self'],
+				'form-action': ['self'],
+				'frame-ancestors': ['none']
+			}
+		},
+		// Mutating API routes are additionally Origin-checked in hooks.server.ts (JSON bodies
+		// aren't covered by SvelteKit's built-in form CSRF check).
+		csrf: { trustedOrigins: [] }
+	}
+};
+
+export default config;

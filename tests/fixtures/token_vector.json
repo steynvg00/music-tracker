@@ -1,0 +1,8 @@
+{
+  "_comment": "Test vector shared by tests/test_token_store.py and hub/src/lib/server/crypto.test.ts. Not a real key or token.",
+  "key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "iv_hex": "6465666768696a6b6c6d6e6f",
+  "aad": "rotor:cron:refresh_token",
+  "plaintext": "AQD-test-refresh-token-not-real",
+  "blob_hex": "016465666768696a6b6c6d6e6f094a9a4b0d8c25ea13103a8ea80019956fb66961ee02de1cc8a5813a9ec2c9f49e0f8a00ff8b4d152db126042a5488"
+}
