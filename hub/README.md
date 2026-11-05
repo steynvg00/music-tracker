@@ -16,6 +16,12 @@ Refresh now, Rebuild for snapshots, lifetime for custom), the custom playlist bu
 preview, create/edit/extend/keep/delete), the Rules page, the job system (`hub_jobs` +
 `hub-jobs.yml`) with queued/running/done/failed in the UI, and Web Push notifications.
 
+R3 (`v0.83-hub-stats-parity`): Stats (Overview, Top with every ranking mode and time range
+plus ▶ play / save as custom, Patterns, Year in review, Records, Behaviour, Compare, Badges,
+On this day), Track / Album / Artist detail (canonical ISRC variants, heard alongside, badge
+grids), Search over your own history, and Home's streak tile, On this day and Recent badges.
+Numbers come from the `hub` rollups (migration 0023), refreshed at the end of every ingest.
+
 ## How it fits together
 
 ```
@@ -81,3 +87,18 @@ Without migrations 0019–0021 applied, every page fails on the session/token ta
 Without 0022, Library/Rules/custom/jobs answer 500 (the R1 pages keep working).
 Web Push needs `VAPID_PUBLIC_KEY` here and `VAPID_PRIVATE_KEY` + `VAPID_SUBJECT` as GitHub
 secrets (`uv run python scripts/generate_vapid_keys.py`).
+Without 0023, Stats/detail/Search answer 503 `rollups_missing`; Home still loads without the R3 tiles.
+
+## Local end-to-end run (R3+)
+
+```bash
+brew install postgresql@16   # once; nothing is started as a service
+npm run e2e                  # E2E_GREP=R3 npm run e2e for a subset, E2E_PLAYS=420000 for production size
+```
+
+`e2e/run.mjs` creates a throwaway Postgres 16 cluster in `e2e/.out/` (port 55432), applies every
+migration in order (seeding before 0023, like production), builds the hub and serves it with
+**every external service mocked** (`e2e/mock/`: Spotify, GitHub dispatch; the job runner is the
+real Python against the throwaway DB). Playwright drives it at iPhone 14 and 1440×900; the
+browser runs behind a DNS wall (only localhost resolves). Results: `e2e/.out/results.md`. The
+cluster is stopped and deleted at the end. It refuses any non-local database.

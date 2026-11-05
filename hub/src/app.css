@@ -16,6 +16,10 @@
 	--on-accent: #140a2b;
 	--data-2: #3dd9eb;
 	--data-3: #ffc24b;
+	/* Chart series (R3): validated pair on --surface-2 (dataviz validate_palette, dark). */
+	--chart-a: #9d6bff;
+	--chart-b: #1fa3b6;
+	--chart-grid: #2c2c35;
 	--success: #3ccfb0;
 	--warning: #ffb547;
 	--danger: #ff5c7a;
@@ -516,4 +520,12 @@ p {
 		transition-duration: 1ms !important;
 		animation-duration: 1ms !important;
 	}
+}
+
+/* R3: track titles in the player are doors to their detail page. */
+a.tl {
+	color: inherit;
+}
+a.tl:hover {
+	text-decoration: underline;
 }

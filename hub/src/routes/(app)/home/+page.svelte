@@ -8,7 +8,9 @@
 	import StatTile from '$lib/components/StatTile.svelte';
 	import { daily } from '$lib/stores/daily.svelte';
 	import { media } from '$lib/stores/media.svelte';
-	import { delta, fmtInt, greeting } from '$lib/shared/format';
+	import { delta, fmtDate, fmtInt, greeting } from '$lib/shared/format';
+	import { artistHref, badgeIcon, badgeLabel, describeBadge, trackHref } from '$lib/shared/stats';
+	import { player } from '$lib/stores/player.svelte';
 	import type { HomePayload } from '$lib/shared/daily-types';
 
 	let { data } = $props();
@@ -40,6 +42,7 @@
 	});
 	const t = $derived(home?.tiles);
 	const weekDelta = $derived(t ? delta(t.playsThisWeek, t.playsLastWeekSamePoint) : null);
+	const st = $derived(home?.stats ?? null);
 </script>
 
 <svelte:head><title>Rotor</title></svelte:head>
@@ -64,7 +67,14 @@
 			<div class="tiles">
 				<StatTile label="Plays this week" value={fmtInt(t.playsThisWeek)} note={weekDelta?.text} dir={weekDelta?.dir} spark={t.perDay} />
 				<StatTile label="Hours this week" value={String(t.hoursThisWeek)} unit="h" spark={t.perDay} sparkColor="var(--data-2)" />
+				{#if st}
+					<StatTile label="Current streak" value={fmtInt(st.streak.current)} unit="days" note={st.streak.listenedToday ? `longest ${fmtInt(st.streak.longest)}` : 'play something today to keep it'} />
+				{/if}
 				<StatTile label="Top artist · {t.monthLabel}" value={t.topArtistMonth?.name ?? '—'} small note={t.topArtistMonth ? `${fmtInt(t.topArtistMonth.plays)} plays` : undefined} />
+				{#if st}
+					<StatTile label="Hours · {t.monthLabel}" value={String(st.month.hours)} unit="h" note="{fmtInt(st.month.plays)} plays" />
+					<StatTile label="New artists · {t.monthLabel}" value={fmtInt(st.month.newArtists)} />
+				{/if}
 			</div>
 		</section>
 	{/if}
@@ -76,6 +86,44 @@
 		</section>
 	{/if}
 
+	{#if st?.onThisDay.length}
+		<section class="section">
+			<div class="sec-h"><h2>On this day</h2><a class="cap" href="/stats/onthisday">All years</a></div>
+			<div class="shelf">
+				{#each st.onThisDay as y (y.year)}
+					<div class="otd">
+						<a class="otd-b" href="/stats/onthisday?year={y.year}">
+							<span class="over">{y.year}</span>
+							<span class="otd-t ell">{y.top?.track ?? '—'}</span>
+							<span class="cap muted ell">{y.top?.artist ?? ''}</span>
+							<span class="cap">{fmtInt(y.plays)} plays that day</span>
+						</a>
+						{#if y.uris.length}
+							<button class="ibtn otd-p" aria-label="Play what you played on this day in {y.year}" onclick={() => player.play({ type: 'play', body: { uris: y.uris.slice(0, 100) }, label: `On this day · ${y.year}` })}>▶</button>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
+	{#if st?.recentBadges.length}
+		<section class="section">
+			<div class="sec-h"><h2>Recent badges</h2><a class="cap" href="/stats/badges">All badges</a></div>
+			<div class="shelf">
+				{#each st.recentBadges as b (b.entityType + b.entityId + b.badgeType + b.awardedAt)}
+					{@const href = b.entityType === 'track' ? trackHref(b.entityId) : artistHref(b.entityId)}
+					<a class="bdg" href={href ?? '/stats/badges'} title={describeBadge(b.badgeType, b.context)}>
+						{#if badgeIcon(b.badgeType)}<img src={badgeIcon(b.badgeType)} alt="" width="56" height="56" loading="lazy" />{:else}<span class="bdg-ph" aria-hidden="true">★</span>{/if}
+						<span class="bdg-n">{badgeLabel(b.badgeType)}</span>
+						<span class="cap ell">{b.name ?? ''}</span>
+						<span class="cap muted">{fmtDate(b.awardedAt, { day: 'numeric', month: 'short' })}</span>
+					</a>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
 	{#if home?.comingBack.length}
 		<section class="section">
 			<div class="sec-h"><h2>Coming back around</h2></div>
@@ -83,7 +131,7 @@
 		</section>
 	{/if}
 
-	<p class="cap muted foot">Streaks, On this day and badges arrive with the stats release. Spotify content is played in Spotify; Rotor never edits playlists without a managed suffix.</p>
+	<p class="cap muted foot">Spotify content is played in Spotify; Rotor never edits playlists without a managed suffix.</p>
 </div>
 
 <style>
@@ -113,6 +161,58 @@
 	}
 	.foot {
 		margin-top: 28px;
+	}
+	.otd {
+		flex: none;
+		width: 168px;
+		position: relative;
+		scroll-snap-align: start;
+	}
+	.otd-b {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 12px;
+		min-height: 112px;
+		border-radius: var(--r-card);
+		background: var(--surface-2);
+		color: var(--text-1);
+	}
+	.otd-t {
+		font-weight: 700;
+		font-size: 14px;
+	}
+	.otd-p {
+		position: absolute;
+		right: 6px;
+		bottom: 6px;
+	}
+	.bdg {
+		flex: none;
+		width: 112px;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 3px;
+		text-align: center;
+		color: var(--text-1);
+		scroll-snap-align: start;
+	}
+	.bdg img,
+	.bdg-ph {
+		width: 56px;
+		height: 56px;
+		border-radius: 50%;
+		background: var(--surface-3);
+		display: grid;
+		place-items: center;
+	}
+	.bdg-n {
+		font-size: 13px;
+		font-weight: 700;
+	}
+	.bdg .ell {
+		max-width: 100%;
 	}
 	@media (min-width: 768px) {
 		.shortcuts {

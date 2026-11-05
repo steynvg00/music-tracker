@@ -6,6 +6,8 @@
 	import { player } from '$lib/stores/player.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { artistLine, deviceIcon } from '$lib/shared/format';
+	import { trackHref } from '$lib/shared/stats';
+	import ArtistLinks from './ArtistLinks.svelte';
 	/** Laptop player bar (80 px): now playing · transport + scrubber · device, panel, volume. */
 	const v = $derived(player.view);
 	let volDrag = $state<number | null>(null);
@@ -22,8 +24,8 @@
 		{#if v.item}
 			<button class="artbtn" aria-label="Toggle now-playing panel" onclick={() => (ui.rightPanel = !ui.rightPanel)}><Art src={v.item.imageUrl} size={56} /></button>
 			<div class="meta">
-				<div class="t ell" title={v.item.name}>{v.item.name}</div>
-				<div class="cap ell" title={artistLine(v.item.artists)}>{artistLine(v.item.artists)}</div>
+				<div class="t ell" title={v.item.name}>{#if trackHref(v.item.uri)}<a class="tl" href={trackHref(v.item.uri)}>{v.item.name}</a>{:else}{v.item.name}{/if}</div>
+				<div class="cap ell" title={artistLine(v.item.artists)}><ArtistLinks artists={v.item.artists} /></div>
 			</div>
 		{:else if player.loaded}
 			<span class="cap muted">Nothing playing. Drop the kick?</span>

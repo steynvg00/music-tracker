@@ -80,4 +80,23 @@ export interface HomePayload {
 	shortcuts: PlaylistCard[];
 	fresh: PlaylistCard[];
 	comingBack: PlaylistCard[];
+	/** R3 rollups (hub.home_payload); null until migration 0023 is applied. */
+	stats: HomeStats | null;
+}
+
+export interface HomeStats {
+	today: string;
+	refreshedAt: string | null;
+	streak: { current: number; longest: number; listenedToday: boolean };
+	month: { plays: number; hours: number; newArtists: number };
+	onThisDay: { year: number; plays: number; top: { track: string; artist: string; uri: string | null; plays: number } | null; uris: string[] }[];
+	recentBadges: {
+		entityType: 'track' | 'artist';
+		entityId: string;
+		badgeType: string;
+		awardedAt: string;
+		context: Record<string, unknown>;
+		name: string | null;
+		artist: string | null;
+	}[];
 }

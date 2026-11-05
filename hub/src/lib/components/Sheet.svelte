@@ -9,6 +9,11 @@
 		wide = false
 	}: { open: boolean; onclose: () => void; label: string; children: Snippet; wide?: boolean } = $props();
 	let el: HTMLElement | undefined = $state();
+	/** Move the node to <body> while mounted, so fixed positioning + z-index are relative to the page root. */
+	function portal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return { destroy: () => node.remove() };
+	}
 	let opener: Element | null = null;
 
 	$effect(() => {
@@ -42,10 +47,14 @@
 	}
 </script>
 
+<!-- Portalled to <body> (R3 fix): a Sheet opened inside a page must stack above the mini-player and
+     tab bar, which it can't do from inside the page's own stacking context. -->
+<div class="portal" use:portal>
 <div class="scrim" class:open onclick={onclose} aria-hidden="true"></div>
 <div class="sheet" class:open class:wide bind:this={el} role="dialog" aria-modal="true" aria-label={label} inert={!open} tabindex="-1" onkeydown={trap}>
 	<div class="handle"></div>
 	{@render children()}
+</div>
 </div>
 
 <style>

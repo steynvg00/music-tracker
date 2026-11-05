@@ -5,7 +5,8 @@
 	import Icon from './Icon.svelte';
 	import { player } from '$lib/stores/player.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { artistLine } from '$lib/shared/format';
+	import { trackHref } from '$lib/shared/stats';
+	import ArtistLinks from './ArtistLinks.svelte';
 	/** Laptop right panel (≥ 1180 px): now playing + "your history with this track". */
 	const v = $derived(player.view);
 </script>
@@ -17,8 +18,8 @@
 	</h4>
 	{#if v.item}
 		<div class="big"><Art src={v.item.imageUrlLarge ?? v.item.imageUrl} size={300} alt={v.item.albumName ?? ''} /></div>
-		<h2 title={v.item.name}>{v.item.name}</h2>
-		<div class="cap">{artistLine(v.item.artists)}</div>
+		<h2 title={v.item.name}>{#if trackHref(v.item.uri)}<a class="tl" href={trackHref(v.item.uri)}>{v.item.name}</a>{:else}{v.item.name}{/if}</h2>
+		<div class="cap"><ArtistLinks artists={v.item.artists} /></div>
 		<div style="margin-top:10px"><Attribution uri={v.item.uri} /></div>
 		<HistoryCard stats={player.trackStats} surface="panel" />
 	{:else}

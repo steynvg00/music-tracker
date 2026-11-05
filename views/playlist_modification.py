@@ -1,14 +1,13 @@
-"""Playlist Modification page — Make a playlist + Manage custom playlists."""
+"""Playlist Modification page — read-only since v0.83 (R3): writes moved to Rotor.
 
-import os
+Preview still works here; creating, extending, deleting, rebuilding and re-ordering playlists
+happen in the Rotor hub (links on each row). Same tables, so both stay consistent.
+"""
 
 import pandas as pd
-import psycopg
 import streamlit as st
-from datetime import datetime, timedelta, timezone
 
 from lib.db import get_connection
-from lib.spotify import get_spotify_client
 from lib.playlists import (
     get_snapshot_definitions,
     get_updating_definitions,
@@ -19,16 +18,14 @@ from lib.playlists import (
 from lib.playlist_settings import (
     ORDER_PREF_OPTIONS,
     get_all_settings_by_name,
-    request_force_refresh,
-    upsert_order_pref,
 )
 from lib.temporary_playlists import (
     list_artists,
     query_temp_playlist_tracks,
-    create_temp_playlist,
-    build_filters_summary,
-    delete_custom_playlist,
 )
+from views._rotor_banner import rotor_banner, rotor_url
+
+rotor_banner("Custom playlists, snapshot rebuilds and sort orders", "/library")
 
 tab_make_a_playlist, tab_manage, tab_snapshot, tab_updating = st.tabs([
     "Make a playlist", "Manage custom playlists", "Manage snapshot", "Manage updating",
@@ -160,73 +157,10 @@ with tab_make_a_playlist:
             st.dataframe(df_display, width="stretch", height=400)
 
             st.divider()
-            st.subheader("Create on Spotify")
-            playlist_name = st.text_input(
-                "Playlist name (will get ' · Custom 🎧' appended)",
-                value="",
-                placeholder="e.g. 'Late night hardstyle' or 'Best of summer 2022'",
+            st.markdown(
+                f"**Create it in Rotor:** [Library › New custom playlist]({rotor_url('/library')}) "
+                "uses the same filters (and the same SQL), then lets you name it and pick a lifetime."
             )
-
-            ttl_days = st.number_input(
-                "Auto-delete after (days)",
-                min_value=0,
-                max_value=365,
-                value=7,
-                step=1,
-                help="The playlist will be automatically deleted from Spotify after this many days. "
-                     "Set to 0 to make permanent (you can also change this in v0.32's Manage custom playlists view).",
-            )
-
-            if st.button("Create on Spotify", type="primary", disabled=not playlist_name.strip()):
-                with st.spinner("Creating playlist..."):
-                    sp = get_spotify_client()
-                    user_id = sp.current_user()["id"]
-                    filters = st.session_state["temp_playlist_filters"]
-                    summary = build_filters_summary(
-                        filters["artists"],
-                        filters["release_year_min"],
-                        filters["release_year_max"],
-                        filters["discovery_year_min"],
-                        filters["discovery_year_max"],
-                        filters["min_plays"],
-                        filters["liked_only"],
-                        filters["sort_order"],
-                    )
-
-                    expires_at = None
-                    if ttl_days > 0:
-                        expires_at = datetime.now(timezone.utc) + timedelta(days=int(ttl_days))
-
-                    write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                    try:
-                        result = create_temp_playlist(
-                            sp,
-                            user_id,
-                            playlist_name.strip(),
-                            [t["track_uri"] for t in tracks],
-                            summary,
-                            conn=write_conn,
-                            expires_at=expires_at,
-                        )
-                    finally:
-                        write_conn.close()
-
-                if expires_at:
-                    expiry_local = expires_at.strftime("%Y-%m-%d %H:%M UTC")
-                    st.success(
-                        f"Created **{result['name']}** with {result['track_count']} tracks. "
-                        f"Auto-deletes on **{expiry_local}**. "
-                        f"[Open on Spotify]({result['url']})"
-                    )
-                else:
-                    st.success(
-                        f"Created **{result['name']}** with {result['track_count']} tracks. "
-                        f"**Permanent** — delete manually when done. "
-                        f"[Open on Spotify]({result['url']})"
-                    )
-
-                del st.session_state["temp_playlist_tracks"]
-                del st.session_state["temp_playlist_filters"]
         else:
             st.info("No tracks match these filters. Try widening the criteria.")
 
@@ -263,84 +197,22 @@ with tab_manage:
                         st.caption("Permanent")
 
                 with action_col:
-                    key_suffix = playlist_id.replace("-", "_")
-
-                    if expires_at is not None:
-                        if st.button("Make permanent", key=f"perm_{key_suffix}"):
-                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                            try:
-                                write_cur = write_conn.cursor()
-                                write_cur.execute(
-                                    "UPDATE custom_playlists SET expires_at = NULL WHERE playlist_id = %s",
-                                    (playlist_id,),
-                                )
-                                write_conn.commit()
-                            finally:
-                                write_conn.close()
-                            st.rerun()
-
-                        if st.button("Extend +7 days", key=f"extend_{key_suffix}"):
-                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                            try:
-                                write_cur = write_conn.cursor()
-                                write_cur.execute(
-                                    "UPDATE custom_playlists SET expires_at = COALESCE(expires_at, NOW()) + INTERVAL '7 days' WHERE playlist_id = %s",
-                                    (playlist_id,),
-                                )
-                                write_conn.commit()
-                            finally:
-                                write_conn.close()
-                            st.rerun()
-
-                    confirm_key = f"confirm_delete_{key_suffix}"
-                    if st.session_state.get(confirm_key):
-                        if st.button("Click again to confirm", key=f"del_confirm_{key_suffix}", type="primary"):
-                            sp = get_spotify_client()
-                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                            try:
-                                delete_custom_playlist(sp, write_conn, playlist_id)
-                            finally:
-                                write_conn.close()
-                            del st.session_state[confirm_key]
-                            st.rerun()
-                    else:
-                        if st.button("Delete now", key=f"del_{key_suffix}"):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
+                    st.markdown(f"[Extend, keep, edit or delete in Rotor]({rotor_url('/playlist/' + playlist_id)})")
 
 # ── Shared helpers for Manage snapshot / Manage updating ─────────────────────
 
 _CRON_CAPTION = (
-    "Changes apply at the next playlist refresh. "
-    "To trigger immediately, run `uv run python scripts/update_managed_playlists.py` "
-    "locally or trigger the GitHub Actions workflow manually."
+    "Read-only here. Rebuild a snapshot or change a sort order on the playlist's page in Rotor "
+    "(Refresh now applies it right away)."
 )
 
 
-def _get_playlist_id_for_write(full_name: str, settings_by_name: dict) -> str | None:
-    """Return the Spotify playlist_id for a managed playlist.
-
-    Checks playlist_settings first (populated by cron runs). Falls back to a
-    paginated Spotify search when the settings table is empty (e.g. first use
-    after migration, before the cron has run).
-    """
+def _rotor_link(full_name: str, settings_by_name: dict) -> str:
+    """Rotor page for a managed playlist (id from playlist_settings; Library when unknown). No Spotify calls."""
     row = settings_by_name.get(full_name)
     if row and row.get("playlist_id"):
-        return row["playlist_id"]
-    # Fallback: paginate user's Spotify library
-    sp = get_spotify_client()
-    user_id = sp.current_user()["id"]
-    offset = 0
-    while True:
-        page = sp.current_user_playlists(limit=50, offset=offset)
-        items = page.get("items") or []
-        for p in items:
-            if p and p.get("owner", {}).get("id") == user_id and p.get("name") == full_name:
-                return p["id"]
-        if len(items) < 50:
-            break
-        offset += 50
-    return None
+        return rotor_url(f"/playlist/{row['playlist_id']}")
+    return rotor_url("/library")
 
 
 def _categorize_snapshot(suffix: str) -> str:
@@ -409,18 +281,7 @@ with tab_snapshot:
                     else:
                         st.caption("Never force-refreshed")
                 with col_btn:
-                    btn_key = f"snap_refresh_{hash(full_name)}"
-                    if st.button("Force refresh", key=btn_key, disabled=force_pending):
-                        playlist_id = _get_playlist_id_for_write(full_name, snap_settings)
-                        if playlist_id:
-                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                            try:
-                                request_force_refresh(write_conn, playlist_id, full_name)
-                            finally:
-                                write_conn.close()
-                            st.rerun()
-                        else:
-                            st.error(f"Playlist not found in Spotify: {full_name}")
+                    st.markdown(f"[Rebuild in Rotor]({_rotor_link(full_name, snap_settings)})")
 
 # ── Tab 4: Manage updating ────────────────────────────────────────────────────
 
@@ -431,9 +292,6 @@ with tab_updating:
     upd_conn = get_connection()
     upd_defs = get_updating_definitions(upd_conn)
     upd_settings = get_all_settings_by_name(upd_conn)
-
-    order_labels = list(ORDER_PREF_OPTIONS.values())
-    order_keys = list(ORDER_PREF_OPTIONS.keys())
 
     # Group definitions by category
     upd_groups: dict[str, list] = {}
@@ -457,23 +315,4 @@ with tab_updating:
                 with col_name:
                     st.markdown(f"**{defn.suffix}**")
                 with col_select:
-                    select_key = f"order_{hash(full_name)}"
-                    new_label = st.selectbox(
-                        "Order",
-                        options=order_labels,
-                        index=order_labels.index(current_label),
-                        key=select_key,
-                        label_visibility="collapsed",
-                    )
-                    new_pref = order_keys[order_labels.index(new_label)]
-                    if new_pref != current_pref:
-                        playlist_id = _get_playlist_id_for_write(full_name, upd_settings)
-                        if playlist_id:
-                            write_conn = psycopg.connect(os.environ["DATABASE_URL"])
-                            try:
-                                upsert_order_pref(write_conn, playlist_id, full_name, new_pref)
-                            finally:
-                                write_conn.close()
-                            st.rerun()
-                        else:
-                            st.error(f"Playlist not found in Spotify: {full_name}")
+                    st.markdown(f"{current_label} · [change in Rotor]({_rotor_link(full_name, upd_settings)})")

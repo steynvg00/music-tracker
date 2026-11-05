@@ -140,6 +140,48 @@ export async function createCustom(
 	return { playlistId: created.id, name: fullName, trackCount: tracks.length, expiresAt: expiresAt?.toISOString() ?? null };
 }
 
+/**
+ * "Save as custom playlist" from a Stats list or detail page (R3): an explicit track list
+ * instead of filters. Same guarded path as createCustom (create with the Custom suffix, then
+ * guarded add with requireKind custom); filters_json stays NULL, so Edit starts from defaults.
+ */
+export async function createCustomFromTracks(
+	deps: CustomDeps,
+	input: { name: string; uris: string[]; lifetime: Lifetime; source: string }
+): Promise<CreatedCustom> {
+	const tracks = [...new Set(input.uris.filter((u) => PLAYABLE.test(u)))].slice(0, 500);
+	if (!tracks.length) throw new BadInput('No playable tracks in this list');
+	const fullName = customFullName(input.name);
+	const expiresAt = expiresFor(input.lifetime);
+	const summary = `from ${input.source.slice(0, 120)}`;
+	const created = await deps.guard.createManagedPlaylist({ name: fullName, description: description(summary, expiresAt), public: false });
+	await deps.sql`
+		INSERT INTO custom_playlists (playlist_id, name, expires_at, track_count, filters_summary, filters_json, excluded_uris)
+		VALUES (${created.id}, ${fullName}, ${expiresAt}, 0, ${summary}, NULL, ${[]})`;
+	const [clock] = await deps.sql<{ now: Date }[]>`SELECT now() AS now`;
+	await upsertMirrorRow(
+		deps.sql,
+		{
+			playlist_id: created.id,
+			name: fullName,
+			owner_id: deps.ownerId,
+			owner_name: null,
+			is_owned: true,
+			is_collab: false,
+			is_public: false,
+			managed_kind: 'custom',
+			snapshot_id: null,
+			track_count: 0,
+			image_url: null
+		},
+		clock!.now
+	);
+	await deps.guard.addItems(created.id, tracks, undefined, { requireKind: 'custom' });
+	await deps.sql`UPDATE custom_playlists SET track_count = ${tracks.length} WHERE playlist_id = ${created.id}`;
+	await deps.sql`UPDATE spotify_playlists SET track_count = ${tracks.length} WHERE playlist_id = ${created.id}`;
+	return { playlistId: created.id, name: fullName, trackCount: tracks.length, expiresAt: expiresAt?.toISOString() ?? null };
+}
+
 interface CustomRow {
 	playlist_id: string;
 	name: string;

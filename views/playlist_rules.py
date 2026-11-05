@@ -10,6 +10,7 @@ import streamlit as st
 
 from lib.db import get_connection
 from lib.playlists import describe_playlist_categories
+from views._rotor_banner import rotor_banner
 
 _KIND_LABEL = {
     "updating": "🔄 updating",
@@ -17,6 +18,7 @@ _KIND_LABEL = {
 }
 
 st.header("Playlist Rules")
+rotor_banner("Playlist rules", "/rules")
 st.caption(
     "Per categorie: wat de selectieregel is en hoe vaak hij verschijnt. "
     "Ruim 200 beheerde playlists, maar maar een handvol regels — deze pagina groepeert op "
