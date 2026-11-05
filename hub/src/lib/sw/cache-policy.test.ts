@@ -105,6 +105,25 @@ describe('navigations are network-first', () => {
 	});
 });
 
+describe('fetch is called unbound (browser "Illegal invocation")', () => {
+	// A service worker's fetch throws TypeError when called with a foreign `this`. Node's doesn't,
+	// so emulate the browser: anything but undefined/globalThis as `this` is an illegal invocation.
+	function browserFetch(this: unknown, _r: Request): Promise<Response> {
+		if (this !== undefined && this !== globalThis) return Promise.reject(new TypeError("Failed to execute 'fetch' on 'WorkerGlobalScope': Illegal invocation"));
+		return Promise.resolve(html('fresh page'));
+	}
+	it('navigations reach the network instead of the offline fallback', async () => {
+		const { cache } = fakeCache({ '/offline': html('offline page') });
+		const res = await networkFirstPage(nav('/library'), { fetch: browserFetch, cache });
+		expect(await res.text()).toBe('fresh page');
+	});
+	it('stale-while-revalidate reaches the network too', async () => {
+		const { cache } = fakeCache();
+		const res = await staleWhileRevalidate(new Request(ORIGIN + '/api/home'), { fetch: browserFetch, cache, waitUntil: () => undefined });
+		expect(await res.text()).toBe('fresh page');
+	});
+});
+
 describe('caches are versioned per build', () => {
 	it('names every cache after the build version', () => {
 		expect(cacheNames('123')).toEqual({ shell: 'rotor-shell-123', pages: 'rotor-pages-123', data: 'rotor-data-123' });

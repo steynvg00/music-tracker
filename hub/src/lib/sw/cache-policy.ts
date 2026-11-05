@@ -93,9 +93,12 @@ async function safePut(cache: CacheLike, request: Request, res: Response): Promi
  */
 export async function networkFirstPage(request: Request, deps: { fetch: FetchLike; cache: CacheLike }): Promise<Response> {
 	const path = new URL(request.url).pathname;
+	// Call fetch unbound: `deps.fetch(request)` would run the worker's fetch with `this = deps`,
+	// which browsers reject ("Illegal invocation"), so every navigation fell back to offline.
+	const fetchFn = deps.fetch;
 	let res: Response;
 	try {
-		res = await deps.fetch(request);
+		res = await fetchFn(request);
 	} catch {
 		return (
 			(await deps.cache.match(request)) ??
@@ -119,8 +122,8 @@ export async function staleWhileRevalidate(
 	request: Request,
 	deps: { fetch: FetchLike; cache: CacheLike; waitUntil: (p: Promise<unknown>) => void }
 ): Promise<Response> {
-	const network = deps
-		.fetch(request)
+	const fetchFn = deps.fetch; // unbound, see networkFirstPage
+	const network = fetchFn(request)
 		.then(async (res) => {
 			if (isCacheableResponse(res)) await safePut(deps.cache, request, res.clone());
 			return res;
