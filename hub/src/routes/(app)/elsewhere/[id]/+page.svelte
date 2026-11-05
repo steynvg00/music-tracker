@@ -192,7 +192,7 @@
 							<li class:cur={i === index} class:off={!playable(it)}>
 								<button onclick={() => start(i)} disabled={!playable(it)} aria-label="Play {it.title}">
 									<span class="n tab-num">{i + 1}</span>
-									{#if it.artworkUrl}<img src={it.artworkUrl} alt="" width="64" height="36" loading="lazy" referrerpolicy="no-referrer" />{/if}
+									{#if it.artworkUrl}<img src={it.artworkUrl} alt="" width="64" height="36" loading="lazy" referrerpolicy="no-referrer" />{:else}<span class="thumb" aria-hidden="true"></span>{/if}
 									<span class="t"><span class="ell">{it.title}</span><span class="cap muted ell">{it.artist ?? ''}</span></span>
 									<span class="cap">{it.unavailable ? 'Unavailable' : it.embeddable === false ? 'Can’t play here' : it.durationMs ? fmtTime(it.durationMs) : ''}</span>
 								</button>
@@ -228,11 +228,29 @@
 </div>
 
 <style>
+	/* Side by side only when the content area is wide enough (sidebar + now-playing panel eat the
+	   rest); otherwise the visible player sits above the list. */
+	.layout {
+		container-type: inline-size;
+	}
+	@container (min-width: 1000px) {
+		.layout.laptop > .main,
+		.layout.laptop > .stage {
+			min-width: 0;
+		}
+	}
 	.layout.laptop {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(480px, 40%);
-		gap: 24px;
-		align-items: start;
+		display: flex;
+		flex-direction: column-reverse;
+		gap: 16px;
+	}
+	@container (min-width: 1000px) {
+		.layout.laptop {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) minmax(480px, 40%);
+			gap: 24px;
+			align-items: start;
+		}
 	}
 	.hd {
 		display: flex;
@@ -285,9 +303,14 @@
 		border-bottom: 1px solid var(--border);
 		min-height: 52px;
 	}
-	.items img {
+	.items img,
+	.items .thumb {
+		width: 64px;
+		height: 36px;
 		border-radius: 4px;
 		object-fit: cover;
+		background: var(--surface-3);
+		display: block;
 	}
 	.items .t {
 		display: flex;
@@ -306,8 +329,13 @@
 		text-align: right;
 	}
 	.stage {
-		position: sticky;
-		top: 16px;
+		position: relative;
+	}
+	@container (min-width: 1000px) {
+		.stage {
+			position: sticky;
+			top: 16px;
+		}
 	}
 	.stage.sheet {
 		position: fixed;

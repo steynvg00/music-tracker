@@ -54,6 +54,13 @@ other videos re-checked, and YouTube data that can't be refreshed within 30 days
 (YouTube API Services policy III.E.4). Needs the GitHub secret `YOUTUBE_API_KEY` (same key as the
 hub's Vercel env). Without it, imports are disabled and old YouTube data is deleted after 30 days.
 
+## Mixed-session relay (v0.85, experimental)
+
+On an iPhone, a mixed session's Spotify part plays in the Spotify app while Rotor's page is
+suspended. The page queues a `mix_relay` hub job (`lib/mix_relay.py`) that waits until that part
+should end (at most 18 minutes, inside the job's 20-minute timeout) and sends the Web Push "Spotify part finished — tap to continue on YouTube", unless the page carried on by itself.
+It uses the existing `hub-jobs.yml` job step and its VAPID secrets; no Spotify calls.
+
 ## Rotor job runner and notifications (v0.82)
 
 Extra secrets for `hub-jobs.yml` (the other Spotify/DB secrets are the ones above):

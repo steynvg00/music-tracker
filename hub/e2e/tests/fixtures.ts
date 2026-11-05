@@ -44,25 +44,32 @@ async function ctlFetch(url: string, init?: RequestInit): Promise<Response> {
 	try {
 		return await fetch(url, init);
 	} catch {
+		// Both retries combined (R7 + R5): a short pause, then a fresh connection.
+		await new Promise((r) => setTimeout(r, 150));
 		return fetch(url, { ...init, headers: { ...(init?.headers ?? {}), Connection: 'close' } });
 	}
 }
 
+/** fetch to the mock control server by path, retried once (see ctlFetch). */
+async function ctl(path: string, init?: RequestInit): Promise<Response> {
+	return ctlFetch(`${MOCK}${path}`, init);
+}
+
 export const mock = {
 	async calls(): Promise<MockCall[]> {
-		return (await ctlFetch(`${MOCK}/__mock/calls`)).json();
+		return (await ctl('/__mock/calls')).json();
 	},
 	async resetCalls() {
-		await ctlFetch(`${MOCK}/__mock/reset-calls`, { method: 'POST' });
+		await ctl('/__mock/reset-calls', { method: 'POST' });
 	},
 	async state(): Promise<Record<string, any>> {
-		return (await ctlFetch(`${MOCK}/__mock/state`)).json();
+		return (await ctl('/__mock/state')).json();
 	},
 	async set(patch: Record<string, unknown>) {
-		await ctlFetch(`${MOCK}/__mock/state`, { method: 'POST', body: JSON.stringify(patch) });
+		await ctl('/__mock/state', { method: 'POST', body: JSON.stringify(patch) });
 	},
 	async pushes(): Promise<{ endpoint: string; data: { kind: string; title: string; body: string; url: string } }[]> {
-		return (await ctlFetch(`${MOCK}/__mock/pushes`)).json();
+		return (await ctl('/__mock/pushes')).json();
 	},
 	async fixture(): Promise<Record<string, any>> {
 		return (await this.state()).fixture;
@@ -74,12 +81,22 @@ export const mock = {
 };
 
 /** Stub for https://sdk.scdn.co/spotify-player.js: a Player that never produces audio. */
-const SDK_STUB = `window.Spotify = { Player: class { constructor(o) { this.o = o; this.l = {}; }
+const SDK_STUB = `window.Spotify = { Player: class {
+  constructor(o) { this.o = o; this.l = {}; }
   addListener(e, f) { this.l[e] = f; return true; } removeListener() { return true; }
-  connect() { setTimeout(() => this.l.ready && this.l.ready({ device_id: 'dev-laptop-sdk' }), 50); return Promise.resolve(true); }
-  disconnect() {} activateElement() { return Promise.resolve(); } getCurrentState() { return Promise.resolve(null); }
-  pause() { return Promise.resolve(); } resume() { return Promise.resolve(); } togglePlay() { return Promise.resolve(); }
-  nextTrack() { return Promise.resolve(); } previousTrack() { return Promise.resolve(); } seek() { return Promise.resolve(); }
+  connect() { setTimeout(() => { this.l.ready && this.l.ready({ device_id: 'dev-laptop-sdk' }); this.watch(); }, 50); return Promise.resolve(true); }
+  // Like the real SDK: state events for this device (read from the mocked Spotify via Rotor's own API).
+  watch() { if (this.t) return; this.t = setInterval(async () => { try {
+    const r = await fetch('/api/player/state', { headers: { Accept: 'application/json' } }); if (!r.ok) return;
+    const s = (await r.json()).snapshot; if (!s || !s.device || s.device.id !== 'dev-laptop-sdk' || !s.item) return;
+    this.l.player_state_changed && this.l.player_state_changed({ paused: !s.isPlaying, position: s.progressMs, duration: s.item.durationMs, timestamp: Date.now(),
+      track_window: { current_track: { uri: s.item.uri, type: 'track', name: s.item.name, duration_ms: s.item.durationMs, artists: s.item.artists, album: { name: s.item.albumName || '', images: [] } } },
+      context: s.context ? { uri: s.context.uri } : null, disallows: {} });
+  } catch (e) {} }, 600); }
+  cmd(p, b) { return fetch('/api/player/' + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: 'dev-laptop-sdk', ...(b || {}) }) }).then(() => undefined); }
+  disconnect() { clearInterval(this.t); } activateElement() { return Promise.resolve(); } getCurrentState() { return Promise.resolve(null); }
+  pause() { return this.cmd('pause'); } resume() { return this.cmd('play'); } togglePlay() { return this.cmd('pause'); }
+  nextTrack() { return this.cmd('next'); } previousTrack() { return this.cmd('previous'); } seek(ms) { return this.cmd('seek', { position_ms: ms }); }
   setVolume() { return Promise.resolve(); } } };
 setTimeout(() => window.onSpotifyWebPlaybackSDKReady && window.onSpotifyWebPlaybackSDKReady(), 0);`;
 
@@ -104,6 +121,9 @@ const YT_STUB = `(() => {
     }
     _state(s) { this.o.events.onStateChange && this.o.events.onStateChange({ data: s, target: this }); }
     loadVideoById(id) { this.id = id; log.push('load:' + id); this.box.textContent = 'YouTube ▶ ' + id;
+      window.__ytBlocked = window.__ytBlocked || {};
+      // window.__ytBlockAutoplay: the first autoplaying load of each video is refused (no user gesture).
+      if (window.__ytBlockAutoplay && !window.__ytBlocked[id]) { window.__ytBlocked[id] = true; setTimeout(() => this.o.events.onAutoplayBlocked && this.o.events.onAutoplayBlocked({ target: this }), 30); return; }
       setTimeout(() => window.__ytRefuse.includes(id) ? this.o.events.onError({ data: 150, target: this }) : this._state(1), 30); }
     cueVideoById(id) { this.id = id; log.push('cue:' + id); }
     playVideo() { log.push('play'); this._state(1); }
@@ -137,7 +157,8 @@ const SC_STUB = `(() => {
       skip: (i) => { st.index = i; fire(Events.PLAY); },
       getCurrentSound: (cb) => cb(st.sounds[st.index] || null),
       getCurrentSoundIndex: (cb) => cb(st.index),
-      getSounds: (cb) => cb(st.sounds)
+      getSounds: (cb) => cb(st.sounds),
+      load: (url, o) => { log.push('load:' + url); st.sounds = [{ title: url.split('/').pop() }]; st.index = 0; setTimeout(() => o && o.auto_play && fire(Events.PLAY), 30); }
     };
   }
   Widget.Events = Events;
