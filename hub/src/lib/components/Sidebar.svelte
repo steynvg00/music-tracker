@@ -4,9 +4,20 @@
 	import RotorMark from './RotorMark.svelte';
 	import Art from './Art.svelte';
 	import RotorCover from './RotorCover.svelte';
+	import LibraryRowItem from './LibraryRowItem.svelte';
+	import { customSheet } from './custom-playlist-sheet/store.svelte';
+	import { library } from '$lib/stores/library.svelte';
+	import { CHIP_LABEL, filterRows, sortRows, type Chip } from '$lib/shared/library';
 	import type { DailyCandidate } from '$lib/shared/daily-types';
-	/** Laptop sidebar. R1: navigation + Today's pick; the full library lands in R2. */
+	import { onMount } from 'svelte';
+	/** Laptop sidebar: navigation, Today's pick, and the library (chips + compact rows). */
 	let { current }: { current: DailyCandidate | null } = $props();
+	const SIDEBAR_CHIPS: Chip[] = ['managed', 'snapshots', 'custom', 'yours', 'followed'];
+	let chip = $state<Chip | null>(null);
+	const rows = $derived(sortRows(filterRows(library.rows, new Set(chip ? [chip] : [])), 'az'));
+	onMount(() => {
+		if (window.matchMedia('(min-width: 768px)').matches) void library.load();
+	});
 	const links: { href: string; icon: IconName; label: string; match: RegExp }[] = [
 		{ href: '/home', icon: 'home', label: 'Home', match: /^\/(home)?$/ },
 		{ href: '/search', icon: 'search', label: 'Search', match: /^\/search/ },
@@ -24,7 +35,18 @@
 		{/each}
 	</div>
 	<div class="lib">
-		<div class="hdr"><b>Library</b><span class="badge">R2</span></div>
+		<div class="hdr">
+			<a href="/library"><b>Library</b></a>
+			<span class="hdr-acts">
+				<a class="cap" href="/rules">Rules</a>
+				<button class="ibtn" aria-label="New custom playlist" onclick={() => customSheet.openCreate()}><Icon name="plus" size={18} /></button>
+			</span>
+		</div>
+		<div class="chips" role="group" aria-label="Library filter">
+			{#each SIDEBAR_CHIPS as c (c)}
+				<button class="chip" class:on={chip === c} aria-pressed={chip === c} onclick={() => (chip = chip === c ? null : c)}>{CHIP_LABEL[c]}</button>
+			{/each}
+		</div>
 		<a class="sbrow" class:on={page.url.pathname.startsWith('/daily')} href="/daily">
 			{#if current?.kind === 'generated'}
 				<RotorCover title={current.title} recipe={current.recipe} size={48} />
@@ -33,7 +55,8 @@
 			{/if}
 			<span class="grow"><span class="n ell">Today's pick</span><span class="m ell"><span class="badge acc">Daily</span> {current?.title ?? 'Not mixed yet'}</span></span>
 		</a>
-		<p class="cap muted pad">Your playlists, filters and custom playlists arrive with the next release.</p>
+		{#each rows as r (r.id)}<LibraryRowItem {r} compact />{/each}
+		{#if library.loaded && !rows.length}<p class="cap muted pad">Nothing here yet. The playlist mirror fills this in.</p>{/if}
 	</div>
 </aside>
 
@@ -101,6 +124,33 @@
 	}
 	.hdr b {
 		font-size: 15px;
+	}
+	.hdr-acts {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.chips {
+		display: flex;
+		gap: 6px;
+		overflow-x: auto;
+		scrollbar-width: none;
+		padding: 0 4px 8px;
+	}
+	.chip {
+		height: 28px;
+		padding: 0 10px;
+		border-radius: var(--r-pill);
+		background: var(--surface-3);
+		font-size: 12px;
+		font-weight: 650;
+		white-space: nowrap;
+		border: 1px solid transparent;
+		flex: none;
+	}
+	.chip.on {
+		background: var(--accent-subtle);
+		border-color: var(--accent);
 	}
 	.sbrow {
 		display: flex;

@@ -10,6 +10,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toasts from '$lib/components/Toasts.svelte';
+	import CustomPlaylistSheet from '$lib/components/custom-playlist-sheet/CustomPlaylistSheet.svelte';
 	import { apiGet, apiPost } from '$lib/player/api-client';
 	import type { DailyDeck } from '$lib/shared/daily-types';
 	import { daily } from '$lib/stores/daily.svelte';
@@ -90,6 +91,7 @@
 <TabBar />
 <FullPlayer />
 <DevicePicker />
+<CustomPlaylistSheet />
 <Toasts />
 <div class="sr" aria-live="polite">{ui.announcement}</div>
 

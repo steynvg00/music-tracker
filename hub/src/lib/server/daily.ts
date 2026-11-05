@@ -12,9 +12,8 @@ import type { DailyCandidate, DailyDeck, DailyState, PlaylistCard, TrackRow } fr
 import { SpotifyError, type SpotifyApi } from './spotify/api';
 import type { WriteGuard } from './spotify/write-guard';
 import { syncMirror, upsertMirrorRow } from './spotify/mirror';
-
-export const RESEED_WORKFLOW = 'daily-pick-reseed.yml';
-const RESEED_DEBOUNCE_MS = 5 * 60 * 1000;
+import { enqueueAndDispatch, getJob, jobsAvailable } from './jobs';
+import type { JobRow } from '$lib/shared/jobs';
 
 interface CandidateRow {
 	pick_date: Date | string;
@@ -137,13 +136,17 @@ export async function loadDeck(sql: Sql, date: string, reseedAvailable: boolean)
 	}
 	const current = candidates.find((c) => c.rank === state?.currentRank) ?? candidates[0] ?? null;
 	const dailyId = await findDailyPickPlaylistId(sql);
+	const [rj] = await sql<{ id: string }[]>`
+		SELECT id FROM hub_jobs WHERE kind = 'reseed_daily_pick' AND payload->>'date' = ${date}
+		ORDER BY requested_at DESC LIMIT 1`;
 	return {
 		date,
 		candidates,
 		state,
 		current,
 		dailyPlaylistUri: dailyId ? `spotify:playlist:${dailyId}` : null,
-		reseedAvailable
+		reseedAvailable,
+		reseedJob: rj ? await getJob(sql, rj.id) : null
 	};
 }
 
@@ -305,11 +308,12 @@ export async function playCandidate(
 	return { contextUri, wrote };
 }
 
-export type ReseedResult = { mode: 'dispatched' } | { mode: 'pending' } | { mode: 'wrap'; rank: number };
+export type ReseedResult = { mode: 'job'; job: JobRow } | { mode: 'wrap'; rank: number };
 
 /**
- * "Shuffle the deck": dispatch .github/workflows/daily-pick-reseed.yml (Python appends 5
- * candidates, ~1 min). Without GITHUB_DISPATCH_TOKEN the deck starts over at rank 1.
+ * "Shuffle the deck" (R2): a reseed_daily_pick job, run by Python via hub-jobs.yml (~1 min).
+ * One active job per day (dedupe_key), so a double tap doesn't mix twice. Without
+ * GITHUB_DISPATCH_TOKEN there is no job runner: the deck starts over at its first pick.
  */
 export async function requestReseed(
 	sql: Sql,
@@ -317,34 +321,12 @@ export async function requestReseed(
 	date: string,
 	f: typeof fetch = fetch
 ): Promise<ReseedResult> {
-	if (!cfg.githubDispatchToken) {
+	if (!jobsAvailable(cfg)) {
 		const [r] = await sql<{ rank: number }[]>`SELECT min(rank)::int AS rank FROM daily_pick_candidates WHERE pick_date = ${date}`;
 		const rank = r?.rank ?? 1;
 		await select(sql, date, rank);
 		return { mode: 'wrap', rank };
 	}
-	const [s] = await sql<{ reseed_requested_at: Date | null }[]>`
-		SELECT reseed_requested_at FROM daily_pick_state WHERE pick_date = ${date}`;
-	if (s?.reseed_requested_at && Date.now() - new Date(s.reseed_requested_at).getTime() < RESEED_DEBOUNCE_MS) {
-		return { mode: 'pending' };
-	}
-	const res = await f(
-		`https://api.github.com/repos/${cfg.githubRepository}/actions/workflows/${RESEED_WORKFLOW}/dispatches`,
-		{
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${cfg.githubDispatchToken}`,
-				Accept: 'application/vnd.github+json',
-				'X-GitHub-Api-Version': '2022-11-28',
-				'User-Agent': 'rotor-hub'
-			},
-			body: JSON.stringify({ ref: 'main', inputs: { date } }),
-			signal: AbortSignal.timeout(8000)
-		}
-	);
-	if (res.status !== 204) throw new Error(`GitHub workflow dispatch failed: ${res.status}`);
-	await sql`
-		INSERT INTO daily_pick_state (pick_date, reseed_requested_at) VALUES (${date}, now())
-		ON CONFLICT (pick_date) DO UPDATE SET reseed_requested_at = now(), updated_at = now()`;
-	return { mode: 'dispatched' };
+	const { job } = await enqueueAndDispatch(sql, cfg, 'reseed_daily_pick', { date }, `reseed:${date}`, f);
+	return { mode: 'job', job };
 }

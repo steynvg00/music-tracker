@@ -42,6 +42,7 @@ cd hub && npm run check && npm test && npm run build   # hub typecheck, tests, b
 - `migrations/` — Postgres schema migrations
 - `docs/feature-spec.md` — full feature specification
 - `hub/` — Rotor hub (SvelteKit); `hub/src/lib/server/spotify/write-guard.ts` is the only path for playlist writes
+- `lib/hub_jobs.py` + `scripts/run_hub_job.py` + `.github/workflows/hub-jobs.yml` — runner for jobs the hub queues in `hub_jobs` (Shuffle the deck, Refresh now, test push) and the daily hub tasks
 - `docs/hub-redesign/` — hub analysis, architecture, design and roadmap (R0–R6)
 - `tests/` — pytest; `tests/fixtures/` is shared with the hub's vitest suite
 

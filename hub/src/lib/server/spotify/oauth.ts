@@ -24,7 +24,10 @@ export const HUB_SCOPES = [
 	'playlist-read-private',
 	'playlist-read-collaborative',
 	'playlist-modify-private',
-	'playlist-modify-public'
+	'playlist-modify-public',
+	// R2: deleting a custom playlist = DELETE /me/library?uris=spotify:playlist:… (write-guard unfollowCustom).
+	// Tokens minted before v0.82 lack it; the guard then falls back to DELETE /playlists/{id}/followers.
+	'user-library-modify'
 ] as const;
 
 /** Must match SPOTIFY_SCOPES in scripts/spotify_auth.py. */

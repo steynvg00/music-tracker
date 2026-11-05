@@ -13,6 +13,8 @@ export interface HubConfig {
 	tokenEncKey: string;
 	githubDispatchToken: string | null;
 	githubRepository: string;
+	/** Web Push application server key (public; the private key lives only in GitHub secrets). */
+	vapidPublicKey: string | null;
 }
 
 export class ConfigError extends Error {}
@@ -43,7 +45,8 @@ export function config(): HubConfig {
 		sessionSecret: required('SESSION_SECRET'),
 		tokenEncKey: required('TOKEN_ENC_KEY'),
 		githubDispatchToken: optional('GITHUB_DISPATCH_TOKEN'),
-		githubRepository: optional('GITHUB_REPOSITORY') ?? 'steynvg00/music-tracker'
+		githubRepository: optional('GITHUB_REPOSITORY') ?? 'steynvg00/music-tracker',
+		vapidPublicKey: optional('VAPID_PUBLIC_KEY')
 	};
 	return cached;
 }

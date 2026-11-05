@@ -25,15 +25,29 @@ Don't use "Run workflow" on **Scheduled ingest** for a quick check: every job in
 
 Mint the row from Rotor: **Settings › Connections › Connect crons** (needs `SPOTIFY_CRON_CLIENT_ID` / `SPOTIFY_CRON_CLIENT_SECRET` in Vercel = the cron app's ID and secret, and `https://<rotor>.vercel.app/auth/callback` in the cron app's redirect URIs). After that, every 6 months is one Reconnect tap instead of the manual steps below. The scope set is the same as `scripts/spotify_auth.py`.
 
-## Rotor jobs (v0.81)
+## Rotor jobs (v0.81, v0.82)
 
 | Job | Schedule | What |
 |---|---|---|
 | `sync-playlist-mirror` | `15 4 * * *` | `scripts/sync_playlist_mirror.py`: `/me/playlists` → `spotify_playlists`; items for unmanaged playlists, snapshots, custom and Missed new tracks when their `snapshot_id` changed. Read-only towards Spotify. |
 | `generate-daily-picks` | `30 4 * * *` | `scripts/generate_daily_picks.py`: 5 candidates for today (Europe/Amsterdam). DB only. Skips a day that already has candidates. |
-| `daily-pick-reseed.yml` | dispatch only | "Shuffle the deck" from the hub (`--reseed`, input `date`). Needs the hub's `GITHUB_DISPATCH_TOKEN` (fine-grained PAT, this repo, Actions: read and write). |
+| `hub-jobs.yml` (job) | dispatch, input `job_id` | (v0.82) Runs one queued `hub_jobs` row: `reseed_daily_pick` ("Shuffle the deck"), `refresh_managed` (Refresh now / Rebuild for one Auto playlist), `push_test`. Started by the hub with `GITHUB_DISPATCH_TOKEN`. |
+| `hub-jobs.yml` (daily) | `47 5 * * *` | (v0.82) `scripts/run_hub_job.py --daily`: sweeps stale jobs, rebuilds snapshots with a pending Rebuild, generates today's pick if missing and sends the "daily pick ready" notification, token-expiry notifications (14 and 3 days left, or dead), rules catalog export. |
 
-Manual runs: `uv run python scripts/generate_daily_picks.py --dry-run` prints today's deck without writing.
+`daily-pick-reseed.yml` (v0.81) is gone: "Shuffle the deck" is a `reseed_daily_pick` job since v0.82.
+
+Manual runs: `uv run python scripts/generate_daily_picks.py --dry-run` prints today's deck without writing. `uv run python scripts/update_managed_playlists.py --only <playlist_id>` refreshes one Auto playlist (refuses anything without a managed suffix).
+
+## Rotor job runner and notifications (v0.82)
+
+Extra secrets for `hub-jobs.yml` (the other Spotify/DB secrets are the ones above):
+
+- `VAPID_PRIVATE_KEY` — Web Push signing key. Generate once with `uv run python scripts/generate_vapid_keys.py`; the matching `VAPID_PUBLIC_KEY` goes into the hub's Vercel env. Without it jobs still run, only notifications are skipped.
+- `VAPID_SUBJECT` — contact for push services: your Rotor URL (`https://<rotor>.vercel.app`) or a `mailto:` address.
+
+The hub needs `GITHUB_DISPATCH_TOKEN` (Vercel env): a fine-grained PAT for this repository only, permission **Actions: Read and write**. It is used for one call, `POST /repos/{repo}/actions/workflows/hub-jobs.yml/dispatches`. Without it the hub still works; Refresh now / Rebuild are disabled and Shuffle the deck starts the current deck over.
+
+A job is `queued` → `running` → `done` / `failed`. Queued jobs older than 15 minutes and running jobs older than 30 minutes are marked failed. Retry re-runs the same row, up to 3 attempts.
 
 ## Spotify refresh token: re-mint every 6 months
 
@@ -57,7 +71,7 @@ Scopes are fixed at minting time. If you add a scope to `SPOTIFY_SCOPES` in `scr
 
 ## Keepalive (60-day inactivity rule)
 
-GitHub disables a public repository's scheduled workflows after 60 days without repository activity. `.github/workflows/keepalive.yml` runs every Monday and re-enables `scheduled-ingest.yml`, `ingest-monitor.yml` and itself through the REST API, then fails the run if any of them is not `active`. Merging any PR into `main` also resets the timer.
+GitHub disables a public repository's scheduled workflows after 60 days without repository activity. `.github/workflows/keepalive.yml` runs every Monday and re-enables `scheduled-ingest.yml`, `ingest-monitor.yml`, `hub-jobs.yml` (v0.82) and itself through the REST API, then fails the run if any of them is not `active`. Merging any PR into `main` also resets the timer.
 
 Check the state any time:
 

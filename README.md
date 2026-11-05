@@ -8,7 +8,7 @@ Spotify playlists maintained by GitHub Actions crons, a Streamlit dashboard, and
 |---|---|---|
 | Ingest + playlist crons | `scripts/`, `lib/`, `.github/workflows/scheduled-ingest.yml` | `docs/cron-setup.md` |
 | Streamlit dashboard (being retired) | `app.py`, `views/` | `docs/streamlit-cloud-deploy.md` |
-| Rotor hub (v0.81+: remote control, daily pick) | `hub/` | `hub/README.md`, `docs/hub-redesign/` |
+| Rotor hub (v0.81+: remote control, daily pick; v0.82+: library, custom playlists, rules, jobs, notifications) | `hub/` | `hub/README.md`, `docs/hub-redesign/` |
 | Schema | `migrations/` (applied by hand in the Supabase SQL editor) | `migrations/README.md` |
 
 ## Development

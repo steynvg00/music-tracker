@@ -1,7 +1,13 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	/** Bottom sheet on mobile, anchored popover-style dialog on laptop (05-design.md §7.4). */
-	let { open, onclose, label, children }: { open: boolean; onclose: () => void; label: string; children: Snippet } = $props();
+	let {
+		open,
+		onclose,
+		label,
+		children,
+		wide = false
+	}: { open: boolean; onclose: () => void; label: string; children: Snippet; wide?: boolean } = $props();
 	let el: HTMLElement | undefined = $state();
 	let opener: Element | null = null;
 
@@ -37,7 +43,7 @@
 </script>
 
 <div class="scrim" class:open onclick={onclose} aria-hidden="true"></div>
-<div class="sheet" class:open bind:this={el} role="dialog" aria-modal="true" aria-label={label} inert={!open} tabindex="-1" onkeydown={trap}>
+<div class="sheet" class:open class:wide bind:this={el} role="dialog" aria-modal="true" aria-label={label} inert={!open} tabindex="-1" onkeydown={trap}>
 	<div class="handle"></div>
 	{@render children()}
 </div>
@@ -102,6 +108,22 @@
 			transform: none;
 			opacity: 1;
 			pointer-events: auto;
+		}
+		.sheet.wide {
+			right: auto;
+			left: 50%;
+			top: 50%;
+			bottom: auto;
+			width: min(560px, calc(100vw - 48px));
+			max-height: min(760px, calc(100vh - 64px));
+			transform: translate(-50%, -48%);
+			padding: 20px;
+		}
+		.sheet.wide.open {
+			transform: translate(-50%, -50%);
+		}
+		.scrim.open:has(+ .sheet.wide) {
+			background: rgba(0, 0, 0, 0.55);
 		}
 		.handle {
 			display: none;

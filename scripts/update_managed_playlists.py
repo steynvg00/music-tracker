@@ -57,6 +57,22 @@ def _run_fresh_ingest() -> None:
         raise RuntimeError(f"ingest_spotify_recent.py exited with code {result.returncode}")
 
 
+def _refresh_only(playlist_id: str) -> None:
+    from lib.managed_refresh import ReadOnlyPlaylist, refresh_one
+
+    load_dotenv()
+    sp = get_spotify_client()
+    conn = psycopg.connect(os.environ["DATABASE_URL"])
+    try:
+        result = refresh_one(conn, sp, playlist_id)
+    except ReadOnlyPlaylist as e:
+        print(f"[playlists] REFUSED: {e}", file=sys.stderr, flush=True)
+        sys.exit(2)
+    finally:
+        conn.close()
+    print(f"[playlists] {result['name']}: {result['track_count']} tracks → {result['action']}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Refresh all managed auto-playlists.")
     parser.add_argument(
@@ -71,7 +87,20 @@ def main():
         default=False,
         help="Read-only run: neuter all Spotify + DB writes, still build + render the digest.",
     )
+    parser.add_argument(
+        "--only",
+        metavar="PLAYLIST_ID",
+        default=None,
+        help=(
+            "v0.82: refresh just this one Auto playlist now, whatever its cadence (snapshots are "
+            "rebuilt). Read live first: refused unless you own it and its name ends with "
+            "' · Auto 🤖🔄' or ' · Auto 🤖📸'. No digest, no badges, no fresh ingest."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.only:
+        return _refresh_only(args.only)
 
     if args.fresh_ingest:
         print("[playlists] Running fresh ingest before refresh...", flush=True)

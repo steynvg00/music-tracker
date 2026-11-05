@@ -1,29 +1,185 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Header from '$lib/components/Header.svelte';
-	import RotorMark from '$lib/components/RotorMark.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import LibraryRowItem from '$lib/components/LibraryRowItem.svelte';
+	import { customSheet } from '$lib/components/custom-playlist-sheet/store.svelte';
+	import { library } from '$lib/stores/library.svelte';
+	import { player } from '$lib/stores/player.svelte';
+	import { CHIPS, CHIP_LABEL, SORTS, SORT_LABEL, filterRows, groupByCategory, sortRows, type Chip, type LibrarySort } from '$lib/shared/library';
+
+	let { data } = $props();
+	const KEY = 'rotor.library';
+	let chips = $state<Set<Chip>>(new Set());
+	let sort = $state<LibrarySort>('az');
+
+	onMount(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as { chips?: Chip[]; sort?: LibrarySort };
+			chips = new Set((saved.chips ?? []).filter((c) => CHIPS.includes(c)));
+			if (saved.sort && SORTS.includes(saved.sort)) sort = saved.sort;
+		} catch {
+			/* first visit */
+		}
+		void library.load();
+	});
+
+	function persist() {
+		try {
+			localStorage.setItem(KEY, JSON.stringify({ chips: [...chips], sort }));
+		} catch {
+			/* private mode */
+		}
+	}
+	function toggle(c: Chip) {
+		const next = new Set(chips);
+		if (next.has(c)) next.delete(c);
+		else next.add(c);
+		chips = next;
+		persist();
+	}
+
+	const visible = $derived(sortRows(filterRows(library.rows, chips), sort));
+	const showLiked = $derived(chips.size === 0 || chips.has('liked'));
+	const grouped = $derived(chips.size === 1 && chips.has('managed') ? groupByCategory(visible, library.categories) : null);
+	const likedUri = $derived(`spotify:user:${data.ownerId}:collection`);
 </script>
 
 <svelte:head><title>Rotor · Library</title></svelte:head>
 
 <div class="view">
 	<Header title="Library" />
-	<div class="empty">
-		<span class="muted"><RotorMark size={64} /></span>
-		<p>Your playlists with filters, kind badges, custom playlists and the rules view arrive in the next release (R2).</p>
-		<a class="btn sec" href="/home">Back to Home</a>
+	<div class="actions">
+		<button class="btn pri" onclick={() => customSheet.openCreate()}><Icon name="plus" size={18} /> New custom playlist</button>
+		<a class="btn sec" href="/rules">Rules</a>
 	</div>
+	<div class="chips" role="group" aria-label="Filter">
+		{#each CHIPS as c (c)}
+			<button class="chip" class:on={chips.has(c)} aria-pressed={chips.has(c)} onclick={() => toggle(c)}>{CHIP_LABEL[c]}</button>
+		{/each}
+	</div>
+	<div class="sortline">
+		<label for="lib-sort" class="cap">Sort</label>
+		<select id="lib-sort" class="select" bind:value={sort} onchange={persist}>
+			{#each SORTS as s (s)}<option value={s}>{SORT_LABEL[s]}</option>{/each}
+		</select>
+		<span class="cap muted">{visible.length} playlists</span>
+	</div>
+
+	{#if !library.loaded && library.loading}
+		{#each [1, 2, 3, 4, 5, 6] as i (i)}<div class="skelrow"><div class="skel" style="width:56px;height:56px"></div><div class="skel" style="height:14px;width:50%"></div></div>{/each}
+	{:else if library.error}
+		<p class="notice">{library.error}</p>
+	{:else}
+		{#if showLiked}
+			<button class="liked" onclick={() => (player.view.context?.uri === likedUri ? player.togglePlay() : player.playContext(likedUri, 'Liked Songs'))}>
+				<span class="art s heart"><Icon name="play" size={22} /></span>
+				<span class="grow"><b>Liked Songs</b><span class="cap">Tap to play · read & play</span></span>
+			</button>
+		{/if}
+		{#if grouped}
+			{#each grouped as g (g.key)}
+				<section class="group">
+					<div class="ghead"><h2>{g.name}</h2><a class="cap" href="/rules#{g.key}">Rule</a></div>
+					{#each g.rows as r (r.id)}<LibraryRowItem {r} />{/each}
+				</section>
+			{/each}
+		{:else}
+			<div class="list">{#each visible as r (r.id)}<LibraryRowItem {r} />{/each}</div>
+		{/if}
+		{#if !visible.length && !showLiked}<p class="cap muted empty">Nothing here with these filters.</p>{/if}
+	{/if}
 </div>
 
 <style>
-	.empty {
+	.actions {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+		margin: 4px 0 14px;
+	}
+	.chips {
+		display: flex;
+		gap: 8px;
+		overflow-x: auto;
+		scrollbar-width: none;
+		padding: 2px 0;
+	}
+	.chip {
+		height: 32px;
+		padding: 0 14px;
+		border-radius: var(--r-pill);
+		background: var(--surface-3);
+		font-size: 13px;
+		font-weight: 650;
+		white-space: nowrap;
+		border: 1px solid transparent;
+		flex: none;
+	}
+	.chip.on {
+		background: var(--accent-subtle);
+		border-color: var(--accent);
+	}
+	.sortline {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 12px 0 6px;
+	}
+	.select {
+		height: 32px;
+		border-radius: var(--r-pill);
+		background: var(--surface-3);
+		color: var(--text-1);
+		border: 0;
+		padding: 0 12px;
+		font: inherit;
+		font-size: 13px;
+	}
+	.liked {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		width: 100%;
+		text-align: left;
+		min-height: 64px;
+		padding: 4px 0;
+	}
+	.heart {
+		width: 56px;
+		height: 56px;
+		display: grid;
+		place-items: center;
+		color: #fff;
+		background: linear-gradient(135deg, #6d4bd8, #9fd7e8);
+	}
+	.liked .grow {
 		display: flex;
 		flex-direction: column;
+	}
+	.group {
+		margin-top: 18px;
+	}
+	.ghead {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		margin-bottom: 4px;
+	}
+	.ghead h2 {
+		font-size: 16px;
+		font-weight: 800;
+	}
+	.ghead a {
+		text-decoration: underline;
+	}
+	.skelrow {
+		display: flex;
 		align-items: center;
-		gap: 14px;
-		text-align: center;
-		padding: 48px 16px;
-		color: var(--text-2);
-		max-width: 420px;
-		margin: 0 auto;
+		gap: 12px;
+		margin: 8px 0;
+	}
+	.empty {
+		margin-top: 24px;
 	}
 </style>

@@ -32,6 +32,15 @@ def main() -> int:
     conn = psycopg.connect(os.environ["DATABASE_URL"])
     try:
         r = sync_mirror(conn, sp, all_items=args.all_items)
+        # v0.82: rule catalog + playlist→category tags for the hub's Rules view. DB only;
+        # a failure here must not fail the mirror.
+        try:
+            from lib.rules_catalog import export_rules_catalog
+
+            print(f"[mirror] Rules catalog: {export_rules_catalog(conn)}", flush=True)
+        except Exception as e:
+            conn.rollback()
+            print(f"[mirror] WARNING: rules catalog export failed: {e}", file=sys.stderr, flush=True)
     finally:
         conn.close()
     print(

@@ -1,8 +1,8 @@
 """Generate Rotor's daily pick candidates (v0.81, R1). DB only: no Spotify calls.
 
 Nightly cron (scheduled-ingest.yml, 30 4 * * *): writes 5 candidates for today
-(Europe/Amsterdam) unless they already exist. "Shuffle the deck" in the hub runs this
-with --reseed through .github/workflows/daily-pick-reseed.yml, which appends 5 more.
+(Europe/Amsterdam) unless they already exist. "Shuffle the deck" in the hub appends 5 more
+as a reseed_daily_pick hub job (v0.82: lib/hub_jobs.py via .github/workflows/hub-jobs.yml).
 
   uv run python scripts/generate_daily_picks.py                 # today, skip if present
   uv run python scripts/generate_daily_picks.py --dry-run       # print, write nothing
