@@ -35,6 +35,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		reseedAvailable: jobsAvailable(cfg),
 		jobs,
 		push: { publicKey: cfg.vapidPublicKey, devices },
+		youtubeKey: !!cfg.youtubeApiKey,
 		mirrorAgeMin: Number.isFinite(age) ? Math.round(age / 60000) : null,
 		lastPlayAt: last[0]?.t ? new Date(last[0].t).toISOString() : null,
 		notice: key ? { text: NOTICES[key]!, error: key.startsWith('error') } : null

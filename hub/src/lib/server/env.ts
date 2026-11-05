@@ -15,6 +15,8 @@ export interface HubConfig {
 	githubRepository: string;
 	/** Web Push application server key (public; the private key lives only in GitHub secrets). */
 	vapidPublicKey: string | null;
+	/** YouTube Data API v3 key (R4, server-side only): imports public/unlisted playlists. */
+	youtubeApiKey: string | null;
 }
 
 export class ConfigError extends Error {}
@@ -46,7 +48,8 @@ export function config(): HubConfig {
 		tokenEncKey: required('TOKEN_ENC_KEY'),
 		githubDispatchToken: optional('GITHUB_DISPATCH_TOKEN'),
 		githubRepository: optional('GITHUB_REPOSITORY') ?? 'steynvg00/music-tracker',
-		vapidPublicKey: optional('VAPID_PUBLIC_KEY')
+		vapidPublicKey: optional('VAPID_PUBLIC_KEY'),
+		youtubeApiKey: optional('YOUTUBE_API_KEY')
 	};
 	return cached;
 }

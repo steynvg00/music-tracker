@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 // fileURLToPath, not .pathname: the latter keeps %20 and breaks on paths with spaces.
 const root = fileURLToPath(new URL('../.svelte-kit/output/client/', import.meta.url));
-const names = ['SPOTIFY_CLIENT_SECRET', 'SPOTIFY_CRON_CLIENT_SECRET', 'TOKEN_ENC_KEY', 'SESSION_SECRET', 'DATABASE_URL', 'GITHUB_DISPATCH_TOKEN', 'VAPID_PRIVATE_KEY', 'refresh_token_enc'];
+const names = ['SPOTIFY_CLIENT_SECRET', 'SPOTIFY_CRON_CLIENT_SECRET', 'TOKEN_ENC_KEY', 'SESSION_SECRET', 'DATABASE_URL', 'GITHUB_DISPATCH_TOKEN', 'VAPID_PRIVATE_KEY', 'YOUTUBE_API_KEY', 'refresh_token_enc'];
 const values = names.map((n) => process.env[n]).filter((v) => v && v.length >= 8);
 
 const hits = [];

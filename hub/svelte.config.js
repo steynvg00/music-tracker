@@ -15,13 +15,14 @@ const config = {
 			mode: 'auto',
 			directives: {
 				'default-src': ['self'],
-				'script-src': ['self', 'https://sdk.scdn.co'],
+				// R4: YouTube IFrame API + SoundCloud Widget API (official players, loaded from their hosts).
+				'script-src': ['self', 'https://sdk.scdn.co', 'https://www.youtube.com', 'https://s.ytimg.com', 'https://w.soundcloud.com'],
 				// Svelte's style="" attributes need unsafe-inline; no inline scripts are allowed.
 				'style-src': ['self', 'unsafe-inline'],
-				'img-src': ['self', 'data:', ...SPOTIFY_IMG],
+				'img-src': ['self', 'data:', ...SPOTIFY_IMG, 'https://i.ytimg.com', 'https://*.sndcdn.com'],
 				'font-src': ['self'],
 				'connect-src': ['self', 'https://api.spotify.com', 'https://*.spotify.com', 'wss://*.spotify.com', 'https://*.scdn.co'],
-				'frame-src': ['https://sdk.scdn.co'],
+				'frame-src': ['https://sdk.scdn.co', 'https://www.youtube.com', 'https://www.youtube-nocookie.com', 'https://w.soundcloud.com'],
 				'media-src': ['self', 'blob:', 'https://*.scdn.co'],
 				'worker-src': ['self'],
 				'manifest-src': ['self'],

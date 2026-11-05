@@ -16,9 +16,13 @@ export class ApiFailure extends Error {
 
 async function handle<T>(res: Response): Promise<T> {
 	if (res.status === 204) return undefined as T;
-	const body = (await res.json().catch(() => ({ error: 'bad_response' }))) as T & ApiError;
+	const BAD = Symbol('bad');
+	const body = (await res.json().catch(() => BAD)) as T & ApiError | typeof BAD;
+	// An unreadable body is a failure even on 2xx (e.g. a navigation cut the response off): never
+	// hand callers { error } as if it were the data they asked for (R4 fix: crashed the sidebar).
+	if (body === BAD) throw new ApiFailure(res.ok ? 502 : res.status, { error: 'bad_response' });
 	if (!res.ok) throw new ApiFailure(res.status, body as ApiError);
-	return body;
+	return body as T;
 }
 
 export async function apiGet<T>(path: string, f: typeof fetch = fetch): Promise<T> {

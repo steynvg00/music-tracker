@@ -22,6 +22,13 @@ On this day), Track / Album / Artist detail (canonical ISRC variants, heard alon
 grids), Search over your own history, and Home's streak tile, On this day and Recent badges.
 Numbers come from the `hub` rollups (migration 0023), refreshed at the end of every ingest.
 
+R4 (`v0.84-hub-elsewhere-collections`): Elsewhere — YouTube playlists (Data API v3, server-side
+key) and SoundCloud sets (oEmbed, no key) in their own room: Library source switch (exclusive),
+collection pages with YouTube's / SoundCloud's own visible player (≥ 480×270 on the laptop,
+full-screen sheet on mobile, never hidden or in the background), Previous/Next within one
+collection, non-embeddable and Go+ items flagged and skipped, a 30-day metadata refresh
+(YouTube III.E.4) in the daily hub-jobs run. Home only gets a link card. Migration 0024.
+
 ## How it fits together
 
 ```

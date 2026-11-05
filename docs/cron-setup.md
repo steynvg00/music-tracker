@@ -46,6 +46,14 @@ plays) and rebuilds everything once every 24 h (~11 s). The timings are printed 
 log (`[rollups] refreshed in … ms`). It never fails the ingest; before 0023 is applied it is a
 no-op. A full rebuild by hand: `SELECT hub.refresh_rollups(true);`
 
+## Elsewhere refresh (v0.84)
+
+The daily `hub-jobs.yml` run also refreshes YouTube / SoundCloud metadata (`lib/collections_refresh.py`,
+also `uv run python scripts/refresh_collections.py`): playlists synced > 25 days ago are re-read,
+other videos re-checked, and YouTube data that can't be refreshed within 30 days is deleted
+(YouTube API Services policy III.E.4). Needs the GitHub secret `YOUTUBE_API_KEY` (same key as the
+hub's Vercel env). Without it, imports are disabled and old YouTube data is deleted after 30 days.
+
 ## Rotor job runner and notifications (v0.82)
 
 Extra secrets for `hub-jobs.yml` (the other Spotify/DB secrets are the ones above):

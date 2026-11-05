@@ -217,6 +217,40 @@ export function createMock(stateFile) {
 		return { status: 501, body: { error: { status: 501, message: `E2E mock: unmocked ${method} ${p}` } }, unmocked: true };
 	}
 
+	// ── YouTube Data API v3 + SoundCloud oEmbed (R4) ──
+	function youtubeApi(path, q) {
+		const yt = state.youtube ?? { playlists: {}, videos: {} };
+		if (!q.get('key')) return err(403, 'missing key');
+		const name = path.split('/').at(-1);
+		if (name === 'playlists') {
+			const p = yt.playlists[q.get('id')];
+			return ok({ items: p ? [{ id: q.get('id'), snippet: { title: p.title, channelTitle: p.channel, thumbnails: {} }, contentDetails: { itemCount: p.items.length } }] : [] });
+		}
+		if (name === 'playlistItems') {
+			const p = yt.playlists[q.get('playlistId')];
+			if (!p) return err(404, 'playlistNotFound');
+			const start = Number(q.get('pageToken') ?? 0);
+			const per = Number(q.get('maxResults') ?? 5);
+			const slice = p.items.slice(start, start + per);
+			return ok({ items: slice.map((videoId) => ({ contentDetails: { videoId } })), ...(start + per < p.items.length ? { nextPageToken: String(start + per) } : {}) });
+		}
+		if (name === 'videos') {
+			const ids = (q.get('id') ?? '').split(',');
+			return ok({
+				items: ids
+					.filter((i) => yt.videos[i])
+					.map((i) => ({ id: i, snippet: { title: yt.videos[i].title, channelTitle: yt.videos[i].channel, thumbnails: {} }, contentDetails: { duration: yt.videos[i].duration ?? 'PT3M' }, status: { embeddable: yt.videos[i].embeddable !== false, privacyStatus: 'unlisted' } }))
+			});
+		}
+		return err(404, 'unknown youtube endpoint');
+	}
+	function soundcloudOembed(q) {
+		const u = q.get('url');
+		const sc = (state.soundcloud ?? {})[u];
+		if (!sc) return err(404, 'Not found');
+		return ok({ version: 1, type: 'rich', title: sc.title, author_name: sc.author, thumbnail_url: null, html: `<iframe width="100%" height="400" scrolling="no" frameborder="no" src="https://w.soundcloud.com/player/?visual=true&url=${encodeURIComponent(u)}"></iframe>` });
+	}
+
 	/** One external request → mocked response. `who` = 'hub' | 'python'. */
 	function handle({ method, url, body, who = 'hub' }) {
 		const u = new URL(url);
@@ -227,6 +261,10 @@ export function createMock(stateFile) {
 			res = ok({ access_token: `at-e2e-${calls.length}`, token_type: 'Bearer', expires_in: 3600, scope: HUB_SCOPES, ...(grant === 'authorization_code' ? { refresh_token: 'rt-e2e' } : {}) });
 		} else if (u.host === 'api.spotify.com' || (who === 'python' && u.pathname.startsWith('/v1/'))) {
 			res = spotifyApi(method, u.pathname, u.searchParams, body);
+		} else if (u.host === 'www.googleapis.com' && u.pathname.startsWith('/youtube/v3/')) {
+			res = youtubeApi(u.pathname, u.searchParams);
+		} else if (u.host === 'soundcloud.com' && u.pathname === '/oembed') {
+			res = soundcloudOembed(u.searchParams);
 		} else if (u.host === 'api.github.com') {
 			const m = /^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/([\w.-]+)\/dispatches$/.exec(u.pathname);
 			if (m && method === 'POST') {

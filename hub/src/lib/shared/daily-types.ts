@@ -82,6 +82,8 @@ export interface HomePayload {
 	comingBack: PlaylistCard[];
 	/** R3 rollups (hub.home_payload); null until migration 0023 is applied. */
 	stats: HomeStats | null;
+	/** R4: only the COUNT of Elsewhere collections (no artwork, no items: separate room). Null before 0024. */
+	elsewhere: { youtube: number; soundcloud: number } | null;
 }
 
 export interface HomeStats {

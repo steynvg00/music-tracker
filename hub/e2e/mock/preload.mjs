@@ -21,7 +21,7 @@ if (!STATE || !REPO) throw new Error('E2E preload needs E2E_SPOTIFY_STATE and E2
 
 const mock = createMock(STATE);
 const realFetch = globalThis.fetch;
-const MOCKED = new Set(['api.spotify.com', 'accounts.spotify.com', 'api.github.com']);
+const MOCKED = new Set(['api.spotify.com', 'accounts.spotify.com', 'api.github.com', 'www.googleapis.com', 'soundcloud.com']);
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function parseBody(raw) {
@@ -85,6 +85,13 @@ createServer(async (req, res) => {
 	if (url.pathname === '/__mock/pushes') {
 		const lines = PUSH_LOG && existsSync(PUSH_LOG) ? readFileSync(PUSH_LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
 		return json(res, 200, lines);
+	}
+	// R4: the Python refresh's YouTube / SoundCloud calls (YOUTUBE_API_BASE / SOUNDCLOUD_OEMBED_URL).
+	if (url.pathname.startsWith('/youtube/v3/') || url.pathname === '/oembed') {
+		const host = url.pathname === '/oembed' ? 'soundcloud.com' : 'www.googleapis.com';
+		const r = mock.handle({ method: 'GET', url: `https://${host}${url.pathname}${url.search}`, who: 'python' });
+		res.writeHead(r.status, { 'content-type': 'application/json' });
+		return res.end(JSON.stringify(r.body ?? {}));
 	}
 	if (url.pathname.startsWith('/v1/')) {
 		const r = mock.handle({ method: req.method ?? 'GET', url: `https://api.spotify.com${url.pathname}${url.search}`, body: parseBody(raw || undefined), who: 'python' });

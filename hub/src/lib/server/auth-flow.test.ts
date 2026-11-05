@@ -16,7 +16,8 @@ const cfg: HubConfig = {
 	tokenEncKey: Buffer.alloc(32, 1).toString('base64'),
 	githubDispatchToken: null,
 	githubRepository: 'steynvg00/music-tracker',
-	vapidPublicKey: null
+	vapidPublicKey: null,
+	youtubeApiKey: null
 };
 const key = Buffer.alloc(32, 1);
 const REDIRECT = 'https://rotor.example/auth/callback';
