@@ -3,85 +3,95 @@
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
 /**
- * App shell + last Home payload (04-architecture.md §6.3).
- *   build/static assets  cache-first, versioned per deploy
+ * App shell + last Home payload (04-architecture.md §6.3). Policy and its tests live in
+ * $lib/sw/cache-policy.ts; the short version:
+ *   build/static assets  precached per build (bypassing the HTTP cache), cache-first
+ *   pages (navigations)  network-first; the cached copy only when the network is down
  *   GET /api/home        stale-while-revalidate (cached copy marked X-Rotor-Stale: 1)
- *   pages                network-first, cached copy when offline
  *   everything else      network only: player state, tokens and OAuth are never cached
+ * Every cache is named after the build version and activate deletes all other `rotor-*`
+ * caches, so a new deploy can't leave an old shell (or old HTML) behind. Error responses
+ * are never stored.
  */
 import { build, files, version } from '$service-worker';
+import { OFFLINE_PATH, cacheNames, isCacheablePage, networkFirstPage, staleCaches, staleWhileRevalidate } from '$lib/sw/cache-policy';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
-const SHELL = `rotor-shell-${version}`;
-const DATA = 'rotor-data';
+const CACHES = cacheNames(version);
 const ASSETS = new Set([...build, ...files]);
 
+async function precache(): Promise<void> {
+	const shell = await caches.open(CACHES.shell);
+	// cache: 'reload' so a stale HTTP-cached copy of a static file can't end up in the shell.
+	await shell.addAll([...ASSETS].map((u) => new Request(u, { cache: 'reload' })));
+	try {
+		// Best effort: the offline page, from THIS build, as the last-resort fallback.
+		const res = await fetch(new Request(OFFLINE_PATH, { cache: 'reload', credentials: 'same-origin' }));
+		if (isCacheablePage(res)) await (await caches.open(CACHES.pages)).put(OFFLINE_PATH, res);
+	} catch {
+		// Offline during install: the inline fallback in cache-policy.ts covers it.
+	}
+}
+
 sw.addEventListener('install', (event) => {
-	event.waitUntil(
-		caches
-			.open(SHELL)
-			.then((c) => c.addAll([...ASSETS]))
-			.then(() => sw.skipWaiting())
-	);
+	event.waitUntil(precache().then(() => sw.skipWaiting()));
 });
 
 sw.addEventListener('activate', (event) => {
 	event.waitUntil(
 		caches
 			.keys()
-			.then((keys) => Promise.all(keys.filter((k) => k.startsWith('rotor-shell-') && k !== SHELL).map((k) => caches.delete(k))))
+			.then((keys) => Promise.all(staleCaches(keys, version).map((k) => caches.delete(k))))
 			.then(() => sw.clients.claim())
 	);
 });
 
 sw.addEventListener('message', (event) => {
-	if (event.data?.type === 'clear-data') event.waitUntil(caches.delete(DATA));
+	// Settings › Clear caches: cached pages + Home payload (the shell stays; it's this build's).
+	if (event.data?.type === 'clear-data') event.waitUntil(Promise.all([caches.delete(CACHES.data), caches.delete(CACHES.pages)]));
 });
 
-function cacheable(res: Response): boolean {
-	return res.ok && !res.redirected && res.type === 'basic';
+// ── Web Push (R2): daily pick ready, token expiring, job finished ───────────
+interface PushPayload {
+	title?: string;
+	body?: string;
+	url?: string;
+	tag?: string;
 }
 
-async function staleWhileRevalidate(event: FetchEvent): Promise<Response> {
-	const cache = await caches.open(DATA);
-	const network = fetch(event.request)
-		.then(async (res) => {
-			if (cacheable(res)) await cache.put(event.request, res.clone());
-			return res;
-		})
-		.catch(() => null);
-	if (event.request.cache === 'no-store') {
-		const res = await network;
-		return res ?? new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-	}
-	const cached = await cache.match(event.request);
-	if (cached) {
-		event.waitUntil(network);
-		const headers = new Headers(cached.headers);
-		headers.set('X-Rotor-Stale', '1');
-		return new Response(cached.body, { status: cached.status, headers });
-	}
-	return (await network) ?? new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-}
-
-async function networkFirstPage(request: Request): Promise<Response> {
-	const cache = await caches.open(DATA);
+sw.addEventListener('push', (event) => {
+	let d: PushPayload = {};
 	try {
-		const res = await fetch(request);
-		if (cacheable(res) && /^\/(home|daily|settings)?\/?$|^\/daily\//.test(new URL(request.url).pathname)) {
-			await cache.put(request, res.clone());
-		}
-		return res;
+		d = (event.data?.json() as PushPayload) ?? {};
 	} catch {
-		return (
-			(await cache.match(request)) ??
-			(await cache.match('/home')) ??
-			new Response('<!doctype html><title>Rotor</title><p style="font-family:system-ui;color:#f5f5f7;background:#0b0b0e">You’re offline.</p>', {
-				headers: { 'Content-Type': 'text/html; charset=utf-8' }
-			})
-		);
+		d = { body: event.data?.text() };
 	}
-}
+	event.waitUntil(
+		sw.registration.showNotification(d.title || 'Rotor', {
+			body: d.body ?? '',
+			tag: d.tag,
+			icon: '/icons/icon-192.png',
+			badge: '/icons/icon-192.png',
+			data: { url: typeof d.url === 'string' && d.url.startsWith('/') && !d.url.startsWith('//') ? d.url : '/home' }
+		})
+	);
+});
+
+sw.addEventListener('notificationclick', (event) => {
+	event.notification.close();
+	const url = new URL((event.notification.data as { url?: string } | null)?.url ?? '/home', sw.location.origin).href;
+	event.waitUntil(
+		sw.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
+			for (const c of list) {
+				if ('focus' in c) {
+					await (c as WindowClient).navigate(url).catch(() => undefined);
+					return (c as WindowClient).focus();
+				}
+			}
+			return sw.clients.openWindow(url);
+		})
+	);
+});
 
 sw.addEventListener('fetch', (event) => {
 	const { request } = event;
@@ -90,13 +100,22 @@ sw.addEventListener('fetch', (event) => {
 	if (url.origin !== sw.location.origin) return;
 
 	if (ASSETS.has(url.pathname)) {
-		event.respondWith(caches.match(request).then((hit) => hit ?? fetch(request)));
+		event.respondWith(
+			caches
+				.open(CACHES.shell)
+				.then((c) => c.match(request))
+				.then((hit) => hit ?? fetch(request))
+		);
 		return;
 	}
 	if (url.pathname === '/api/home') {
-		event.respondWith(staleWhileRevalidate(event));
+		event.respondWith(
+			caches.open(CACHES.data).then((cache) => staleWhileRevalidate(request, { fetch, cache, waitUntil: (p) => event.waitUntil(p) }))
+		);
 		return;
 	}
 	if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) return;
-	if (request.mode === 'navigate') event.respondWith(networkFirstPage(request));
+	if (request.mode === 'navigate') {
+		event.respondWith(caches.open(CACHES.pages).then((cache) => networkFirstPage(request, { fetch, cache })));
+	}
 });

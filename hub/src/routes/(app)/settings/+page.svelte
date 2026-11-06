@@ -4,10 +4,56 @@
 	import { getSdkMode, setSdkMode, type SdkMode } from '$lib/player/spotify-sdk';
 	import { fmtDate } from '$lib/shared/format';
 	import type { ConnectionStatus } from '$lib/server/spotify/token';
+	import { invalidateAll } from '$app/navigation';
+	import JobStatus from '$lib/components/JobStatus.svelte';
+	import { JobTracker } from '$lib/stores/jobs.svelte';
+	import { toasts } from '$lib/stores/toasts.svelte';
+	import { apiPost, describeFailure } from '$lib/player/api-client';
+	import { currentSubscription, disablePush, enablePush, needsInstall, pushSupported } from '$lib/push-client';
+	import { describeJob, JOB_KIND_LABEL, type JobRow } from '$lib/shared/jobs';
 
 	let { data } = $props();
 	let sdkMode = $state<SdkMode>('auto');
-	onMount(() => (sdkMode = getSdkMode()));
+	let pushState = $state<'unknown' | 'on' | 'off' | 'unsupported' | 'install'>('unknown');
+	let pushBusy = $state(false);
+	const testJob = new JobTracker(() => void invalidateAll());
+	onMount(() => {
+		sdkMode = getSdkMode();
+		if (!pushSupported()) pushState = needsInstall() ? 'install' : 'unsupported';
+		else void currentSubscription().then((s) => (pushState = s ? 'on' : 'off'));
+	});
+
+	async function turnOn() {
+		if (!data.push.publicKey) return;
+		pushBusy = true;
+		try {
+			const r = await enablePush(data.push.publicKey);
+			pushState = r === 'enabled' ? 'on' : 'off';
+			if (r === 'denied') toasts.error('Notifications are blocked for Rotor in this browser’s settings.');
+			await invalidateAll();
+		} catch (e) {
+			toasts.error(describeFailure(e));
+		} finally {
+			pushBusy = false;
+		}
+	}
+	async function turnOff() {
+		pushBusy = true;
+		try {
+			await disablePush();
+			pushState = 'off';
+			await invalidateAll();
+		} finally {
+			pushBusy = false;
+		}
+	}
+	async function sendTest() {
+		try {
+			testJob.track((await apiPost<{ job: JobRow }>('/api/push/test')).job);
+		} catch (e) {
+			toasts.error(describeFailure(e));
+		}
+	}
 
 	function pick(m: SdkMode) {
 		sdkMode = m;
@@ -75,11 +121,49 @@
 	</section>
 
 	<section class="section">
+		<div class="sec-h"><h2>Notifications</h2></div>
+		<p class="cap">Today's pick is ready, Spotify sign-in expiring (14 and 3 days ahead), and when a job you started finishes.</p>
+		{#if !data.push.publicKey}
+			<p class="cap muted">Not set up: add the VAPID public key to the Vercel env and the private key + subject to the GitHub secrets (see hub/.env.example).</p>
+		{:else if pushState === 'install'}
+			<p class="cap">On iPhone, add Rotor to the Home Screen first (Share › Add to Home Screen), then open it from there.</p>
+		{:else if pushState === 'unsupported'}
+			<p class="cap muted">This browser doesn't support Web Push.</p>
+		{:else}
+			<div class="acts">
+				{#if pushState === 'on'}
+					<button class="btn sec" disabled={pushBusy} onclick={turnOff}>Turn off on this device</button>
+					<button class="btn sec" disabled={!data.reseedAvailable || !!testJob.view?.busy} onclick={sendTest}>Send a test</button>
+				{:else}
+					<button class="btn pri" disabled={pushBusy || pushState === 'unknown'} onclick={turnOn}>Turn on for this device</button>
+				{/if}
+			</div>
+			<JobStatus tracker={testJob} />
+		{/if}
+		<p class="cap muted">{data.push.devices} device{data.push.devices === 1 ? '' : 's'} subscribed.</p>
+	</section>
+
+	<section class="section">
+		<div class="sec-h"><h2>Jobs</h2></div>
+		{#if !data.reseedAvailable}<p class="cap muted">Jobs need the GitHub dispatch token in the Vercel env (see hub/.env.example). Without it, Refresh now and Rebuild wait for the daily run, and Shuffle the deck starts over.</p>{/if}
+		{#if data.jobs.length}
+			<ul class="jobs">
+				{#each data.jobs as j (j.id)}
+					{@const v = describeJob(j)}
+					<li data-status={j.status}><b>{JOB_KIND_LABEL[j.kind]}</b> <span class="badge {v.tone === 'danger' ? 'warn' : ''}">{v.label}</span> <span class="cap">{fmtDate(j.requestedAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{v.detail ? ` · ${v.detail}` : ''}</span></li>
+				{/each}
+			</ul>
+		{:else}
+			<p class="cap muted">No jobs yet.</p>
+		{/if}
+	</section>
+
+	<section class="section">
 		<div class="sec-h"><h2>Data health</h2></div>
 		<dl>
 			<dt>Last play ingested</dt><dd>{fmtDate(data.lastPlayAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</dd>
 			<dt>Playlist mirror</dt><dd>{data.mirrorAgeMin === null ? 'empty' : `updated ${data.mirrorAgeMin} min ago`}</dd>
-			<dt>Shuffle the deck</dt><dd>{data.reseedAvailable ? 'on (GitHub dispatch)' : 'off: deck starts over'}</dd>
+			<dt>Hub jobs</dt><dd>{data.reseedAvailable ? 'on (GitHub dispatch)' : 'off: no GitHub dispatch token'}</dd>
 		</dl>
 	</section>
 
@@ -155,6 +239,15 @@
 	}
 	.notice.err {
 		color: var(--danger);
+	}
+	.jobs {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		font-size: 13px;
 	}
 	.foot {
 		margin-top: 28px;

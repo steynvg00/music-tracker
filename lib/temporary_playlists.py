@@ -4,6 +4,7 @@ Custom playlists are user-named, user-managed (no auto-refresh, no auto-delete).
 Naming format: '{user_name} · Custom 🎧'.
 """
 
+import json
 import sys
 
 import psycopg
@@ -34,6 +35,63 @@ def list_artists(conn, limit: int = 1000) -> list[tuple[str, int]]:
     return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+SORT_ORDERS = (
+    "random",
+    "plays_desc",
+    "plays_asc",
+    "first_play_asc",
+    "first_play_desc",
+    "release_asc",
+    "release_desc",
+)
+
+
+def preview_filters(
+    artists: list[str] | None = None,
+    release_year_min: int | None = None,
+    release_year_max: int | None = None,
+    discovery_year_min: int | None = None,
+    discovery_year_max: int | None = None,
+    min_plays: int | None = None,
+    max_tracks: int = 100,
+    liked_only: bool = False,
+    sort_order: str = "plays_desc",
+) -> dict:
+    """The filters dict for hub.custom_playlist_preview() (migration 0022).
+
+    Same keys the Rotor hub stores in custom_playlists.filters_json. Streamlit doesn't
+    store them (its rows keep filters_json NULL), so only Rotor-made playlists can be
+    edited with their original filters in Rotor.
+    """
+    return {
+        "artists": list(artists or []),
+        "release_year_min": release_year_min,
+        "release_year_max": release_year_max,
+        "discovery_year_min": discovery_year_min,
+        "discovery_year_max": discovery_year_max,
+        "min_plays": min_plays,
+        "max_tracks": min(max_tracks, 10000),
+        "liked_only": bool(liked_only),
+        "sort_order": sort_order if sort_order in SORT_ORDERS else "plays_desc",
+    }
+
+
+def _rows_to_dicts(rows) -> list[dict]:
+    return [
+        {
+            "track_uri": row[0],
+            "track_name": row[1],
+            "artist_name": row[2],
+            "album_name": row[3],
+            "plays": row[4],
+            "first_played_at": row[5],
+            "release_year": row[6],
+            "release_date": row[7],
+        }
+        for row in rows
+    ]
+
+
 def query_temp_playlist_tracks(
     conn,
     artists: list[str] | None = None,
@@ -57,7 +115,49 @@ def query_temp_playlist_tracks(
     """Return list of track dicts matching the filter criteria.
 
     Each dict has keys: track_uri, track_name, artist_name, album_name, plays,
-    first_played_at, release_year.
+    first_played_at, release_year, release_date.
+
+    v0.82: runs the shared SQL function hub.custom_playlist_preview(filters) that the
+    Rotor hub also uses, so both apps select the same tracks. Until migration 0022 is
+    applied the function doesn't exist; then the original inline query runs instead.
+    """
+    filters = preview_filters(
+        artists, release_year_min, release_year_max, discovery_year_min, discovery_year_max,
+        min_plays, max_tracks, liked_only, sort_order,
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM hub.custom_playlist_preview(%s::jsonb)", (json.dumps(filters),))
+        return _rows_to_dicts(cur.fetchall())
+    except (psycopg.errors.UndefinedFunction, psycopg.errors.InvalidSchemaName):
+        conn.rollback()
+        return _query_temp_playlist_tracks_inline(
+            conn, artists, release_year_min, release_year_max, discovery_year_min,
+            discovery_year_max, min_plays, max_tracks, liked_only, sort_order,
+        )
+
+
+def _query_temp_playlist_tracks_inline(
+    conn,
+    artists: list[str] | None = None,
+    release_year_min: int | None = None,
+    release_year_max: int | None = None,
+    discovery_year_min: int | None = None,
+    discovery_year_max: int | None = None,
+    min_plays: int | None = None,
+    max_tracks: int = 100,
+    liked_only: bool = False,
+    sort_order: Literal[
+        "random",
+        "plays_desc",
+        "plays_asc",
+        "first_play_asc",
+        "first_play_desc",
+        "release_asc",
+        "release_desc",
+    ] = "plays_desc",
+) -> list[dict]:
+    """Pre-v0.82 inline query; the fallback until migration 0022 is applied.
 
     All filters are optional and AND-composed. Empty `artists` list means no artist filter.
     """
@@ -149,20 +249,7 @@ def query_temp_playlist_tracks(
 
     sql = "\n".join(sql_parts)
     cur.execute(sql, params)
-
-    return [
-        {
-            "track_uri": row[0],
-            "track_name": row[1],
-            "artist_name": row[2],
-            "album_name": row[3],
-            "plays": row[4],
-            "first_played_at": row[5],
-            "release_year": row[6],
-            "release_date": row[7],
-        }
-        for row in cur.fetchall()
-    ]
+    return _rows_to_dicts(cur.fetchall())
 
 
 def build_filters_summary(

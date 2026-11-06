@@ -1,4 +1,5 @@
 import type { ManagedKind } from './managed';
+import type { JobRow } from './jobs';
 
 export interface PlaylistCard {
 	id: string | null;
@@ -44,6 +45,8 @@ export interface DailyDeck {
 	/** Context URI of the Daily pick playlist, when known (hero shows Pause while it plays). */
 	dailyPlaylistUri: string | null;
 	reseedAvailable: boolean;
+	/** Latest "Shuffle the deck" job for this day (R2), so a reload keeps showing its state. */
+	reseedJob: JobRow | null;
 }
 
 export interface TrackRow {

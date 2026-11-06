@@ -30,6 +30,7 @@ describe('authorize URL', () => {
 
 	it('hub scopes include what the Web Playback SDK needs', () => {
 		for (const s of ['streaming', 'user-read-email', 'user-read-private', 'user-modify-playback-state']) expect(HUB_SCOPES).toContain(s);
+		expect(HUB_SCOPES).toContain('user-library-modify'); // R2 custom playlist delete via /me/library
 	});
 
 	it('cron scopes match scripts/spotify_auth.py', () => {

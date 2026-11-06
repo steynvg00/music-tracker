@@ -2,6 +2,8 @@ import { db } from '$lib/server/db';
 import { config } from '$lib/server/env';
 import { connectionStatus } from '$lib/server/spotify/token';
 import { mirrorAgeMs } from '$lib/server/spotify/mirror';
+import { jobsAvailable, recentJobs } from '$lib/server/jobs';
+import { subscriptionCount } from '$lib/server/push';
 import type { PageServerLoad } from './$types';
 
 const NOTICES: Record<string, string> = {
@@ -18,17 +20,21 @@ const NOTICES: Record<string, string> = {
 export const load: PageServerLoad = async ({ url }) => {
 	const sql = db();
 	const cfg = config();
-	const [connections, age, last] = await Promise.all([
+	const [connections, age, last, jobs, devices] = await Promise.all([
 		connectionStatus(sql),
 		mirrorAgeMs(sql).catch(() => Number.POSITIVE_INFINITY),
-		sql<{ t: Date | null }[]>`SELECT max(played_at) AS t FROM spotify_plays`
+		sql<{ t: Date | null }[]>`SELECT max(played_at) AS t FROM spotify_plays`,
+		recentJobs(sql, 8),
+		subscriptionCount(sql)
 	]);
 	const key = [...url.searchParams.entries()].map(([k, v]) => `${k}=${v}`).find((k) => k in NOTICES);
 	return {
 		connections,
 		cronConfigured: !!(cfg.cronClientId && cfg.cronClientSecret),
 		cronClientMatches: !connections.cron.connected || connections.cron.spotifyClientId === cfg.cronClientId,
-		reseedAvailable: !!cfg.githubDispatchToken,
+		reseedAvailable: jobsAvailable(cfg),
+		jobs,
+		push: { publicKey: cfg.vapidPublicKey, devices },
 		mirrorAgeMin: Number.isFinite(age) ? Math.round(age / 60000) : null,
 		lastPlayAt: last[0]?.t ? new Date(last[0].t).toISOString() : null,
 		notice: key ? { text: NOTICES[key]!, error: key.startsWith('error') } : null

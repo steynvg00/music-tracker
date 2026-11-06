@@ -4,17 +4,24 @@ import type { DailyDeck } from '$lib/shared/daily-types';
 import { apiGet, apiPost, describeFailure } from '$lib/player/api-client';
 import { player } from './player.svelte';
 import { toasts } from './toasts.svelte';
+import { JobTracker } from './jobs.svelte';
+import { MAX_ATTEMPTS, type JobRow } from '$lib/shared/jobs';
 
 const MIN_SKELETON_MS = 300;
-const RESEED_POLL_MS = 5000;
-const RESEED_MAX_MS = 3 * 60 * 1000;
 
 type MoveResponse = { result: { ok: boolean; reason?: string }; deck: DailyDeck };
 
 class DailyStore {
 	deck = $state<DailyDeck | null>(null);
 	rotating = $state(false);
-	reseeding = $state(false);
+	/** "Shuffle the deck" job of the shown day. */
+	reseedJob = new JobTracker((job) => {
+		if (job.status === 'done') {
+			const added = Number(job.result?.added ?? 0);
+			void this.reload().then(() => toasts.show(added ? `${added} fresh picks are ready` : 'No new picks could be mixed today'));
+		} else this.#failed(job);
+	});
+	reseeding = $derived(!!this.reseedJob.view?.busy);
 
 	current = $derived(this.deck?.current ?? null);
 	isLast = $derived(!!this.current && !!this.deck && this.current.rank === Math.max(...this.deck.candidates.map((c) => c.rank)));
@@ -31,9 +38,9 @@ class DailyStore {
 
 	set(deck: DailyDeck | null): void {
 		this.deck = deck;
-		if (deck?.state?.reseedRequestedAt && !this.reseeding && Date.now() - Date.parse(deck.state.reseedRequestedAt) < RESEED_MAX_MS) {
-			void this.#waitForReseed(deck.candidates.length);
-		}
+		// Keep following an active reseed job after a reload / navigation.
+		const job = deck?.reseedJob ?? null;
+		if (job && (job.status === 'queued' || job.status === 'running') && this.reseedJob.job?.id !== job.id) this.reseedJob.track(job);
 	}
 
 	async reload(): Promise<void> {
@@ -70,42 +77,35 @@ class DailyStore {
 		}
 	}
 
-	/** "Shuffle the deck". */
+	/** "Shuffle the deck" (R2): a hub job; without jobs the deck starts over. */
 	async reseed(): Promise<void> {
 		const d = this.deck;
 		if (!d || this.reseeding) return;
 		try {
-			const r = await apiPost<{ mode: 'dispatched' | 'pending' | 'wrap' }>('/api/daily/reseed', { date: d.date });
+			const r = await apiPost<{ mode: 'job'; job: JobRow } | { mode: 'wrap'; rank: number }>('/api/daily/reseed', { date: d.date });
 			if (r.mode === 'wrap') {
 				await this.reload();
-				toasts.show('Back to the first pick. New picks on demand need the GitHub dispatch token (Settings › Data health).');
+				toasts.show('Back to the first pick. New picks on demand need hub jobs (Settings › Data health).');
 				return;
 			}
-			void this.#waitForReseed(d.candidates.length);
+			this.#follow(r.job);
 		} catch (e) {
 			toasts.error(describeFailure(e));
 		}
 	}
 
-	async #waitForReseed(before: number): Promise<void> {
-		if (!browser || this.reseeding) return;
-		this.reseeding = true;
-		const until = Date.now() + RESEED_MAX_MS;
-		try {
-			while (Date.now() < until) {
-				await new Promise((res) => setTimeout(res, RESEED_POLL_MS));
-				if (document.visibilityState !== 'visible') continue;
-				const deck = await apiGet<DailyDeck>(`/api/daily?date=${this.deck!.date}`).catch(() => null);
-				if (deck && deck.candidates.length > before) {
-					this.deck = deck;
-					toasts.show(`${deck.candidates.length - before} fresh picks are ready`);
-					return;
-				}
-			}
-			toasts.error('New picks are taking longer than usual. Check the daily-pick-reseed workflow.');
-		} finally {
-			this.reseeding = false;
-		}
+	#follow(job: JobRow | null): void {
+		if (!job) return;
+		this.reseedJob.track(job);
+		if (job.status === 'failed') this.#failed(job);
+	}
+
+	#failed(job: JobRow): void {
+		toasts.show(`Shuffle the deck failed: ${job.error ?? 'unknown error'}`, {
+			kind: 'error',
+			action: job.attempts < MAX_ATTEMPTS ? { label: 'Retry', run: () => void this.reseedJob.retry() } : undefined,
+			ms: 8000
+		});
 	}
 
 	async play(offset?: number): Promise<void> {

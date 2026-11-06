@@ -15,7 +15,8 @@ const cfg: HubConfig = {
 	sessionSecret: 'session-secret',
 	tokenEncKey: Buffer.alloc(32, 1).toString('base64'),
 	githubDispatchToken: null,
-	githubRepository: 'steynvg00/music-tracker'
+	githubRepository: 'steynvg00/music-tracker',
+	vapidPublicKey: null
 };
 const key = Buffer.alloc(32, 1);
 const REDIRECT = 'https://rotor.example/auth/callback';

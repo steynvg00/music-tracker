@@ -15,8 +15,8 @@ name: Keepalive
 # month, but main's ruleset only accepts changes through a pull request, so every
 # run was rejected with GH013 and nothing ever reset the timer.
 #
-# The verify step fails the run (and GitHub emails a failure) if any of the three
-# workflows is not active. keepalive.yml re-enables itself as well, because it is
+# The verify step fails the run (and GitHub emails a failure) if any of the listed
+# workflows is not active (hub-jobs.yml joined in v0.82: it has a daily schedule). keepalive.yml re-enables itself as well, because it is
 # a scheduled workflow too and would otherwise be disabled along with the others.
 #
 # Deliberately a separate workflow file rather than a job inside
@@ -46,7 +46,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      WORKFLOWS: scheduled-ingest.yml ingest-monitor.yml keepalive.yml
+      WORKFLOWS: scheduled-ingest.yml ingest-monitor.yml hub-jobs.yml keepalive.yml
 
     steps:
       - name: Re-enable workflows
