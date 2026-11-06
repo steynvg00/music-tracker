@@ -1,0 +1,12 @@
+{
+  "href": "https://api.spotify.com/v1/artists/0aJcPBUeTwNR5HJX0e6R0V/albums?offset=0&limit=10&include_groups=album,single",
+  "limit": 10, "next": null, "offset": 0, "previous": null, "total": 3,
+  "items": [
+    {"album_type": "single", "id": "1AbCdEfGhIjKlMnOpQrSt1", "name": "Lost In Paradise", "release_date": "2026-03-06", "release_date_precision": "day",
+     "total_tracks": 2, "external_urls": {"spotify": "https://open.spotify.com/album/1AbCdEfGhIjKlMnOpQrSt1"}, "artists": [{"id": "0aJcPBUeTwNR5HJX0e6R0V", "name": "Headhunterz"}]},
+    {"album_type": "album", "id": "2AbCdEfGhIjKlMnOpQrSt2", "name": "Older Album", "release_date": "2025-11-01", "release_date_precision": "day",
+     "total_tracks": 12, "external_urls": {"spotify": "https://open.spotify.com/album/2AbCdEfGhIjKlMnOpQrSt2"}, "artists": [{"id": "0aJcPBUeTwNR5HJX0e6R0V", "name": "Headhunterz"}]},
+    {"album_type": "single", "id": "3AbCdEfGhIjKlMnOpQrSt3", "name": "Year Only", "release_date": "2026", "release_date_precision": "year",
+     "total_tracks": 1, "external_urls": {"spotify": "https://open.spotify.com/album/3AbCdEfGhIjKlMnOpQrSt3"}, "artists": [{"id": "0aJcPBUeTwNR5HJX0e6R0V", "name": "Headhunterz"}]}
+  ]
+}

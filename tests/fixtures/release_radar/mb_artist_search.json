@@ -1,0 +1,9 @@
+{
+  "created": "2026-11-06T10:00:00.000Z",
+  "count": 2,
+  "offset": 0,
+  "artists": [
+    {"id": "b4f2c2d3-2222-4bbb-8ccc-000000000002", "type": "Person", "score": 100, "name": "Sound Rush", "sort-name": "Sound Rush", "disambiguation": "hardstyle duo"},
+    {"id": "c5a3d3e4-3333-4ccc-8ddd-000000000003", "type": "Group", "score": 62, "name": "Soundrush Orchestra", "sort-name": "Soundrush Orchestra"}
+  ]
+}

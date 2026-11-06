@@ -15,7 +15,9 @@ name: Hub jobs
 # Daily (schedule, or "Run workflow" with an empty job_id): stale-job sweep, pending
 # snapshot rebuilds, "Today's pick is ready" + token-expiry notifications, rules catalog,
 # (v0.84) the Elsewhere metadata refresh (YouTube data refreshed or deleted within 30 days), and
-# (v0.86) last year's Rotor Wrapped snapshot when it is missing (so on 1 January) + one push.
+# (v0.86) last year's Rotor Wrapped snapshot when it is missing (so on 1 January) + one push, and
+# (v0.87) the Release radar: Spotify artist albums (cron token), MusicBrainz (< 1 request/s) and the
+# Scantraxx monthly pages; a few minutes, well inside timeout-minutes. No new secrets.
 #
 # Deliberately NOT a job in scheduled-ingest.yml: every job there also runs on
 # workflow_dispatch. Listed in keepalive.yml because the daily schedule makes it a

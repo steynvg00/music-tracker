@@ -1,0 +1,13 @@
+{
+  "id": "6f2a1b5e-0000-4000-8000-000000000001",
+  "resource": "https://open.spotify.com/artist/0aJcPBUeTwNR5HJX0e6R0V",
+  "relations": [
+    {
+      "type": "free streaming",
+      "type-id": "769085a1-c2f7-4c24-a532-2375a77693bd",
+      "target-type": "artist",
+      "direction": "backward",
+      "artist": {"id": "a3e1b1c2-1111-4aaa-9bbb-000000000001", "name": "Headhunterz", "sort-name": "Headhunterz", "disambiguation": "Dutch hardstyle DJ"}
+    }
+  ]
+}

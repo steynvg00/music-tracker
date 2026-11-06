@@ -1,3 +1,4 @@
+import type { RadarRelease } from './radar';
 import type { ManagedKind } from './managed';
 import type { JobRow } from './jobs';
 
@@ -84,6 +85,8 @@ export interface HomePayload {
 	stats: HomeStats | null;
 	/** R4: only the COUNT of Elsewhere collections (no artwork, no items: separate room). Null before 0024. */
 	elsewhere: { youtube: number; soundcloud: number } | null;
+	/** R7: next announced releases from your artists (Release radar); [] before migration 0028. */
+	comingUp: RadarRelease[];
 }
 
 export interface HomeStats {

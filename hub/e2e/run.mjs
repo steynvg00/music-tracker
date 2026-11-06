@@ -94,6 +94,11 @@ try {
 		YOUTUBE_API_KEY: 'e2e-youtube-key',
 		YOUTUBE_API_BASE: 'http://127.0.0.1:55433/youtube/v3',
 		SOUNDCLOUD_OEMBED_URL: 'http://127.0.0.1:55433/oembed',
+		// R7 Release radar (Python): both sources at the local mock; RADAR_GAP_SCALE shrinks the polite gaps (test-only).
+		RADAR_MUSICBRAINZ_BASE: 'http://127.0.0.1:55433/musicbrainz/ws/2',
+		RADAR_SCANTRAXX_BASE: 'http://127.0.0.1:55433/scantraxx',
+		RADAR_GAP_SCALE: '0.01',
+		RADAR_SCANTRAXX: 'on', // the default since the parser was verified on a real page (2026-11-07)
 		E2E_SPOTIFY_STATE: join(OUT, 'spotify-state.json'),
 		E2E_MOCK_PORT: '55433',
 		E2E_REPO_ROOT: REPO,

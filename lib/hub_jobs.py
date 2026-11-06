@@ -17,7 +17,8 @@ now" / snapshot rebuild), push_test ("Send a test notification"), wrapped_build 
 The daily run (run_daily) sweeps stale jobs, rebuilds snapshots with a pending
 force-refresh request, sends "Today's pick is ready" and token-expiry notifications,
 re-exports the rules catalog, (v0.84) refreshes Elsewhere metadata within 30 days and
-(v0.86) freezes last year's Rotor Wrapped when it is missing (so on 1 January).
+(v0.86) freezes last year's Rotor Wrapped when it is missing (so on 1 January) and (v0.87)
+runs the Release radar (Spotify + MusicBrainz + label pages; lib/release_radar).
 """
 
 from __future__ import annotations
@@ -348,4 +349,19 @@ def run_daily(conn, *, sp_factory: Callable, push=web_push.send, today: date | N
         return w.daily_step(conn, today, push)
 
     step("wrapped", wrapped)
+
+    def release_radar():
+        # v0.87 (R7): last, because MusicBrainz is paced at < 1 request/second (a few minutes).
+        # A no-op before migration 0028. One source failing never fails the others.
+        import psycopg
+
+        import lib.release_radar as radar
+
+        try:
+            return radar.run(conn, sp_factory=sp_factory, push=push, today=today)
+        except psycopg.errors.UndefinedTable:
+            conn.rollback()
+            return "skipped: migration 0028 not applied"
+
+    step("release_radar", release_radar)
     return summary

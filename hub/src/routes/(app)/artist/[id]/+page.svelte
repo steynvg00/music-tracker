@@ -8,10 +8,40 @@
 	import { fmtDate, fmtInt, openInSpotify } from '$lib/shared/format';
 	import { fmtScore, trackHref } from '$lib/shared/stats';
 	import { shortPeriod } from '$lib/stats-client';
+	import { apiDelete, apiGet, apiPut, describeFailure } from '$lib/player/api-client';
+	import { toasts } from '$lib/stores/toasts.svelte';
 
 	let { data } = $props();
 	const a = $derived(data.r.data);
 	const spotifyUrl = $derived(a ? openInSpotify(`spotify:artist:${a.id}`) : null);
+
+	// R7: "Follow in Rotor" adds the artist to the Release radar (never a Spotify follow).
+	// Hidden until the state is known, and when migration 0028 isn't applied (503).
+	let followed = $state<boolean | null>(null);
+	let followBusy = $state(false);
+	$effect(() => {
+		const id = a?.id;
+		followed = null;
+		if (!id) return;
+		apiGet<{ followed: boolean }>(`/api/radar/follow/${id}`)
+			.then((r) => (followed = r.followed))
+			.catch(() => (followed = null));
+	});
+	async function toggleFollow() {
+		if (!a || followed === null) return;
+		followBusy = true;
+		try {
+			const r = followed
+				? await apiDelete<{ followed: boolean }>(`/api/radar/follow/${a.id}`)
+				: await apiPut<{ followed: boolean }>(`/api/radar/follow/${a.id}`, { name: a.name });
+			followed = r.followed;
+			toasts.show(r.followed ? `${a.name} is on your Release radar` : `${a.name} is off your Release radar`);
+		} catch (e) {
+			toasts.error(describeFailure(e));
+		} finally {
+			followBusy = false;
+		}
+	}
 </script>
 
 <svelte:head><title>Rotor · {a?.name ?? 'Artist'}</title></svelte:head>
@@ -26,6 +56,9 @@
 			<div class="acts">
 				{#if spotifyUrl}<a class="btn sec" href={spotifyUrl} target="_blank" rel="noopener">Open Spotify</a>{/if}
 				<a class="btn ghost" href="/stats/compare?artistA={encodeURIComponent(a.name)}">Compare with…</a>
+				{#if followed !== null}
+					<button class="btn {followed ? 'sec' : 'ghost'}" aria-pressed={followed} disabled={followBusy} onclick={toggleFollow}>{followed ? '✓ Following in Rotor' : 'Follow in Rotor'}</button>
+				{/if}
 			</div>
 		</header>
 		<div class="tiles">

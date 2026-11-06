@@ -8,6 +8,7 @@ import { MANAGED_SUFFIXES, type ManagedKind } from '$lib/shared/managed';
 import type { HomePayload, HomeStats, HomeTiles, PlaylistCard } from '$lib/shared/daily-types';
 import { isRollupsMissing } from './stats/http';
 import { countCollections } from './elsewhere';
+import { comingUp } from './radar';
 import { loadDeck } from './daily';
 import { connectionStatus, type Health } from './spotify/token';
 
@@ -110,7 +111,7 @@ export async function loadHomeStats(sql: Sql, today: string): Promise<HomeStats 
 }
 
 export async function homePayload(sql: Sql, opts: { today: string; ownerId: string; reseedAvailable: boolean }): Promise<HomePayload> {
-	const [deck, tiles, conns, last, stats, elsewhere] = await Promise.all([
+	const [deck, tiles, conns, last, stats, elsewhere, upcoming] = await Promise.all([
 		loadDeck(sql, opts.today, opts.reseedAvailable),
 		loadTiles(sql),
 		connectionStatus(sql),
@@ -119,7 +120,8 @@ export async function homePayload(sql: Sql, opts: { today: string; ownerId: stri
 		countCollections(sql).catch((e) => {
 			if (isRollupsMissing(e)) return null; // 0024 not applied yet
 			throw e;
-		})
+		}),
+		comingUp(sql, opts.today, 5) // R7: [] before migration 0028
 	]);
 	const lastPlayAt = last[0]?.t ? new Date(last[0].t) : null;
 
@@ -201,6 +203,7 @@ export async function homePayload(sql: Sql, opts: { today: string; ownerId: stri
 		fresh,
 		comingBack,
 		stats,
-		elsewhere
+		elsewhere,
+		comingUp: upcoming
 	};
 }
