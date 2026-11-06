@@ -4,10 +4,10 @@
  * half lives in lib/hub_jobs.py; GitHub Actions runs it via hub-jobs.yml.
  */
 
-export type JobKind = 'reseed_daily_pick' | 'refresh_managed' | 'push_test';
+export type JobKind = 'reseed_daily_pick' | 'refresh_managed' | 'push_test' | 'wrapped_build';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
-export const JOB_KINDS: readonly JobKind[] = ['reseed_daily_pick', 'refresh_managed', 'push_test'];
+export const JOB_KINDS: readonly JobKind[] = ['reseed_daily_pick', 'refresh_managed', 'push_test', 'wrapped_build'];
 export const MAX_ATTEMPTS = 3;
 /** Same thresholds as lib/hub_jobs.py STALE_QUEUED / STALE_RUNNING. */
 export const STALE_QUEUED_MS = 15 * 60 * 1000;
@@ -61,6 +61,8 @@ function doneDetail(job: JobRow): string {
 			const n = Number(r.delivered ?? 0);
 			return `Sent to ${n} device${n === 1 ? '' : 's'}`;
 		}
+		case 'wrapped_build':
+			return r.created ? `Rotor Wrapped ${String(r.year ?? '')} is ready` : `Rotor Wrapped ${String(r.year ?? '')} was already built`;
 	}
 }
 
@@ -104,5 +106,6 @@ export function describeJob(job: JobRow, now: number = Date.now()): JobView {
 export const JOB_KIND_LABEL: Record<JobKind, string> = {
 	reseed_daily_pick: 'Shuffle the deck',
 	refresh_managed: 'Refresh playlist',
-	push_test: 'Test notification'
+	push_test: 'Test notification',
+	wrapped_build: 'Build Rotor Wrapped'
 };

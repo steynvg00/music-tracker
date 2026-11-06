@@ -14,8 +14,8 @@ export function isRollupsMissing(e: unknown): boolean {
 	return !!e && typeof e === 'object' && MISSING.has(String((e as { code?: unknown }).code));
 }
 
-export function rollupsMissing(): Response {
-	return apiError(503, { error: 'rollups_missing', message: 'Stats need migration 0023_hub_stats_rollups.sql' });
+export function rollupsMissing(message = 'Stats need migration 0023_hub_stats_rollups.sql'): Response {
+	return apiError(503, { error: 'rollups_missing', message });
 }
 
 /** FNV-1a, enough to key an ETag on the request. */
@@ -37,7 +37,13 @@ export async function refreshedAt(sql: Queryable): Promise<string | null> {
  * Answer a stats GET: 304 when the client's ETag still matches, else compute + 200.
  * `key` must include everything the body depends on besides the data (query, today).
  */
-export async function statsResponse(sql: Queryable, request: Request, key: string, compute: () => Promise<unknown>): Promise<Response> {
+export async function statsResponse(
+	sql: Queryable,
+	request: Request,
+	key: string,
+	compute: () => Promise<unknown>,
+	missingMessage?: string
+): Promise<Response> {
 	try {
 		const at = await refreshedAt(sql);
 		const etag = `W/"${hash(`${at}|${key}`)}"`;
@@ -47,7 +53,7 @@ export async function statsResponse(sql: Queryable, request: Request, key: strin
 		if (body === null) return apiError(404, { error: 'not_found', message: 'Not in your history' });
 		return json(body, { headers });
 	} catch (e) {
-		if (isRollupsMissing(e)) return rollupsMissing();
+		if (isRollupsMissing(e)) return rollupsMissing(missingMessage);
 		return toResponse(e);
 	}
 }

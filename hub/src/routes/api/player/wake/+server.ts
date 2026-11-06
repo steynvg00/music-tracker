@@ -7,13 +7,14 @@ import { apiError, readJson, toResponse } from '$lib/server/http';
 import { buildCommand, normalizeDevice } from '$lib/server/spotify/player';
 import { playCandidate } from '$lib/server/daily';
 import { wakeAndRun } from '$lib/server/wake';
-import { isIsoDate } from '$lib/server/time';
+import { isIsoDate, localDate } from '$lib/server/time';
+import { playTop100 } from '$lib/server/wrapped';
 
 export const config: Config = { maxDuration: 30 };
 
 /**
  * POST /api/player/wake
- *   { intent: { type: 'play', body: {...} } | { type: 'daily', date, rank },
+ *   { intent: { type: 'play', body: {...} } | { type: 'daily', date, rank } | { type: 'wrapped', year },
  *     prefer?: 'Smartphone' | 'Computer' | …, known_ids?: string[] }
  * → 200 { status: 'played', device } | { status: 'timeout' }
  */
@@ -42,8 +43,16 @@ export const POST: RequestHandler = async ({ request }) => {
 					{ date, rank, deviceId, offset }
 				);
 			};
+		} else if (intent.type === 'wrapped' && Number.isInteger(intent.year)) {
+			const year = intent.year as number;
+			run = async (deviceId) => {
+				await playTop100(
+					{ sql: db(), api: spotify(), guard: writeGuard(), ownerId: hubConfig().ownerSpotifyId },
+					{ year, today: localDate(), deviceId }
+				);
+			};
 		} else {
-			return apiError(400, { error: 'bad_request', message: 'intent must be play or daily' });
+			return apiError(400, { error: 'bad_request', message: 'intent must be play, daily or wrapped' });
 		}
 	} catch (e) {
 		return toResponse(e);

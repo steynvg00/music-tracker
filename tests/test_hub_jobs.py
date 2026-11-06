@@ -155,11 +155,14 @@ def test_run_daily_collects_step_errors(monkeypatch):
     def respond(sql, params):
         if "SELECT c.title" in sql:
             return [("Forgotten gems",)]
+        if "FROM wrapped_snapshots" in sql:  # v0.86: last year's Wrapped is already frozen
+            return [(1,)]
         return []
     conn = FakeConn(respond)
     push = PushSpy()
     summary = hub_jobs.run_daily(conn, sp_factory=lambda: pytest.fail("no snapshot pending"), push=push,
                                  today=date(2026, 11, 5))
+    assert summary["wrapped"] == {"year": 2025, "created": False}
     assert summary["daily_pick"] == {"generated": "exists", "notified": 1}
     assert push.calls[0]["dedupe_key"] == "daily:2026-11-05" and push.calls[0]["body"] == "Forgotten gems"
     assert summary["errors"] == ["rules_catalog: RuntimeError: boom"]

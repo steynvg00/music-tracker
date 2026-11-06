@@ -12,6 +12,7 @@
 	import { artistHref, badgeIcon, badgeLabel, describeBadge, trackHref } from '$lib/shared/stats';
 	import { player } from '$lib/stores/player.svelte';
 	import type { HomePayload } from '$lib/shared/daily-types';
+	import { homeWrappedCard } from '$lib/shared/wrapped';
 
 	let { data } = $props();
 	let fresh = $state<HomePayload | null>(null);
@@ -21,7 +22,12 @@
 		daily.set(home?.daily ?? null);
 	});
 
+	// R6: Rotor Wrapped card, 1 Dec → 31 Jan, from this device's Amsterdam date (set after
+	// hydration, so the server and the browser never disagree about the date mid-render).
+	let wrappedCard = $state<{ year: number; mode: 'so_far' | 'frozen' } | null>(null);
+
 	onMount(() => {
+		wrappedCard = homeWrappedCard(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
 		// Opened from the service worker's cache: show it, then swap in fresh data.
 		if (data.stale) {
 			fetch('/api/home', { cache: 'no-store' })
@@ -77,6 +83,14 @@
 				{/if}
 			</div>
 		</section>
+	{/if}
+
+	{#if wrappedCard}
+		<a class="wrapped" href="/wrapped/{wrappedCard.year}?from=/home" data-testid="home-wrapped">
+			<span class="w-over">Rotor Wrapped</span>
+			<strong>{wrappedCard.year}{wrappedCard.mode === 'so_far' ? ' so far' : ''}</strong>
+			<span class="cap">{wrappedCard.mode === 'so_far' ? 'Your year until today, the full year on 1 January' : 'Your full year is ready: every day, 1 January – 31 December'}</span>
+		</a>
 	{/if}
 
 	{#if home?.fresh.length}
@@ -143,6 +157,27 @@
 </div>
 
 <style>
+	.wrapped {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin: 8px 0 20px;
+		padding: 20px;
+		border-radius: 16px;
+		background: linear-gradient(150deg, #3b1f7a, #123f48 70%, var(--bg));
+	}
+	.wrapped strong {
+		font-size: 28px;
+		font-weight: 800;
+		color: var(--text-1);
+	}
+	.w-over {
+		color: var(--accent);
+		font-size: 12px;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
 	.shortcuts {
 		display: grid;
 		grid-template-columns: 1fr 1fr;

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isWrappedPlaylistName } from '$lib/shared/wrapped';
 	import { goto, invalidateAll } from '$app/navigation';
 	import Art from '$lib/components/Art.svelte';
 	import Attribution from '$lib/components/Attribution.svelte';
@@ -54,6 +55,8 @@
 		if (i === undefined && player.view.context?.uri === p.uri) return void player.togglePlay();
 		void player.playContext(p.uri, p.name, i === undefined ? undefined : { position: i });
 	}
+	// R6: "Wrapped <year> · Auto 🤖📸" is written by Rotor Wrapped, not by the snapshot rebuild.
+	const wrappedYear = $derived(isWrappedPlaylistName(p.name) ? Number(p.name.slice(8, 12)) : null);
 </script>
 
 <svelte:head><title>Rotor · {p.name}</title></svelte:head>
@@ -122,7 +125,13 @@
 		</section>
 	{/if}
 
-	{#if canEdit && p.kind === 'auto_snapshot'}
+	{#if canEdit && p.kind === 'auto_snapshot' && wrappedYear}
+		<section class="panel" aria-label="Snapshot">
+			<h3>Rotor Wrapped</h3>
+			<p class="cap">Your top 100 of {wrappedYear}. Rewritten only by "Play your top 100" in Rotor Wrapped.</p>
+			<div class="row-acts"><a class="btn sec" href="/wrapped/{wrappedYear}">Open Rotor Wrapped {wrappedYear}</a></div>
+		</section>
+	{:else if canEdit && p.kind === 'auto_snapshot'}
 		<section class="panel" aria-label="Snapshot">
 			<h3>Snapshot</h3>
 			<p class="cap">Frozen. Rebuild re-runs its selection and rewrites it{d.jobsAvailable ? ' now' : ' at the next daily jobs run'}.

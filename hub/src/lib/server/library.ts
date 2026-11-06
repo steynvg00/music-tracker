@@ -10,6 +10,8 @@ import type { ManagedKind } from '$lib/shared/managed';
 import type { TrackRow } from '$lib/shared/daily-types';
 import type { OrderPref } from '$lib/shared/order-prefs';
 import { nextRun } from '$lib/shared/cron';
+import { BadInput } from '$lib/shared/custom';
+import { isWrappedPlaylistName } from '$lib/shared/wrapped';
 import { playlistTrackRows } from './daily';
 import { ReadOnlyPlaylist } from './spotify/write-guard';
 import type { SpotifyApi } from './spotify/api';
@@ -160,6 +162,9 @@ export async function setOrderPref(sql: Queryable, playlistId: string, pref: Ord
 /** Same upsert as lib/playlist_settings.request_force_refresh. */
 export async function requestRebuild(sql: Queryable, playlistId: string): Promise<void> {
 	const row = await requireManaged(sql, playlistId, 'auto_snapshot');
+	// R6: "Wrapped <year> · Auto 🤖📸" has no snapshot definition in lib/playlists.py; it is
+	// rewritten by "Play your top 100" in Rotor Wrapped, never by the snapshot rebuild.
+	if (isWrappedPlaylistName(row.name)) throw new BadInput('Wrapped playlists are rebuilt from Rotor Wrapped (Play your top 100)');
 	await sql`
 		INSERT INTO playlist_settings (playlist_id, playlist_name, force_refresh_requested_at) VALUES (${playlistId}, ${row.name}, now())
 		ON CONFLICT (playlist_id) DO UPDATE

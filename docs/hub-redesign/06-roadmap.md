@@ -76,9 +76,40 @@
 | Migrations | `0025_mixes.sql` |
 | Smoke test | 1. Laptop mix S-S-YT-S-SC-S: all handoffs succeed, median gap ≤ 2 s (from `handoff_events`). 2. Spotify device = speaker → start blocked with the "music would jump rooms" choice. 3. Skip a track in the Spotify app mid-run → "Mix paused" banner, Resume works. 4. Device Autoplay on → Rotor pauses Spotify radio within one poll. 5. iPhone locked during a Spotify run → push arrives at run end; tap → "Tap to continue on YouTube". 6. Opt-in off → no mix UI anywhere. |
 
-## R6 — Retire Streamlit
+## R6 — Rotor Wrapped (full-year review)
 
-`v1.0-rotor` · **~1.5 h**
+`v0.86-hub-wrapped` · **~8 h** · stacked on R4 (R3 + 0026 hours fix), **not** on R5
+
+| | |
+|---|---|
+| Scope | A Wrapped-style year review over the **full calendar year** (Spotify's own Wrapped stops around the end of October), called **Rotor Wrapped** (own look, no Spotify logo, no Wrapped name assets). Two modes: **Wrapped ‹year›** is built on 1 January (Europe/Amsterdam) for the previous year and stored as a **frozen snapshot**, so it never changes afterwards; any past year since 2017 can be built on demand, and is frozen too. **Wrapped so far** is the current year, computed live from the rollups. |
+| Content (cards; a card without data is skipped) | Total plays + listening time. Hours use the 0026 duration fallback and are marked "≈" when the year has API plays without `ms_played`. Top 5 and top 100 tracks and artists with plays + hours. New discoveries (first-ever plays this year). Comebacks: tracks/artists back after ≥ 12 months away. Longest streak this year. Biggest day. Listening clock (hour × weekday). Favourite month. Badges earned this year. Year over year vs the previous year. *Hardstyle subgenre breakdown:* only with a usable genre/tag source in the DB. **There is none today**, so the card is omitted. |
+| Data | One SQL function, `hub.wrapped_payload(year, through)`, over the R3 rollups (`hub.day_track`, `hub.daily_listening`, `hub.mv_*_first`) + `spotify_plays` (one year's range, for the clock and the "≈" count) + `badge_events`. Frozen years: `wrapped_snapshots(year PK, payload jsonb, …)`, written only by `hub.wrapped_freeze(year)`, which never overwrites. A trigger refuses UPDATE. |
+| Jobs | New hub job kind `wrapped_build` (payload `{year}`), for "Build this year" in Stats. The existing daily `hub-jobs.yml` run builds the previous year when its snapshot is missing (so on 1 January, and self-healing after a failed run) and sends one "Your Rotor Wrapped ‹year› is ready" push. `scheduled-ingest.yml` is not touched. |
+| UI | Story player: fullscreen cards, tap left/right + swipe on iPhone, ← / → on the laptop, segmented progress bar, hold (or Space) to pause, Esc closes. Every card can be saved/shared as a PNG rendered client-side (the card is an SVG; SVG → canvas → PNG, no new dependencies). Entry points: a Home card from 1 December through 31 January (December: *so far*; January: last year), and a permanent **Stats › Wrapped** with a year picker. "Play your top 100" creates or replaces `Wrapped ‹year› · Auto 🤖📸` through the write guard (that one managed playlist, nothing else) and plays it. |
+| Files | `migrations/0027_wrapped.sql`; `lib/wrapped.py`, `lib/hub_jobs.py` (kind + daily step); `hub/src/lib/server/wrapped.ts`, `hub/src/lib/shared/wrapped.ts`, `hub/src/lib/wrapped/cards.ts` (SVG cards + PNG export), `hub/src/routes/wrapped/[year]/…` (story, outside the app shell), `hub/src/routes/(app)/stats/wrapped/…`, `hub/src/routes/api/wrapped/…`; Home card; `docs/hub-redesign/07-parity.md` |
+| Migrations | `0027_wrapped.sql`: additive, **plus one widening**: `hub_jobs.kind` CHECK gains `wrapped_build`. The new list also keeps R5's `mix_relay`, so 0027 works with or without 0025. Applies after 0026, without 0025. |
+| Performance budget | Building one year at production size: seconds, far inside a GitHub Actions run. *So far*: < 300 ms. |
+| Smoke test | 1. Stats › Wrapped lists 2017 → this year. This year opens *so far* with today's date in the intro card. 2. Pick last year → "Build" → job runs → story opens; build again → same snapshot (`generated_at` unchanged). 3. Tap/swipe/arrow through every card; hold pauses; progress bar matches. 4. Save a card → PNG in Photos / Downloads, no Spotify logo. 5. "Play your top 100" → `Wrapped ‹year› · Auto 🤖📸` in Spotify with 100 tracks, playing on the active device; a second press replaces it, no new playlist. 6. Top-5 numbers equal Stats › Year for the same year. 7. On 1 January: the daily run builds last year and one push arrives. 8. Home shows the Wrapped card in December/January only. |
+
+## R7 — Release radar
+
+`v0.87-hub-release-radar` · **~8 h** · stacked on R6
+
+| | |
+|---|---|
+| Scope | Upcoming and new releases from the artists you actually listen to: your top ~200 artists by plays over the last 24 months (`RADAR_TOP_ARTISTS`, `RADAR_WINDOW_MONTHS`) plus artists you mark **Follow in Rotor**. |
+| Sources (one adapter each, own `last_success_at` + error state) | (1) **Spotify Web API** `GET /artists/{id}/albums` (album + single, last 60 days), cron app token. It is not on the Feb 2026 restricted list (`01-feasibility.md` §0.1), and `lib/missed_new_tracks.py` already calls it daily in production → enabled. (2) **MusicBrainz**: artist via its Spotify URL relationship (`/ws/2/url`), else a unique exact name match; releases dated from 60 days ago to 1 year ahead. 1 request/second, `User-Agent: RotorMusicHub/0.87 ( https://github.com/steynvg00/music-tracker )`, no e-mail address in headers. (3) **Label pages**: one parser per label, starting with Scantraxx's monthly overview (`scantraxx.com/news/releases-scantraxx-<month>-<year>`): this month + next month, one request per page, seconds apart, once a day; stores only artist, title, label, date, URL. Beatport is out of scope. |
+| Matching | Normalised artist + normalised title (feat./mix/edit tags stripped) + a ±14-day date window merges one release across sources. Status at read time: **announced** (date in the future), **out**, **in your library** (a track of it played or liked). |
+| Jobs | A step in the existing daily `hub-jobs.yml` run (no new job kind, no workflow change except env lines). A source failing 3 daily runs in a row sends **one** Web Push (reuses R2 push), not one per day. |
+| UI | **Release radar** screen: Coming up (by date), Recently out, per-artist filter, source health. Compact **Coming up** shelf on Home. **Follow in Rotor** toggle on artist pages. Optional playlist `New from your artists · Auto 🤖🔄` (Spotify releases of the last 14 days), written through the write guard on request. |
+| Files | `migrations/0028_release_radar.sql`; `lib/release_radar/` (`__init__`, `artists`, `match`, `store`, `sources/{spotify,musicbrainz,scantraxx}`); `lib/hub_jobs.py` (daily step); `tests/fixtures/release_radar/*` (saved HTML/JSON); `hub/src/lib/server/radar.ts`, `hub/src/routes/(app)/radar/…`, `hub/src/routes/api/radar/…`; Home shelf; artist page toggle |
+| Migrations | `0028_release_radar.sql`: additive only (tables + indexes). |
+| Smoke test | 1. Daily run → Radar shows per-source "last success" for Spotify, MusicBrainz, Scantraxx. 2. A release known to two sources shows once, with both source badges. 3. A release you already played shows "In your library". 4. Follow an artist outside your top 200 → their releases appear after the next run. 5. Home "Coming up" lists the next announced releases. 6. "Update playlist" → `New from your artists · Auto 🤖🔄` holds the last 14 days of Spotify releases. 7. A source failing three days in a row → exactly one push. |
+
+## v1.0 — Retire Streamlit
+
+`v1.0-rotor` · **~1.5 h** · after R7 (was "R6" in the first plan; Wrapped and Release radar took R6/R7). Gaps to close first: `07-parity.md`.
 
 | | |
 |---|---|
@@ -90,8 +121,9 @@
 ## Timeline view
 
 ```
-R0 ──► R1 (remote + daily pick) ──► R2 (playlists, rules) ──► R3 (stats parity, Streamlit read-only) ──► R4 (Elsewhere) ──► [R5 mixed, optional] ──► R6 v1.0 retire Streamlit
-~1h     ~9h                          ~6h                       ~10h                                       ~5h                ~7h                       ~1.5h
+R0 ──► R1 (remote + daily pick) ──► R2 (playlists, rules) ──► R3 (stats parity, Streamlit read-only) ──► R4 (Elsewhere) ──► R6 (Wrapped) ──► R7 (Release radar) ──► v1.0 retire Streamlit
+~1h     ~9h                          ~6h                       ~10h                                       ~5h                ~8h             ~8h                    ~1.5h
+                                                                                                           └──► [R5 mixed, optional, nothing depends on it]
 ```
 
 ## Risks and mitigations
