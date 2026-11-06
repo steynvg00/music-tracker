@@ -1,11 +1,12 @@
 /**
- * /api/home payload, Home v1 (06-roadmap.md R1): health, today's deck, shortcuts,
- * three ⚡ stat tiles (index-range queries on spotify_plays.played_at only), Fresh,
- * Coming back around. The heavy rollups (streaks, On this day) arrive with R3's MVs.
+ * /api/home payload: health, today's deck, shortcuts, the week tiles (index-range queries on
+ * spotify_plays.played_at), Fresh, Coming back around (R1) and, since R3, the rollup-backed
+ * stats from hub.home_payload(): streak, month tiles, On this day, Recent badges.
  */
 import type { Sql } from '$lib/server/db';
 import { MANAGED_SUFFIXES, type ManagedKind } from '$lib/shared/managed';
-import type { HomePayload, HomeTiles, PlaylistCard } from '$lib/shared/daily-types';
+import type { HomePayload, HomeStats, HomeTiles, PlaylistCard } from '$lib/shared/daily-types';
+import { isRollupsMissing } from './stats/http';
 import { loadDeck } from './daily';
 import { connectionStatus, type Health } from './spotify/token';
 
@@ -59,15 +60,18 @@ export function suggestedSubtitle(lastSuggestedOn: string | null, today: string,
 	return `Last suggested ${days} d ago`;
 }
 
+// Hours: API plays have no ms_played, so they count their track length (track_metadata.duration_ms),
+// the same fallback as the rollups (migration 0026) and Streamlit (lib/listening_time.py).
 export async function loadTiles(sql: Sql): Promise<HomeTiles> {
 	const [w] = await sql<{ plays_week: number; ms_week: string; plays_prev: number; month_label: string }[]>`
 		WITH b AS (SELECT (date_trunc('week', now() AT TIME ZONE 'Europe/Amsterdam') AT TIME ZONE 'Europe/Amsterdam') AS wk)
 		SELECT
 			count(*) FILTER (WHERE p.played_at >= b.wk)::int AS plays_week,
-			coalesce(sum(p.ms_played) FILTER (WHERE p.played_at >= b.wk), 0)::bigint AS ms_week,
+			coalesce(sum(coalesce(p.ms_played, tm.duration_ms)) FILTER (WHERE p.played_at >= b.wk), 0)::bigint AS ms_week,
 			count(*) FILTER (WHERE p.played_at < now() - interval '7 days')::int AS plays_prev,
 			to_char(now() AT TIME ZONE 'Europe/Amsterdam', 'Mon') AS month_label
 		FROM b LEFT JOIN spotify_plays p ON p.played_at >= b.wk - interval '7 days' AND p.track_uri IS NOT NULL
+		LEFT JOIN track_metadata tm ON tm.track_uri = p.track_uri
 		GROUP BY b.wk`;
 	const days = await sql<{ d: number; plays: number }[]>`
 		WITH b AS (SELECT (date_trunc('week', now() AT TIME ZONE 'Europe/Amsterdam') AT TIME ZONE 'Europe/Amsterdam') AS wk)
@@ -92,12 +96,25 @@ export async function loadTiles(sql: Sql): Promise<HomeTiles> {
 	};
 }
 
+/** hub.home_payload() (migration 0023). Null before 0023 is applied, so Home still renders. */
+export async function loadHomeStats(sql: Sql, today: string): Promise<HomeStats | null> {
+	try {
+		const [r] = await sql<{ p: HomeStats | string }[]>`SELECT hub.home_payload(${today}::date) AS p`;
+		const p = r?.p;
+		return typeof p === 'string' ? (JSON.parse(p) as HomeStats) : (p ?? null);
+	} catch (e) {
+		if (isRollupsMissing(e)) return null;
+		throw e;
+	}
+}
+
 export async function homePayload(sql: Sql, opts: { today: string; ownerId: string; reseedAvailable: boolean }): Promise<HomePayload> {
-	const [deck, tiles, conns, last] = await Promise.all([
+	const [deck, tiles, conns, last, stats] = await Promise.all([
 		loadDeck(sql, opts.today, opts.reseedAvailable),
 		loadTiles(sql),
 		connectionStatus(sql),
-		sql<{ t: Date | null }[]>`SELECT max(played_at) AS t FROM spotify_plays`
+		sql<{ t: Date | null }[]>`SELECT max(played_at) AS t FROM spotify_plays`,
+		loadHomeStats(sql, opts.today)
 	]);
 	const lastPlayAt = last[0]?.t ? new Date(last[0].t) : null;
 
@@ -177,6 +194,7 @@ export async function homePayload(sql: Sql, opts: { today: string; ownerId: stri
 		tiles,
 		shortcuts,
 		fresh,
-		comingBack
+		comingBack,
+		stats
 	};
 }

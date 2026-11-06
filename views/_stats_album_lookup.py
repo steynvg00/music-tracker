@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from lib.db import get_connection
+from lib.listening_time import ALBUM_SUMMARY_SQL
 from views._skeleton import skeleton_chart, skeleton_metric_row, skeleton_table
 
 
@@ -42,18 +43,7 @@ def _search_albums(query: str) -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def _album_summary(album_name: str) -> pd.DataFrame:
     return _run_query(
-        """
-        SELECT
-            COUNT(*) AS total_plays,
-            COUNT(DISTINCT track_uri) AS unique_tracks,
-            MIN(played_at) AS first_listen,
-            MAX(played_at) AS last_listen,
-            ROUND(SUM(ms_played) / 3600000.0, 2) AS total_listening_hours
-        FROM spotify_plays
-        WHERE album_name = %s
-          AND artist_name IS NOT NULL
-          AND track_uri IS NOT NULL
-        """,
+        ALBUM_SUMMARY_SQL,
         (album_name,),
     )
 

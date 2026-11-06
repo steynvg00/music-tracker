@@ -120,6 +120,12 @@ def main() -> None:
                 file=sys.stderr,
             )
 
+        # v0.83: Rotor stats rollups (hub.* materialized views, migration 0023). Non-fatal
+        # and a no-op before 0023 is applied; prints its timings for the ingest log.
+        from lib.rollups import refresh_rollups
+
+        refresh_rollups(conn)
+
         conn.close()
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

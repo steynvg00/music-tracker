@@ -7,7 +7,9 @@
 	import Transport from './Transport.svelte';
 	import { player } from '$lib/stores/player.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { artistLine, deviceIcon } from '$lib/shared/format';
+	import { deviceIcon } from '$lib/shared/format';
+	import { trackHref } from '$lib/shared/stats';
+	import ArtistLinks from './ArtistLinks.svelte';
 	/** Mobile full-screen player sheet. Swipe down or the chevron closes it. */
 	const v = $derived(player.view);
 	const open = $derived(ui.sheet === 'player');
@@ -50,8 +52,8 @@
 	</div>
 	{#if v.item}
 		<div class="cover"><Art src={v.item.imageUrlLarge ?? v.item.imageUrl} size={360} alt={v.item.albumName ?? ''} /></div>
-		<h2 class="ell" title={v.item.name}>{v.item.name}</h2>
-		<div class="artist ell">{artistLine(v.item.artists)}</div>
+		<h2 class="ell" title={v.item.name}>{#if trackHref(v.item.uri)}<a class="tl" href={trackHref(v.item.uri)} onclick={() => ui.close()}>{v.item.name}</a>{:else}{v.item.name}{/if}</h2>
+		<div class="artist ell"><ArtistLinks artists={v.item.artists} onnavigate={() => ui.close()} /></div>
 		<div style="margin-top:10px"><Attribution uri={v.item.uri} /></div>
 		<div style="margin-top:18px">
 			<Scrubber variant="full" position={player.position} duration={v.item.durationMs} disabled={!!v.disallows.seeking} onseek={(ms) => player.seek(ms)} />

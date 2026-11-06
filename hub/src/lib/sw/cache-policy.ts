@@ -99,7 +99,8 @@ export async function networkFirstPage(request: Request, deps: { fetch: FetchLik
 	let res: Response;
 	try {
 		res = await fetchFn(request);
-	} catch {
+	} catch (e) {
+		console.warn('[rotor-sw] network failed for', path, '→ offline fallback:', e instanceof Error ? e.message : e);
 		return (
 			(await deps.cache.match(request)) ??
 			(path === '/' ? await deps.cache.match('/home') : undefined) ??

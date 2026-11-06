@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { isPublicPath, originAllowed } from './access';
 import { nextRank, toCandidate } from './daily';
-import { ingestHealth, suggestedSubtitle } from './home';
+import { ingestHealth, loadTiles, suggestedSubtitle } from './home';
+import { fakeSql } from './test-helpers';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { isIsoDate, localDate } from './time';
 import { toMirrorRow } from './spotify/mirror';
 import { wakeAndRun } from './wake';
@@ -59,6 +62,43 @@ describe('home helpers', () => {
 	it('suggestedSubtitle', () => {
 		expect(suggestedSubtitle('2026-09-24', '2026-11-04', false)).toBe('Last suggested 41 d ago');
 		expect(suggestedSubtitle(null, '2026-11-04', true)).toBe('Play only · followed');
+	});
+});
+
+// API-ingested plays have ms_played = NULL. Every hours/ms total must fall back to the track
+// length, or a month of API plays reads "0 h" (migration 0026).
+describe('listening time for plays without ms_played', () => {
+	it('week hours: sums coalesce(ms_played, track_metadata.duration_ms)', async () => {
+		const { sql, queries } = fakeSql((q) =>
+			q.text.includes('ms_week') ? [{ plays_week: 3, ms_week: '5400000', plays_prev: 2, month_label: 'Nov' }] : []
+		);
+		const tiles = await loadTiles(sql);
+		expect(tiles.hoursThisWeek).toBe(1.5);
+		const q = queries.find((x) => x.text.includes('ms_week'))!.text;
+		expect(q).toContain('sum(coalesce(p.ms_played, tm.duration_ms))');
+		expect(q).toContain('LEFT JOIN track_metadata tm ON tm.track_uri = p.track_uri');
+		expect(q).not.toMatch(/sum\(p\.ms_played\)/);
+	});
+
+	it('the latest definition of every hub rollup that sums ms uses the fallback', () => {
+		const dir = join(__dirname, '..', '..', '..', '..', 'migrations');
+		const files = readdirSync(dir).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
+		const latest = (re: RegExp) => {
+			let body = '';
+			for (const f of files) {
+				const m = readFileSync(join(dir, f), 'utf8').match(re);
+				if (m) body = m[0];
+			}
+			return body;
+		};
+		const rebuild = latest(/FUNCTION hub\.rebuild_days[\s\S]*?\n\$\$;/);
+		const trackStats = latest(/MATERIALIZED VIEW hub\.mv_track_stats AS[\s\S]*?GROUP BY 1;/);
+		for (const body of [rebuild, trackStats]) {
+			expect(body).not.toBe('');
+			expect(body).not.toMatch(/sum\((sp\.)?ms_played\)/);
+			expect(body).toContain('coalesce(sp.ms_played, tm.duration_ms)');
+		}
+		expect(rebuild.match(/coalesce\(sp\.ms_played, tm\.duration_ms\)/g)).toHaveLength(3);
 	});
 });
 

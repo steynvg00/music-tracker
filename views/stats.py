@@ -6,6 +6,7 @@ import streamlit as st
 from datetime import date, datetime
 
 from lib.db import get_connection
+from lib.listening_time import SPOTIFY_HOURS_BY_YEAR_SQL, SPOTIFY_OVERVIEW_SQL
 from views._skeleton import (
     skeleton_chart,
     skeleton_lines,
@@ -44,6 +45,10 @@ def query_df_params(sql: str, params: tuple) -> pd.DataFrame:
 
 
 st.title("🎵 music-tracker")
+
+from views._rotor_banner import rotor_banner  # noqa: E402
+
+rotor_banner("Stats, track/artist/album details and search", "/stats")
 st.caption("Personal scrobble stats, threshold playlists, and listening patterns.")
 
 today = datetime.now().date()
@@ -1291,16 +1296,7 @@ with tab_tracklookup:
 with tab_spotify:
     # ── Section 1: Overview metrics row ──────────────────────────────────────
     with skeleton_placeholder("metric_row") as ph_sp1:
-        sp_overview_df = query_df("""
-            SELECT
-                COUNT(*) AS total_plays,
-                ROUND(SUM(ms_played) / 3600000.0, 1) AS total_hours,
-                MIN((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS first_d,
-                MAX((played_at AT TIME ZONE 'Europe/Amsterdam')::date) AS last_d,
-                COUNT(DISTINCT track_uri) AS distinct_tracks
-            FROM spotify_plays
-            WHERE track_uri IS NOT NULL
-        """)
+        sp_overview_df = query_df(SPOTIFY_OVERVIEW_SQL)
     ph_sp1.empty()
 
     sp_row = sp_overview_df.iloc[0]
@@ -1323,15 +1319,7 @@ with tab_spotify:
     st.caption("Hours of music listened to, by year.")
 
     with skeleton_placeholder("chart") as ph_sp2:
-        sp_hours_df = query_df("""
-            SELECT
-                EXTRACT(YEAR FROM played_at AT TIME ZONE 'Europe/Amsterdam')::int AS year_d,
-                ROUND(SUM(ms_played) / 3600000.0, 1) AS hours
-            FROM spotify_plays
-            WHERE track_uri IS NOT NULL
-            GROUP BY year_d
-            ORDER BY year_d
-        """)
+        sp_hours_df = query_df(SPOTIFY_HOURS_BY_YEAR_SQL)
     ph_sp2.empty()
 
     sp_hours_chart = alt.Chart(sp_hours_df).mark_bar().encode(

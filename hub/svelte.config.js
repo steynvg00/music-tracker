@@ -33,7 +33,11 @@ const config = {
 		},
 		// Mutating API routes are additionally Origin-checked in hooks.server.ts (JSON bodies
 		// aren't covered by SvelteKit's built-in form CSRF check).
-		csrf: { trustedOrigins: [] }
+		csrf: { trustedOrigins: [] },
+		// Absolute /_app/… asset URLs (R3 fix). With the default relative paths, a page the service
+		// worker serves at another URL (the offline fallback) loads its scripts from the wrong folder
+		// (/playlist/_app/…) and the app breaks instead of showing "offline". Rotor lives at the root.
+		paths: { relative: false }
 	}
 };
 

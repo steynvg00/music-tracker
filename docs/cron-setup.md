@@ -38,6 +38,14 @@ Mint the row from Rotor: **Settings › Connections › Connect crons** (needs `
 
 Manual runs: `uv run python scripts/generate_daily_picks.py --dry-run` prints today's deck without writing. `uv run python scripts/update_managed_playlists.py --only <playlist_id>` refreshes one Auto playlist (refuses anything without a managed suffix).
 
+## Rotor stats rollups (v0.83)
+
+`scripts/ingest_spotify_recent.py` ends with `SELECT hub.refresh_rollups()` (`lib/rollups.py`,
+migration 0023). It recomputes only the days touched by the plays just ingested (~2 s at 440k
+plays) and rebuilds everything once every 24 h (~11 s). The timings are printed in the ingest
+log (`[rollups] refreshed in … ms`). It never fails the ingest; before 0023 is applied it is a
+no-op. A full rebuild by hand: `SELECT hub.refresh_rollups(true);`
+
 ## Rotor job runner and notifications (v0.82)
 
 Extra secrets for `hub-jobs.yml` (the other Spotify/DB secrets are the ones above):
