@@ -13,6 +13,7 @@
 	import { player } from '$lib/stores/player.svelte';
 	import type { HomePayload } from '$lib/shared/daily-types';
 	import { homeWrappedCard } from '$lib/shared/wrapped';
+	import { radarDate } from '$lib/shared/radar';
 
 	let { data } = $props();
 	let fresh = $state<HomePayload | null>(null);
@@ -145,6 +146,17 @@
 		</section>
 	{/if}
 
+	{#if home?.comingUp?.length}
+		<section class="section" aria-label="Coming up">
+			<div class="sec-h"><h2>Coming up</h2><a class="cap" href="/radar">Release radar</a></div>
+			<ul class="coming">
+				{#each home.comingUp as it (it.id)}
+					<li><span class="cu-d cap">{radarDate(it.date, it.precision)}</span><span class="cu-t"><b>{it.title}</b><span class="cap">{it.artist}{it.label ? ` · ${it.label}` : ''}</span></span></li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+
 	{#if home?.elsewhere}
 		<!-- Elsewhere: one quiet link card at the very bottom, no YouTube/SoundCloud artwork or items (03-ux-ia.md §3). -->
 		<a class="elsewhere" href="/elsewhere">
@@ -157,6 +169,31 @@
 </div>
 
 <style>
+	.coming {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		gap: 2px;
+	}
+	.coming li {
+		display: flex;
+		gap: 12px;
+		align-items: baseline;
+		padding: 8px 12px;
+		border-radius: 10px;
+		background: var(--surface-2);
+	}
+	.cu-d {
+		flex: none;
+		width: 92px;
+		color: var(--data-3);
+	}
+	.cu-t {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
 	.wrapped {
 		display: flex;
 		flex-direction: column;

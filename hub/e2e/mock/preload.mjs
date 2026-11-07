@@ -93,6 +93,15 @@ createServer(async (req, res) => {
 		res.writeHead(r.status, { 'content-type': 'application/json' });
 		return res.end(JSON.stringify(r.body ?? {}));
 	}
+	// R7: the Release radar's MusicBrainz + Scantraxx requests (RADAR_MUSICBRAINZ_BASE / RADAR_SCANTRAXX_BASE).
+	if (url.pathname.startsWith('/musicbrainz/') || url.pathname.startsWith('/scantraxx/')) {
+		const mb = url.pathname.startsWith('/musicbrainz/');
+		const host = mb ? 'musicbrainz.org' : 'scantraxx.com';
+		const path = url.pathname.replace(/^\/(musicbrainz|scantraxx)/, '');
+		const r = mock.handle({ method: req.method ?? 'GET', url: `https://${host}${path}${url.search}`, who: 'python', headers: req.headers });
+		res.writeHead(r.status, { 'content-type': r.html ? 'text/html; charset=utf-8' : 'application/json' });
+		return res.end(r.html ? r.body : JSON.stringify(r.body ?? {}));
+	}
 	if (url.pathname.startsWith('/v1/')) {
 		const r = mock.handle({ method: req.method ?? 'GET', url: `https://api.spotify.com${url.pathname}${url.search}`, body: parseBody(raw || undefined), who: 'python' });
 		res.writeHead(r.status, { 'content-type': 'application/json' });

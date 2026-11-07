@@ -1,0 +1,17 @@
+{
+  "created": "2026-11-06T10:00:00.000Z",
+  "count": 4,
+  "offset": 0,
+  "releases": [
+    {"id": "r-0001", "score": 100, "title": "Lost In Paradise", "status": "Official", "date": "2026-03-06",
+     "release-group": {"id": "rg-lost-in-paradise", "title": "Lost In Paradise", "primary-type": "Single"},
+     "label-info": [{"catalog-number": "SCAN413", "label": {"id": "l-1", "name": "Scantraxx"}}]},
+    {"id": "r-0002", "score": 100, "title": "Lost In Paradise", "status": "Official", "date": "2026-03-07",
+     "release-group": {"id": "rg-lost-in-paradise", "title": "Lost In Paradise", "primary-type": "Single"},
+     "label-info": [{"label": {"id": "l-1", "name": "Scantraxx"}}]},
+    {"id": "r-0003", "score": 100, "title": "The Return", "status": "Official", "date": "2026-04-10",
+     "release-group": {"id": "rg-the-return", "title": "The Return", "primary-type": "Album"}, "label-info": []},
+    {"id": "r-0004", "score": 90, "title": "Old Classic", "status": "Official", "date": "2019-01-01",
+     "release-group": {"id": "rg-old", "title": "Old Classic", "primary-type": "Single"}}
+  ]
+}

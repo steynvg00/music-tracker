@@ -9,6 +9,7 @@ followed, suffix-spoofed, not-owned-with-suffix), playlist settings, the rules c
 (real lib/rules_catalog) and today's daily-pick deck (real lib/daily_picks generator).
 """
 import argparse
+import html
 import json
 import random
 import string
@@ -224,6 +225,59 @@ def main() -> int:
                     (today, rank, f"E2E pick {rank}", sample))
     conn.commit()
 
+    # ── R7 Release radar: Spotify artist albums, MusicBrainz, Scantraxx pages (dates relative to today) ──
+    # Generated after every other rng use, so the rest of the seed stays identical.
+    played = {r[4] for r in rows}
+    a0, a1 = artists[0], artists[2]                      # Da Tweekaz, Headhunterz
+    lib_track = next(t for t in tracks if t["uri"] in played and t["artists"][0]["id"] not in (a0["id"], a1["id"]))
+    a2 = lib_track["artists"][0]
+    followed_artist = {"id": sid(), "name": "E2E Followed Artist"}
+    ids = {k: sid() for k in ("fresh", "older", "shared", "lib", "followed")}
+    new_t = [f"spotify:track:{sid()}" for _ in range(5)]
+
+    def dd(n: int) -> date:
+        return today + timedelta(days=n)
+
+    def album(aid, name, n, kind, artist):
+        return {"album_type": kind, "id": aid, "name": name, "release_date": dd(n).isoformat(), "release_date_precision": "day",
+                "external_urls": {"spotify": f"https://open.spotify.com/album/{aid}"}, "artists": [{"id": artist["id"], "name": artist["name"]}]}
+
+    artist_albums = {
+        a0["id"]: [album(ids["fresh"], "E2E Fresh Single", -3, "single", a0), album(ids["older"], "E2E Older Album", -40, "album", a0)],
+        a1["id"]: [album(ids["shared"], "Shared Release", -5, "single", a1)],
+        a2["id"]: [album(ids["lib"], "Already Yours", -8, "single", a2)],
+        followed_artist["id"]: [album(ids["followed"], "Followed Drop", -2, "single", followed_artist)],
+    }
+    album_tracks = {ids["fresh"]: new_t[:2], ids["older"]: [new_t[2]], ids["shared"]: [new_t[3]], ids["lib"]: [lib_track["uri"]],
+                    ids["followed"]: [new_t[4]]}
+    musicbrainz = {
+        "bySpotify": {a1["id"]: {"mbid": "mb-e2e-headhunterz", "name": a1["name"]}},
+        "releases": {"mb-e2e-headhunterz": [
+            {"id": "r-e2e-1", "title": "Shared Release (Extended Mix)", "date": dd(-5).isoformat(),
+             "release-group": {"id": "rg-e2e-shared", "title": "Shared Release", "primary-type": "Single"},
+             "label-info": [{"label": {"name": "Scantraxx"}}]},
+            {"id": "r-e2e-2", "title": "E2E Future Album", "date": dd(20).isoformat(),
+             "release-group": {"id": "rg-e2e-future", "title": "E2E Future Album", "primary-type": "Album"}, "label-info": []},
+        ]},
+    }
+    months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+    lines: dict[str, list[tuple[date, str, str]]] = {}
+    for when, artist, title in ((dd(0), a1["name"], "Shared Release"), (dd(10), a0["name"], "E2E Label Exclusive"),
+                                (dd(1), "Not Your Artist", "Never On The Radar")):
+        lines.setdefault(f"{months[when.month - 1]}-{when.year}", []).append((when, artist, title))
+    lines.setdefault(f"{months[today.month - 1]}-{today.year}", [])
+    scantraxx = {}
+    for key, items in lines.items():
+        # The real page's release cards (tests/fixtures/release_radar/scantraxx_live_october_2026.html).
+        body = "".join(
+            f'<div class="trackItem"><div class="innerTrack"><div class="bottomInfo"><div class="artistsInfo">{html.escape(a)}</div>'
+            f'<a class="trackLink hideCustomCursor" title="{html.escape(t)}" href="/releases/{90000 + i}/e2e"><span class="label">'
+            f'<span class="innerLabel">{html.escape(t)}</span></span></a><div class="version"></div><div class="bottomCols">'
+            f'<div class="trackLabel">Scantraxx</div><div class="date">{w.day:02d} / {w.month:02d} / {w.year}</div></div></div></div></div>'
+            for i, (w, a, t) in enumerate(sorted(items)))
+        scantraxx[key] = (f"<!doctype html><html><head><title>Releases Scantraxx | {key}</title></head><body><nav><a href='/'>Home</a></nav>"
+                          f"<main><h1 class='subTitle'>Week 1</h1>{body}</main><footer>© Scantraxx</footer></body></html>")
+
     state = {
         "owner": OWNER,
         "loginUser": None,
@@ -247,8 +301,15 @@ def main() -> int:
                                           "embeddable": n != 6} for n in range(1, 23)},
         },
         "soundcloud": {"https://soundcloud.com/e2e-artist/sets/e2e-set": {"title": "E2E SoundCloud set", "author": "e2e-artist"}},
+        "artistAlbums": artist_albums,
+        "albumTracks": album_tracks,
+        "musicbrainz": musicbrainz,
+        "musicbrainzDown": False,
+        "scantraxx": scantraxx,
         "fixture": {"top30": top30, "snapshot": snap, "custom": custom, "road": road, "followed": followed, "spoof": spoof, "stolen": stolen,
-                    "artist0": artists[0], "track0": tracks[0]["uri"], "variant0": variants[0]["uri"], "today": str(today)},
+                    "artist0": artists[0], "track0": tracks[0]["uri"], "variant0": variants[0]["uri"], "today": str(today),
+                    "radar": {"a0": a0, "a1": a1, "a2": a2, "followed": followed_artist, "albums": ids, "newTracks": new_t,
+                              "libTrack": lib_track["uri"]}},
     }
     Path(args.state).parent.mkdir(parents=True, exist_ok=True)
     Path(args.state).write_text(json.dumps(state))

@@ -1,6 +1,7 @@
 /**
  * E2E mock of every external service Rotor talks to (Spotify Web API + Accounts, GitHub
- * Actions dispatch; R4 adds YouTube Data API + SoundCloud oEmbed). One in-memory state,
+ * Actions dispatch; R4 adds YouTube Data API + SoundCloud oEmbed; R7 adds MusicBrainz + the Scantraxx
+ * monthly release pages and Spotify artist albums). One in-memory state,
  * one call log. Used two ways:
  *   - in the hub's Node process, through preload.mjs (globalThis.fetch is wrapped);
  *   - over HTTP on 127.0.0.1:<E2E_MOCK_PORT>/v1/… for the Python job runner (spotipy prefix).
@@ -214,6 +215,15 @@ export function createMock(stateFile) {
 			return ok({ snapshot_id: bump(pl) }, method === 'POST' ? 201 : 200);
 		}
 		if ((m = /^\/tracks\/([A-Za-z0-9]{22})$/.exec(p)) && method === 'GET') return ok(track(`spotify:track:${m[1]}`));
+		// ── R7: artist albums + album tracks (Release radar, Python with the cron token) ──
+		if ((m = /^\/artists\/([A-Za-z0-9]{22})\/albums$/.exec(p)) && method === 'GET') {
+			const items = ((state.artistAlbums ?? {})[m[1]] ?? []).slice(0, Number(query.get('limit') ?? 20));
+			return ok({ items, total: items.length, next: null, limit: items.length, offset: 0 });
+		}
+		if ((m = /^\/albums\/([A-Za-z0-9]{22})\/tracks$/.exec(p)) && method === 'GET') {
+			const uris = (state.albumTracks ?? {})[m[1]] ?? [];
+			return ok({ items: uris.map((u) => ({ uri: u, id: u.split(':')[2], name: `Track ${u.slice(-4)}` })), next: null, total: uris.length });
+		}
 		return { status: 501, body: { error: { status: 501, message: `E2E mock: unmocked ${method} ${p}` } }, unmocked: true };
 	}
 
@@ -251,10 +261,33 @@ export function createMock(stateFile) {
 		return ok({ version: 1, type: 'rich', title: sc.title, author_name: sc.author, thumbnail_url: null, html: `<iframe width="100%" height="400" scrolling="no" frameborder="no" src="https://w.soundcloud.com/player/?visual=true&url=${encodeURIComponent(u)}"></iframe>` });
 	}
 
+	// ── R7: MusicBrainz (JSON) + Scantraxx monthly pages (HTML) ──
+	function musicbrainzApi(path, q) {
+		const mb = state.musicbrainz ?? { bySpotify: {}, releases: {} };
+		if (state.musicbrainzDown) return err(503, 'MusicBrainz is down (E2E)');
+		const name = path.split('/').at(-1);
+		if (name === 'url') {
+			const id = (q.get('resource') ?? '').split('/artist/')[1];
+			const hit = mb.bySpotify[id];
+			return hit ? ok({ resource: q.get('resource'), relations: [{ type: 'free streaming', artist: { id: hit.mbid, name: hit.name } }] }) : err(404, 'Not Found');
+		}
+		if (name === 'artist') return ok({ count: 0, offset: 0, artists: [] });
+		if (name === 'release') {
+			const arid = /arid:([\w-]+)/.exec(q.get('query') ?? '')?.[1];
+			return ok({ count: 0, offset: 0, releases: mb.releases[arid] ?? [] });
+		}
+		return err(404, 'unknown musicbrainz endpoint');
+	}
+	function scantraxxPage(path) {
+		const m = /\/news\/releases-scantraxx-([a-z]+-\d{4})$/.exec(path);
+		const html = m && (state.scantraxx ?? {})[m[1]];
+		return html ? { status: 200, body: html, html: true } : { status: 404, body: '<h1>Not found</h1>', html: true };
+	}
+
 	/** One external request → mocked response. `who` = 'hub' | 'python'. */
-	function handle({ method, url, body, who = 'hub' }) {
+	function handle({ method, url, body, who = 'hub', headers = {} }) {
 		const u = new URL(url);
-		const entry = { at: Date.now(), who, method, host: u.host, path: u.pathname, query: u.search, body };
+		const entry = { at: Date.now(), who, method, host: u.host, path: u.pathname, query: u.search, body, ua: headers['user-agent'] ?? null, headers };
 		let res;
 		if (u.host === 'accounts.spotify.com' && u.pathname === '/api/token') {
 			const grant = typeof body === 'object' && body ? body.grant_type : null;
@@ -265,6 +298,10 @@ export function createMock(stateFile) {
 			res = youtubeApi(u.pathname, u.searchParams);
 		} else if (u.host === 'soundcloud.com' && u.pathname === '/oembed') {
 			res = soundcloudOembed(u.searchParams);
+		} else if (u.host === 'musicbrainz.org' && u.pathname.startsWith('/ws/2/')) {
+			res = musicbrainzApi(u.pathname, u.searchParams);
+		} else if (u.host === 'scantraxx.com' && u.pathname.startsWith('/news/')) {
+			res = scantraxxPage(u.pathname);
 		} else if (u.host === 'api.github.com') {
 			const m = /^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/([\w.-]+)\/dispatches$/.exec(u.pathname);
 			if (m && method === 'POST') {

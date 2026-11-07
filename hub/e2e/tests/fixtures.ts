@@ -30,23 +30,39 @@ export interface MockCall {
 	unmocked?: boolean;
 	blocked?: boolean;
 	at: number;
+	/** R7: request User-Agent / headers as the mock received them (Python requests). */
+	ua?: string | null;
+	headers?: Record<string, string>;
+}
+
+/**
+ * fetch to the mock control server with one retry: a long synchronous step in a test (a Python
+ * daily run via execFileSync) can outlive Node's 5 s keep-alive, and the next request then hits the
+ * closed socket (ECONNRESET). Retrying once on a fresh connection is safe for these idempotent calls.
+ */
+async function ctlFetch(url: string, init?: RequestInit): Promise<Response> {
+	try {
+		return await fetch(url, init);
+	} catch {
+		return fetch(url, { ...init, headers: { ...(init?.headers ?? {}), Connection: 'close' } });
+	}
 }
 
 export const mock = {
 	async calls(): Promise<MockCall[]> {
-		return (await fetch(`${MOCK}/__mock/calls`)).json();
+		return (await ctlFetch(`${MOCK}/__mock/calls`)).json();
 	},
 	async resetCalls() {
-		await fetch(`${MOCK}/__mock/reset-calls`, { method: 'POST' });
+		await ctlFetch(`${MOCK}/__mock/reset-calls`, { method: 'POST' });
 	},
 	async state(): Promise<Record<string, any>> {
-		return (await fetch(`${MOCK}/__mock/state`)).json();
+		return (await ctlFetch(`${MOCK}/__mock/state`)).json();
 	},
 	async set(patch: Record<string, unknown>) {
-		await fetch(`${MOCK}/__mock/state`, { method: 'POST', body: JSON.stringify(patch) });
+		await ctlFetch(`${MOCK}/__mock/state`, { method: 'POST', body: JSON.stringify(patch) });
 	},
 	async pushes(): Promise<{ endpoint: string; data: { kind: string; title: string; body: string; url: string } }[]> {
-		return (await fetch(`${MOCK}/__mock/pushes`)).json();
+		return (await ctlFetch(`${MOCK}/__mock/pushes`)).json();
 	},
 	async fixture(): Promise<Record<string, any>> {
 		return (await this.state()).fixture;

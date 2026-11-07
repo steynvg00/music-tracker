@@ -62,3 +62,11 @@ export function describeFailure(e: unknown): string {
 			return 'Something went wrong. Try again.';
 	}
 }
+
+/** R7: PUT / DELETE JSON (same handling as apiPost). */
+export async function apiPut<T>(path: string, body: unknown = {}): Promise<T> {
+	return handle<T>(await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' }));
+}
+export async function apiDelete<T>(path: string): Promise<T> {
+	return handle<T>(await fetch(path, { method: 'DELETE', headers: { Accept: 'application/json' }, credentials: 'same-origin' }));
+}

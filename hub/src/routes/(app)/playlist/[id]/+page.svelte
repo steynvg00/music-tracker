@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { isWrappedPlaylistName } from '$lib/shared/wrapped';
+	import { isRadarPlaylistName } from '$lib/shared/radar';
 	import { goto, invalidateAll } from '$app/navigation';
 	import Art from '$lib/components/Art.svelte';
 	import Attribution from '$lib/components/Attribution.svelte';
@@ -99,7 +100,13 @@
 		</section>
 	{/if}
 
-	{#if canEdit && p.kind === 'auto_updating'}
+	{#if canEdit && p.kind === 'auto_updating' && isRadarPlaylistName(p.name)}
+		<section class="panel" aria-label="Managed settings">
+			<h3>Release radar</h3>
+			<p class="cap">Spotify releases of the last 14 days from your artists. Rewritten only by "Update playlist" on the Release radar.</p>
+			<div class="row-acts"><a class="btn sec" href="/radar">Open Release radar</a></div>
+		</section>
+	{:else if canEdit && p.kind === 'auto_updating'}
 		<section class="panel" aria-label="Managed settings">
 			<h3>Sort order</h3>
 			<p class="cap">Applied at the next refresh{d.nextRefresh ? ` (${fmtDate(d.nextRefresh, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})` : ''} or right away with Refresh now.</p>

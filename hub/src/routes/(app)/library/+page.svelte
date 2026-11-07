@@ -93,6 +93,7 @@
 	<div class="actions">
 		<button class="btn pri" onclick={() => customSheet.openCreate()}><Icon name="plus" size={18} /> New custom playlist</button>
 		<a class="btn sec" href="/rules">Rules</a>
+		<a class="btn sec" href="/radar">Release radar</a>
 	</div>
 	<div class="chips" role="group" aria-label="Filter">
 		{#each CHIPS as c (c)}
