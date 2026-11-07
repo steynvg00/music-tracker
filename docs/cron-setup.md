@@ -73,10 +73,11 @@ Re-mint before the date in the log below:
 
 1. `uv run python scripts/spotify_auth.py` — a browser opens; approve the Spotify dialog. The script always does a fresh authorization and prints the new token plus its expiry date.
 2. GitHub: Settings → Secrets and variables → Actions → `SPOTIFY_REFRESH_TOKEN` → Update (or `gh secret set SPOTIFY_REFRESH_TOKEN` and paste the value when prompted).
-3. Streamlit Cloud: the app → Settings → Secrets → `SPOTIFY_REFRESH_TOKEN`.
-4. Local `.env`: replace `SPOTIFY_REFRESH_TOKEN=`.
-5. Run **Ingest freshness monitor** manually and check it goes green.
-6. Add a row to the log below.
+3. Local `.env`: replace `SPOTIFY_REFRESH_TOKEN=`.
+4. Run **Ingest freshness monitor** manually and check it goes green.
+5. Add a row to the log below.
+
+(Until v1.0 there was a third copy in the Streamlit Cloud secrets; the dashboard is retired.)
 
 Scopes are fixed at minting time. If you add a scope to `SPOTIFY_SCOPES` in `scripts/spotify_auth.py`, re-mint, or the new feature gets `403 Insufficient client scope` (the crons themselves keep running: `lib/spotify.py` deliberately doesn't check scopes).
 

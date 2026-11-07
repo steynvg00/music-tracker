@@ -13,7 +13,8 @@ Fallback, in order:
   3. nothing (0): unenriched tracks.
 
 The hub rollups use the same expression (migrations/0026_rollups_duration_fallback.sql,
-hub/src/lib/server/home.ts), so Streamlit and Rotor report the same hours.
+hub/src/lib/server/home.ts). Since v1.0 (Streamlit retired) this module is the parity reference:
+tests/test_hours_duration_fallback.py and E2E R3-3 check that Rotor's hours equal these queries.
 
 Use these with `spotify_plays sp` + DURATION_JOIN.
 """

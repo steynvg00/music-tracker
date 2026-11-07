@@ -1,5 +1,7 @@
 /** R3: stats parity with Streamlit (its SQL, verbatim), Stats screens, detail pages, Search, Home. */
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect, mock, sql, sqlNum } from './fixtures';
 
 const REPO = process.env.E2E_REPO_ROOT ?? '../..';
@@ -249,9 +251,10 @@ test.describe('R3 screens', () => {
 		expect(blocked).toEqual([]);
 	});
 
-	test('R3-17 Streamlit is read-only: no write path left on the playlist page @laptop', async () => {
-		const out = execFileSync('uv', ['run', '--no-sync', 'pytest', '-q', 'tests/test_streamlit_readonly.py'], { cwd: REPO, encoding: 'utf8' });
-		expect(out).toMatch(/passed/);
+	test('R3-17 v1.0: Streamlit is gone — no app.py, views/ or .streamlit/, no streamlit dependency @laptop', async () => {
+		for (const p of ['app.py', 'views', '.streamlit']) expect(existsSync(join(REPO, p)), p).toBe(false);
+		expect(readFileSync(join(REPO, 'pyproject.toml'), 'utf8')).not.toMatch(/streamlit|pandas/);
+		expect(readFileSync(join(REPO, 'uv.lock'), 'utf8')).not.toMatch(/name = "streamlit"|name = "altair"|name = "pandas"/);
 	});
 
 	test('R3-18 performance: an ingest’s refresh < 5 s, Home payload < 100 ms; daily full rebuild reported @laptop', async () => {

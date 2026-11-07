@@ -16,14 +16,9 @@ import json
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from functools import lru_cache
-from io import BytesIO
-from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
-
-from PIL import Image
 
 from lib import notify
 
@@ -31,8 +26,8 @@ TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
 # ── v0.68: badge PNG icons (Defqon.1 hardstyle set) ───────────────────────────────
 # Maps each badge_type to its PNG file under assets/badges/. Complete at 22/22 as of
-# v0.70 (late_bloomer → slow_burn.png). _badge_png_bytes still returns None for any
-# unmapped/missing file so callers keep their text-placeholder fallback.
+# v0.70 (late_bloomer → slow_burn.png). The reference map for Rotor's copy
+# (hub/src/lib/shared/stats.ts) and scripts/export_badge_icons.py.
 BADGE_ICONS: dict[str, str] = {
     # Play milestones
     "plays_50": "50_plays.png",
@@ -63,44 +58,6 @@ BADGE_ICONS: dict[str, str] = {
     "season_regular": "evergreen.png",
     "multi_top": "reigning.png",
 }
-
-BADGE_ASSETS_DIR = Path(__file__).parent.parent / "assets" / "badges"
-
-
-@lru_cache(maxsize=256)
-def _badge_png_bytes(badge_type: str, size: int, desaturated: bool = False) -> bytes | None:
-    """Returns resized PNG bytes for a badge_type, or None if the file isn't present.
-
-    - size: target square dimension in px (thumbnail preserves aspect but our PNGs are
-      1024×1024 square).
-    - desaturated: if True, convert to greyscale + 40% opacity for the 'not earned' render.
-
-    Cached indefinitely — badges don't change during a process lifetime.
-
-    Fallback semantic: callers check for None and fall back to the text placeholder.
-    """
-    filename = BADGE_ICONS.get(badge_type)
-    if not filename:
-        return None
-    path = BADGE_ASSETS_DIR / filename
-    if not path.exists():
-        return None
-
-    img = Image.open(path).convert("RGBA")
-
-    if desaturated:
-        # Convert to greyscale, keep alpha, then reduce opacity to 40%.
-        grey = img.convert("LA").convert("RGBA")
-        alpha = grey.split()[3]
-        alpha = alpha.point(lambda x: int(x * 0.4))
-        grey.putalpha(alpha)
-        img = grey
-
-    img.thumbnail((size, size), Image.LANCZOS)
-
-    buf = BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
 
 
 PLAY_MILESTONE_THRESHOLDS = [50, 100, 200, 300, 400, 500]

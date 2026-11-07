@@ -213,7 +213,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Streamlit
+# Streamlit (retired in v1.0; kept so an old local secrets file is never committed)
 .streamlit/secrets.toml
 
 # Project secrets

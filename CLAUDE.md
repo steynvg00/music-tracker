@@ -1,14 +1,13 @@
 # CLAUDE.md
 
 ## What this is
-A personal music tracker that ingests scrobble history from last.fm and Spotify Extended Streaming History into Postgres, automatically manages structured Spotify playlists (threshold tiers, monthly/seasonal/yearly tops, etc.), and provides a statistics dashboard. Solo use.
+A personal music tracker that ingests scrobble history from last.fm and Spotify Extended Streaming History into Postgres, automatically manages structured Spotify playlists (threshold tiers, monthly/seasonal/yearly tops, etc.), and provides Rotor (`hub/`), a SvelteKit PWA with statistics, playback and playlist management. Solo use. Streamlit was retired in v1.0; Rotor is the only frontend. Notifications are Web Push only (no mail since v0.89).
 
 Full feature spec: `docs/feature-spec.md`.
 
 ## Development commands
 ```bash
 uv sync                              # install/sync dependencies
-uv run streamlit run app.py          # run dashboard locally
 uv run python scripts/<script>.py    # run a one-off script
 uv add <pkg>                         # add a runtime dependency
 uv add --dev <pkg>                   # add a dev-only dependency
@@ -20,8 +19,8 @@ cd hub && npm run check && npm test && npm run build   # hub typecheck, tests, b
 ## Stack
 - Python 3.11+ (managed by uv)
 - Postgres on Supabase (free tier)
-- Streamlit for the dashboard, deployed to Streamlit Community Cloud (being replaced by Rotor)
-- Rotor hub: SvelteKit 2 + Svelte 5 PWA in `hub/`, Vercel (`fra1`), its own Spotify Client ID
+- Rotor hub (the only frontend): SvelteKit 2 + Svelte 5 PWA in `hub/`, Vercel (`fra1`), its own Spotify Client ID
+- Web Push (`lib/web_push.py`, `lib/notify.py`) for every notification; no mail
 - GitHub Actions cron for scheduled jobs
 - APIs: last.fm, Spotify Web API
 - GitHub for source control (public repo)
@@ -36,8 +35,7 @@ cd hub && npm run check && npm test && npm run build   # hub typecheck, tests, b
 - Pre-commit hook (`.git/hooks/pre-commit`) is not tracked by git — re-install on any new clone
 
 ## Key files
-- `app.py` — Streamlit dashboard entry point
-- `scripts/` — scheduled and one-off scripts
+- `scripts/` — scheduled and one-off scripts (CLI only: extended-history import, backfills)
 - `lib/` — shared modules (DB, API clients, business logic)
 - `migrations/` — Postgres schema migrations
 - `docs/feature-spec.md` — full feature specification
