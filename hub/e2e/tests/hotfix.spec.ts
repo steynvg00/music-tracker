@@ -159,10 +159,26 @@ test.describe('v0.83.1 hotfix', () => {
 		const r = await fetch(`${CTL}/deploy${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`, { method: 'POST', signal: AbortSignal.timeout(120_000) });
 		expect(r.ok, await r.clone().text()).toBe(true);
 	};
+	/**
+	 * The worker of whatever build is served controls this page. Hardened (v0.83.3): waiting for
+	 * `registration.active` alone raced the OLD builds' first install (HF-2 on the R1 build timed
+	 * out now and then: the worker existed but was still activating, so the single reload came
+	 * back uncontrolled). Now: wait until the worker is really `activated`, then reload until it
+	 * controls the page (up to 3 times), and fail with a clear message rather than a bare timeout.
+	 */
 	const swReady = async (page: Page) => {
-		await page.waitForFunction(async () => !!(await navigator.serviceWorker.getRegistration())?.active, null, { timeout: 30_000 });
-		if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) await page.reload();
-		await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30_000 });
+		await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active?.state === 'activated', null, { timeout: 60_000 });
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			if (await page.evaluate(() => !!navigator.serviceWorker.controller)) return;
+			await page.reload({ waitUntil: 'load' });
+			try {
+				await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15_000 });
+				return;
+			} catch {
+				// not controlled yet: reload again
+			}
+		}
+		throw new Error('the service worker never took control of the page (3 reloads)');
 	};
 	const version = (page: Page) => page.evaluate(async () => (await (await fetch('/_app/version.json', { cache: 'no-store' })).json()).version as string);
 	const booted = (page: Page) => page.evaluate(() => (window as unknown as { __rotorBoot?: { isBooted: () => boolean } }).__rotorBoot?.isBooted() ?? false);
