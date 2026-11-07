@@ -90,7 +90,15 @@ describe('bypass scan covers R3 modules', () => {
 			'routes/api/custom/from-tracks/+server.ts',
 			'routes/api/stats/[section]/+server.ts',
 			'routes/api/track/[uri]/+server.ts',
-			'routes/api/search/+server.ts'
+			'routes/api/search/+server.ts',
+			// R4 (Elsewhere): no Spotify writes, ever.
+			'lib/server/elsewhere.ts',
+			'lib/players/youtube.ts',
+			'lib/players/soundcloud.ts',
+			'routes/api/collections/+server.ts',
+			'routes/api/collections/[id]/+server.ts',
+			'routes/api/collections/[id]/flags/+server.ts',
+			'routes/(app)/elsewhere/[id]/+page.svelte'
 		]) {
 			expect(scanned).toContain(f);
 		}

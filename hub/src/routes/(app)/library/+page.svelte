@@ -5,15 +5,48 @@
 	import LibraryRowItem from '$lib/components/LibraryRowItem.svelte';
 	import { customSheet } from '$lib/components/custom-playlist-sheet/store.svelte';
 	import { library } from '$lib/stores/library.svelte';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import Collections from '$lib/components/elsewhere/Collections.svelte';
 	import { player } from '$lib/stores/player.svelte';
 	import { CHIPS, CHIP_LABEL, SORTS, SORT_LABEL, filterRows, groupByCategory, sortRows, type Chip, type LibrarySort } from '$lib/shared/library';
 
 	let { data } = $props();
 	const KEY = 'rotor.library';
+	const SOURCE_KEY = 'rotor.library.source';
+	type LibSource = 'spotify' | 'youtube' | 'soundcloud';
+	const SOURCES: { key: LibSource; label: string }[] = [
+		{ key: 'spotify', label: 'Spotify' },
+		{ key: 'youtube', label: 'YouTube' },
+		{ key: 'soundcloud', label: 'SoundCloud' }
+	];
+	let source = $state<LibSource>('spotify');
+	/** Exclusive: there is no "All" view, so Spotify never shares a list with YouTube/SoundCloud. */
+	function pickSource(s: LibSource) {
+		source = s;
+		try {
+			localStorage.setItem(SOURCE_KEY, s);
+		} catch {
+			/* private mode */
+		}
+		const u = new URL(page.url);
+		if (s === 'spotify') u.searchParams.delete('source');
+		else u.searchParams.set('source', s);
+		void goto(u.pathname + u.search, { replaceState: true, keepFocus: true, noScroll: true });
+	}
 	let chips = $state<Set<Chip>>(new Set());
 	let sort = $state<LibrarySort>('az');
 
 	onMount(() => {
+		const q = page.url.searchParams.get('source');
+		let saved: string | null = null;
+		try {
+			saved = localStorage.getItem(SOURCE_KEY);
+		} catch {
+			/* private mode */
+		}
+		const want = (q ?? saved) as LibSource | null;
+		if (want && SOURCES.some((x) => x.key === want)) source = want;
 		try {
 			const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as { chips?: Chip[]; sort?: LibrarySort };
 			chips = new Set((saved.chips ?? []).filter((c) => CHIPS.includes(c)));
@@ -49,6 +82,14 @@
 
 <div class="view">
 	<Header title="Library" />
+	<div class="srcsw" role="tablist" aria-label="Source">
+		{#each SOURCES as x (x.key)}
+			<button role="tab" aria-selected={source === x.key} class:on={source === x.key} onclick={() => pickSource(x.key)}>{x.label}</button>
+		{/each}
+	</div>
+	{#if source !== 'spotify'}
+		{#key source}<Collections {source} />{/key}
+	{:else}
 	<div class="actions">
 		<button class="btn pri" onclick={() => customSheet.openCreate()}><Icon name="plus" size={18} /> New custom playlist</button>
 		<a class="btn sec" href="/rules">Rules</a>
@@ -89,9 +130,28 @@
 		{/if}
 		{#if !visible.length && !showLiked}<p class="cap muted empty">Nothing here with these filters.</p>{/if}
 	{/if}
+	{/if}
 </div>
 
 <style>
+	.srcsw {
+		display: inline-flex;
+		background: var(--surface-2);
+		border-radius: var(--r-pill);
+		padding: 3px;
+		margin: 4px 0 12px;
+	}
+	.srcsw button {
+		padding: 7px 16px;
+		border-radius: var(--r-pill);
+		color: var(--text-2);
+		font-weight: 600;
+		min-height: 36px;
+	}
+	.srcsw button.on {
+		background: var(--accent);
+		color: var(--on-accent);
+	}
 	.actions {
 		display: flex;
 		gap: 8px;

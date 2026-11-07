@@ -120,6 +120,12 @@
 		<p class="cap muted">Applies after a reload.</p>
 	</section>
 
+	<section class="section" aria-label="Elsewhere sources">
+		<div class="sec-h"><h2>Elsewhere</h2></div>
+		<p class="cap"><b>YouTube:</b> {data.youtubeKey ? 'API key configured: public and unlisted playlists can be imported.' : 'Not set up: add the YouTube Data API key to the hub’s server environment (Vercel) to import playlists.'}</p>
+		<p class="cap"><b>SoundCloud:</b> no key needed (oEmbed + the official widget).</p>
+	</section>
+
 	<section class="section">
 		<div class="sec-h"><h2>Notifications</h2></div>
 		<p class="cap">Today's pick is ready, Spotify sign-in expiring (14 and 3 days ahead), and when a job you started finishes.</p>

@@ -23,6 +23,7 @@
 		{ href: '/search', icon: 'search', label: 'Search', match: /^\/search/ },
 		{ href: '/stats', icon: 'stats', label: 'Stats', match: /^\/stats/ },
 		{ href: '/library', icon: 'lib', label: 'Library', match: /^\/library/ },
+		{ href: '/elsewhere', icon: 'devices', label: 'Elsewhere', match: /^\/elsewhere/ },
 		{ href: '/settings', icon: 'gear', label: 'Settings', match: /^\/settings/ }
 	];
 </script>

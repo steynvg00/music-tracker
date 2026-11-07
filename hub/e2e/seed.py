@@ -239,6 +239,14 @@ def main() -> int:
                      "list": pls[top30]["items"], "index": 0},
         "unfollowed": [],
         "dispatches": [],
+        # R4: a 23-video unlisted YouTube playlist (#6 not embeddable, #23 deleted) + a SoundCloud set.
+        "youtube": {
+            "playlists": {"PLe2eRotorTestList01": {"title": "E2E hardstyle mix", "channel": "E2E Channel",
+                                                   "items": [f"e2eVid{n:05d}" for n in range(1, 24)]}},
+            "videos": {f"e2eVid{n:05d}": {"title": f"E2E video {n}", "channel": "E2E Channel", "duration": "PT3M20S",
+                                          "embeddable": n != 6} for n in range(1, 23)},
+        },
+        "soundcloud": {"https://soundcloud.com/e2e-artist/sets/e2e-set": {"title": "E2E SoundCloud set", "author": "e2e-artist"}},
         "fixture": {"top30": top30, "snapshot": snap, "custom": custom, "road": road, "followed": followed, "spoof": spoof, "stolen": stolen,
                     "artist0": artists[0], "track0": tracks[0]["uri"], "variant0": variants[0]["uri"], "today": str(today)},
     }

@@ -11,7 +11,8 @@ name: Hub jobs
 # dispatch does nothing, and reports done/failed back to the row.
 #
 # Daily (schedule, or "Run workflow" with an empty job_id): stale-job sweep, pending
-# snapshot rebuilds, "Today's pick is ready" + token-expiry notifications, rules catalog.
+# snapshot rebuilds, "Today's pick is ready" + token-expiry notifications, rules catalog,
+# and (v0.84) the Elsewhere metadata refresh (YouTube data refreshed or deleted within 30 days).
 #
 # Deliberately NOT a job in scheduled-ingest.yml: every job there also runs on
 # workflow_dispatch. Listed in keepalive.yml because the daily schedule makes it a
@@ -78,6 +79,7 @@ jobs:
         if: ${{ !inputs.job_id }}
         run: uv run python scripts/run_hub_job.py --daily
         env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}  # v0.84: Elsewhere 30-day refresh (optional)
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}

@@ -5,6 +5,7 @@ import { ReadOnlyPlaylist } from '$lib/server/spotify/write-guard';
 import { BadCommand } from '$lib/server/spotify/player';
 import { BadInput } from '$lib/shared/custom';
 import { JobsUnavailable, RetryRefused } from '$lib/server/jobs';
+import { ElsewhereUnavailable } from '$lib/server/elsewhere';
 import type { ApiError } from '$lib/shared/player-types';
 
 export function apiError(status: number, body: ApiError, headers: Record<string, string> = {}): Response {
@@ -18,6 +19,7 @@ export function toResponse(e: unknown): Response {
 	if (e instanceof GuardBypassError) return apiError(500, { error: 'guard_bypass' });
 	if (e instanceof BadCommand || e instanceof BadInput) return apiError(400, { error: 'bad_request', message: e.message });
 	if (e instanceof JobsUnavailable) return apiError(409, { error: 'jobs_unavailable', message: e.message });
+	if (e instanceof ElsewhereUnavailable) return apiError(503, { error: 'source_unavailable', message: e.message });
 	if (e instanceof RetryRefused) return apiError(409, { error: 'retry_refused', reason: e.reason });
 	if (e instanceof SpotifyError) {
 		const headers: Record<string, string> = {};

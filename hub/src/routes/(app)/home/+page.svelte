@@ -131,6 +131,14 @@
 		</section>
 	{/if}
 
+	{#if home?.elsewhere}
+		<!-- Elsewhere: one quiet link card at the very bottom, no YouTube/SoundCloud artwork or items (03-ux-ia.md §3). -->
+		<a class="elsewhere" href="/elsewhere">
+			<span><b>Elsewhere</b><span class="cap muted">{home.elsewhere.youtube + home.elsewhere.soundcloud ? `${home.elsewhere.youtube + home.elsewhere.soundcloud} YouTube & SoundCloud collection${home.elsewhere.youtube + home.elsewhere.soundcloud === 1 ? '' : 's'}` : 'Import YouTube & SoundCloud collections'}</span></span>
+			<span aria-hidden="true">→</span>
+		</a>
+	{/if}
+
 	<p class="cap muted foot">Spotify content is played in Spotify; Rotor never edits playlists without a managed suffix.</p>
 </div>
 
@@ -161,6 +169,22 @@
 	}
 	.foot {
 		margin-top: 28px;
+	}
+	.elsewhere {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-top: 28px;
+		padding: 14px 16px;
+		border-radius: var(--r-card);
+		background: var(--surface-1);
+		border: 1px solid var(--border);
+		color: var(--text-1);
+	}
+	.elsewhere > span:first-child {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 	}
 	.otd {
 		flex: none;

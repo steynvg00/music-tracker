@@ -14,8 +14,8 @@ Kinds: reseed_daily_pick ("Shuffle the deck"), refresh_managed ("Refresh this pl
 now" / snapshot rebuild), push_test ("Send a test notification").
 
 The daily run (run_daily) sweeps stale jobs, rebuilds snapshots with a pending
-force-refresh request, sends "Today's pick is ready" and token-expiry notifications, and
-re-exports the rules catalog.
+force-refresh request, sends "Today's pick is ready" and token-expiry notifications,
+re-exports the rules catalog and (v0.84) refreshes Elsewhere metadata within 30 days.
 """
 
 from __future__ import annotations
@@ -308,4 +308,19 @@ def run_daily(conn, *, sp_factory: Callable, push=web_push.send, today: date | N
 
     step("token_notices", tokens)
     step("rules_catalog", lambda: export_rules_catalog(conn))
+
+    def collections():
+        # v0.84 (R4): YouTube III.E.4 30-day refresh/delete + SoundCloud oEmbed refresh.
+        # A no-op before migration 0024 (the tables don't exist yet).
+        import psycopg
+
+        from lib.collections_refresh import refresh
+
+        try:
+            return refresh(conn)
+        except psycopg.errors.UndefinedTable:
+            conn.rollback()
+            return "skipped: migration 0024 not applied"
+
+    step("collections", collections)
     return summary
