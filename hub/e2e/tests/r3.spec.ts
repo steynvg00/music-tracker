@@ -128,7 +128,9 @@ test.describe('R3 screens', () => {
 		await expect.poll(async () => (await mock.writes()).find((c) => c.path === '/v1/me/player/play')).toBeTruthy();
 		const play = (await mock.writes()).find((c) => c.path === '/v1/me/player/play')!;
 		expect((play.body as { uris: string[] }).uris.length).toBeGreaterThan(1);
-		await page.getByLabel('Rank by').selectOption('sticky');
+		// v0.91: "Rank by" is the icon button at the end of the pill bar, opening a sheet.
+		await page.getByTestId('pill-action').click();
+		await page.getByRole('radio', { name: /^Sticky/ }).click();
 		await expect(page.getByText(/pre-computed all-time scores/)).toBeVisible();
 		await expect(page.locator('ol li .v').first()).toContainText('%');
 	});

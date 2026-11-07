@@ -2,7 +2,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import Header from '$lib/components/Header.svelte';
 	import JobStatus from '$lib/components/JobStatus.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import { JobTracker } from '$lib/stores/jobs.svelte';
 	import { apiPost, describeFailure, ApiFailure } from '$lib/player/api-client';
@@ -39,7 +39,7 @@
 
 <div class="view">
 	<Header title="Rotor Wrapped" />
-	<StatsNav />
+	<StatsBar />
 	{#if !list}
 		<StatsError r={data.r} />
 	{:else}

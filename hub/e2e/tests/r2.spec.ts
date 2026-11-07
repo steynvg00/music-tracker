@@ -98,7 +98,9 @@ test.describe('R2', () => {
 	test('R2-8 create → edit → extend → keep → delete a custom playlist through the guard @mobile', async ({ page }) => {
 		const f = await mock.fixture();
 		await page.goto('/library');
-		await page.getByRole('button', { name: /New custom playlist/ }).click();
+		// v0.91: "New custom playlist" moved into the Library header's + menu.
+		await page.getByTestId('lib-plus').click();
+		await page.getByTestId('plus-custom').click();
 		await page.getByPlaceholder('Search your artists…').fill(f.artist0.name.slice(0, 6));
 		await page.getByRole('listbox', { name: 'Artist suggestions' }).getByText(f.artist0.name).first().click().catch(async () => {
 			await page.getByLabel('Artist suggestions').getByText(f.artist0.name).first().click();

@@ -1,11 +1,18 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import Icon from './Icon.svelte';
-	/** Screen header: title · health dot · settings. Sticky on mobile. */
-	let { title, health = 'ok', healthLabel = 'All good' }: { title: string; health?: 'ok' | 'warn' | 'danger' | 'checking'; healthLabel?: string } = $props();
+	/** Screen header: title · page actions (v0.91, e.g. Library's search / + / Manage) · health dot · settings. Sticky on mobile. */
+	let {
+		title,
+		health = 'ok',
+		healthLabel = 'All good',
+		actions
+	}: { title: string; health?: 'ok' | 'warn' | 'danger' | 'checking'; healthLabel?: string; actions?: Snippet } = $props();
 </script>
 
 <header class="mhead">
 	<h1>{title}</h1>
+	{#if actions}{@render actions()}{/if}
 	<a class="health {health}" href="/settings" aria-label="Data health: {healthLabel}" title={healthLabel}><i></i></a>
 	<a class="ibtn" href="/settings" aria-label="Settings"><Icon name="gear" size={20} /></a>
 </header>

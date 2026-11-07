@@ -30,15 +30,17 @@ async function importLink(page: import('@playwright/test').Page, source: 'youtub
 test.describe('R4', () => {
 	test('R4-1 Library source switch is exclusive (no "All") and remembered @both', async ({ page }) => {
 		await page.goto('/library');
-		const tabs = page.getByRole('tablist', { name: 'Source' }).getByRole('tab');
-		await expect(tabs).toHaveText(['Spotify', 'YouTube', 'SoundCloud']);
+		// v0.91: the source is a pill group in the one filter bar.
+		const sources = page.getByTestId('lib-pills').locator('[data-group=source]');
+		await expect(sources).toHaveText(['Spotify', 'YouTube', 'SoundCloud']);
 		await expect(page.getByText('Top 30 last 30 days · Auto 🤖🔄').filter({ visible: true }).first()).toBeVisible();
-		await page.getByRole('tab', { name: 'YouTube' }).click();
+		await sources.filter({ hasText: 'YouTube' }).click();
 		await expect(page.getByLabel('YouTube link')).toBeVisible();
 		await expect(page.locator('main, .view').getByText('Top 30 last 30 days · Auto 🤖🔄')).toHaveCount(0);
 		await page.goto('/library');
-		await expect(page.getByRole('tab', { name: 'YouTube', selected: true })).toBeVisible();
-		await page.getByRole('tab', { name: 'Spotify' }).click();
+		await expect(page.getByTestId('lib-pills').locator('[data-group=source][aria-pressed=true]')).toHaveText('YouTube');
+		await page.getByTestId('pill-clear').click();
+		await expect(page.getByText('Top 30 last 30 days · Auto 🤖🔄').filter({ visible: true }).first()).toBeVisible();
 	});
 
 	test('R4-2 import an unlisted YouTube playlist: 22 playable items listed, 3 quota units @laptop', async ({ page }) => {
@@ -123,7 +125,6 @@ test.describe('R4', () => {
 		await expect(card.locator('img')).toHaveCount(0);
 		await expect(page.getByText(/E2E video|E2E hardstyle mix|E2E SoundCloud set/)).toHaveCount(0);
 		await page.goto('/library?source=spotify');
-		await page.getByRole('tab', { name: 'Spotify' }).click();
 		await expect(page.getByText(/E2E video|E2E hardstyle mix|E2E SoundCloud set/)).toHaveCount(0);
 		await page.goto('/search?q=E2E');
 		await expect(page.getByText(/E2E video|E2E hardstyle mix|E2E SoundCloud set/)).toHaveCount(0);

@@ -4,7 +4,7 @@
 	import BarChart from '$lib/components/stats/BarChart.svelte';
 	import HBars from '$lib/components/stats/HBars.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { Behaviour } from '$lib/server/stats/sections';
 	import { fmtInt } from '$lib/shared/format';
@@ -32,7 +32,7 @@
 
 <div class="view">
 	<Header title="Behaviour" />
-	<StatsNav />
+	<StatsBar />
 	{#if !b}
 		<StatsError r={data.r} />
 	{:else}

@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import Header from '$lib/components/Header.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { OnThisDayYear } from '$lib/server/stats/core';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
@@ -17,7 +17,7 @@
 
 <div class="view">
 	<Header title="On this day" />
-	<StatsNav />
+	<StatsBar />
 	{#if !o}
 		<StatsError r={data.r} />
 	{:else}

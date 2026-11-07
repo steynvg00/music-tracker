@@ -3,7 +3,9 @@
 	import { page } from '$app/state';
 	import Header from '$lib/components/Header.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
+	import OptionSheet from '$lib/components/OptionSheet.svelte';
+	import type { PillGroup } from '$lib/shared/pills';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import { fmtInt } from '$lib/shared/format';
 	import {
@@ -50,6 +52,65 @@
 		void goto(u.pathname + u.search, { keepFocus: true, noScroll: true });
 	}
 
+	// v0.91: one pill bar. List (always one), period (All time = nothing selected), album mode;
+	// Year and Custom range as ▾ menus; Rank by as the icon button at the end.
+	let sheet = $state<null | 'year' | 'rank' | 'custom'>(null);
+	const years = Array.from({ length: thisYear - 2014 }, (_, i) => thisYear - i);
+	const ranged = $derived(view === 'tracks' || view === 'artists');
+	const presetRange = $derived(d?.range.key === 'this_year' || d?.range.key === 'last_year' ? d.range.key : null);
+	const barGroups = $derived<PillGroup[]>([
+		{
+			key: 'view',
+			label: 'List',
+			required: true,
+			value: view,
+			options: [
+				{ value: 'tracks', label: 'Tracks' },
+				{ value: 'artists', label: 'Artists' },
+				{ value: 'albums', label: 'Albums' },
+				{ value: 'race', label: 'Race' }
+			]
+		},
+		{
+			key: 'range',
+			label: 'Period',
+			hidden: !ranged,
+			value: presetRange,
+			options: [
+				{ value: 'this_year', label: 'This year' },
+				{ value: 'last_year', label: 'Last year' }
+			]
+		},
+		{
+			key: 'mode',
+			label: 'Album depth',
+			hidden: view !== 'albums',
+			value: d?.mode === 'depth' ? 'depth' : null,
+			options: [{ value: 'depth', label: 'Plays per track' }]
+		}
+	]);
+	const barMenus = $derived(
+		ranged
+			? [
+					{ key: 'year', label: d?.range.kind === 'year' ? d.range.label : 'Year', active: d?.range.kind === 'year', after: true, onclick: () => (sheet = 'year') },
+					{ key: 'custom', label: d?.range.kind === 'range' ? d.range.label : 'Custom range', active: d?.range.kind === 'range', after: true, onclick: () => (sheet = 'custom') }
+				]
+			: []
+	);
+	const rankAction = $derived(
+		ranged
+			? { label: `Rank by: ${(view === 'tracks' ? TRACK_RANKS : ARTIST_RANKS)[(d?.rank ?? 'plays') as 'plays'].label}`, icon: 'sort' as const, onclick: () => (sheet = 'rank'), active: !!d?.rank && d.rank !== 'plays' }
+			: undefined
+	);
+	function pickPill(group: string, value: string | null) {
+		if (group === 'view') set({ view: value, rank: null });
+		else if (group === 'range') set({ range: value });
+		else if (group === 'mode') set({ mode: value });
+	}
+	function clearFilters() {
+		set({ range: null, rank: null, mode: null });
+	}
+
 	const trackRows = $derived<RankRow[]>(
 		(d?.tracks ?? []).map((t) => ({
 			key: t.uri ?? `${t.rank}`,
@@ -87,50 +148,30 @@
 
 <div class="view">
 	<Header title="Top" />
-	<StatsNav />
-
-	<div class="filters" role="group" aria-label="List">
-		{#each [['tracks', 'Tracks'], ['artists', 'Artists'], ['albums', 'Albums'], ['race', 'Race']] as const as [k, l] (k)}
-			<button class="chip" class:on={view === k} aria-pressed={view === k} onclick={() => set({ view: k, rank: null })}>{l}</button>
-		{/each}
-	</div>
-
-	{#if view === 'tracks' || view === 'artists'}
-		<div class="filters" role="group" aria-label="Time range">
-			{#each [['all', 'All time'], ['this_year', 'This year'], ['last_year', 'Last year']] as const as [k, l] (k)}
-				<button class="chip" class:on={(d?.range.key ?? 'all') === k} aria-pressed={(d?.range.key ?? 'all') === k} onclick={() => set({ range: k })}>{l}</button>
-			{/each}
-			<label class="chip sel">
-				<span class="sr">Year</span>
-				<select value={d?.range.kind === 'year' ? d.range.key : ''} onchange={(e) => e.currentTarget.value && set({ range: e.currentTarget.value })}>
-					<option value="">Year…</option>
-					{#each Array.from({ length: thisYear - 2014 }, (_, i) => thisYear - i) as y (y)}<option value="year-{y}">{y}</option>{/each}
-				</select>
-			</label>
-		</div>
-		<details class="custom" open={d?.range.kind === 'range'}>
-			<summary>Custom range{d?.range.kind === 'range' ? `: ${d.range.label}` : ''}</summary>
-			<form onsubmit={(e) => (e.preventDefault(), set({ range: `range-${customStart}_${customEnd}` }))}>
-				<label>From <input type="date" bind:value={customStart} /></label>
-				<label>To <input type="date" bind:value={customEnd} /></label>
-				<button class="btn sec" type="submit">Apply</button>
-			</form>
-		</details>
-		<label class="rank">
-			Rank by
-			<select value={d?.rank ?? 'plays'} onchange={(e) => set({ rank: e.currentTarget.value })}>
-				{#each Object.entries(view === 'tracks' ? TRACK_RANKS : ARTIST_RANKS) as [k, v] (k)}<option value={k}>{v.label}</option>{/each}
-			</select>
-		</label>
-		{#if d?.rank && d.rank !== 'plays' && d.range.kind !== 'all'}
-			<p class="cap muted">Score rankings use pre-computed all-time scores and ignore the time range. Pick “Total plays” to apply it.</p>
-		{/if}
-	{:else if view === 'albums'}
-		<div class="filters" role="group" aria-label="Album depth">
-			<button class="chip" class:on={d?.mode !== 'depth'} aria-pressed={d?.mode !== 'depth'} onclick={() => set({ mode: 'plays' })}>Total plays</button>
-			<button class="chip" class:on={d?.mode === 'depth'} aria-pressed={d?.mode === 'depth'} onclick={() => set({ mode: 'depth' })}>Plays per track</button>
-		</div>
+	<StatsBar groups={barGroups} menus={barMenus} onpick={pickPill} onclear={clearFilters} action={rankAction} />
+	{#if (view === 'tracks' || view === 'artists') && d?.rank && d.rank !== 'plays' && d.range.kind !== 'all'}
+		<p class="cap muted">Score rankings use pre-computed all-time scores and ignore the time range. Pick “Total plays” to apply it.</p>
 	{/if}
+
+	<OptionSheet
+		open={sheet === 'year'}
+		onclose={() => (sheet = null)}
+		title="Year"
+		sections={[{ key: 'year', title: 'Year', options: years.map((y) => ({ value: `year-${y}`, label: String(y) })), value: d?.range.kind === 'year' ? d.range.key : null, onselect: (v) => set({ range: v }) }]}
+	/>
+	<OptionSheet
+		open={sheet === 'rank'}
+		onclose={() => (sheet = null)}
+		title="Rank by"
+		sections={[{ key: 'rank', title: 'Rank by', options: Object.entries(view === 'tracks' ? TRACK_RANKS : ARTIST_RANKS).map(([k, v]) => ({ value: k, label: v.label })), value: d?.rank ?? 'plays', onselect: (v) => set({ rank: v === 'plays' ? null : v }) }]}
+	/>
+	<OptionSheet open={sheet === 'custom'} onclose={() => (sheet = null)} title="Custom range" sections={[]}>
+		<form class="custom" onsubmit={(e) => (e.preventDefault(), (sheet = null), set({ range: `range-${customStart}_${customEnd}` }))}>
+			<label>From <input type="date" bind:value={customStart} /></label>
+			<label>To <input type="date" bind:value={customEnd} /></label>
+			<button class="btn pri" type="submit">Apply</button>
+		</form>
+	</OptionSheet>
 
 	{#if !d}
 		<StatsError r={data.r} />
@@ -164,65 +205,26 @@
 </div>
 
 <style>
-	.filters {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-		margin-bottom: 10px;
-	}
-	.chip {
-		padding: 7px 14px;
-		min-height: 36px;
-		border-radius: var(--r-pill);
-		background: var(--surface-2);
-		color: var(--text-2);
-		font-size: 13px;
-		font-weight: 600;
-	}
-	.chip.on {
-		background: var(--accent-subtle);
-		color: var(--text-1);
-		box-shadow: inset 0 0 0 1px var(--accent);
-	}
-	.chip.sel select,
-	.rank select,
-	.custom input {
-		background: transparent;
-		color: inherit;
-		border: 0;
-		font: inherit;
-	}
-	.rank {
-		display: inline-flex;
-		gap: 8px;
-		align-items: center;
-		font-size: 13px;
-		color: var(--text-2);
-		margin-bottom: 6px;
-	}
-	.rank select,
-	.custom input {
-		background: var(--surface-2);
-		border-radius: 8px;
-		padding: 7px 10px;
-		color: var(--text-1);
-	}
 	.custom {
-		margin-bottom: 10px;
-		font-size: 13px;
-		color: var(--text-2);
-	}
-	.custom form {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 10px;
 		align-items: end;
-		margin-top: 8px;
+		font-size: 13px;
+		color: var(--text-2);
 	}
 	.custom label {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+	}
+	.custom input {
+		background: var(--surface-3);
+		border: 0;
+		border-radius: 8px;
+		padding: 9px 10px;
+		color: var(--text-1);
+		font: inherit;
 	}
 	.race {
 		overflow-x: auto;

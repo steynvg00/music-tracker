@@ -167,6 +167,12 @@
 		{/if}
 	</section>
 
+	<section class="section" aria-labelledby="h-pl">
+		<div class="sec-h"><h2 id="h-pl">Playlists</h2></div>
+		<p class="cap"><a href="/rules" data-testid="settings-rules">Playlist rules ›</a> what each managed playlist is built from, and when it refreshes (also under Library › Rules-based).</p>
+		<p class="cap muted">Pins and folders in the Library live in Rotor only: they never change anything in Spotify.</p>
+	</section>
+
 	<section class="section">
 		<div class="sec-h"><h2>Data health</h2><a class="cap" href="/settings/health" data-testid="open-health">Open Data health ›</a></div>
 		<dl>

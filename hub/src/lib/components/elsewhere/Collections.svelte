@@ -5,6 +5,9 @@
 	import { toasts } from '$lib/stores/toasts.svelte';
 	import { SOURCE_LABEL, parseLink, type Collection, type Source } from '$lib/shared/elsewhere';
 	import { fmtDate } from '$lib/shared/format';
+	import { collectionKey, reorder } from '$lib/shared/library';
+	import { library } from '$lib/stores/library.svelte';
+	import { sortable } from '$lib/actions/sortable';
 
 	/**
 	 * One Elsewhere source (YouTube or SoundCloud): paste-a-link import + the imported collections.
@@ -31,7 +34,34 @@
 		void source;
 		rows = null;
 		void load();
+		if (!library.loaded) void library.loadOrg(); // /elsewhere doesn't load the Library
 	});
+
+	// v0.91: pins (Rotor only). Pinned collections stay in THIS source's list, on top: never next to Spotify.
+	const pinOf = (id: string) => library.org.items.find((i) => i.key === collectionKey(id))?.pinPos ?? null;
+	const pinned = $derived((rows ?? []).filter((c) => pinOf(c.id) !== null).sort((a, b) => pinOf(a.id)! - pinOf(b.id)!));
+	const unpinned = $derived((rows ?? []).filter((c) => pinOf(c.id) === null));
+	async function togglePin(c: Collection) {
+		const on = pinOf(c.id) === null;
+		try {
+			await library.organise('/api/library/pin', { targets: [collectionKey(c.id)], pinned: on });
+			toasts.show(on ? `Pinned ${c.title} · in Rotor only` : `Unpinned ${c.title}`);
+		} catch (e) {
+			toasts.error(describeFailure(e));
+		}
+	}
+	async function reorderPinned(from: number, to: number) {
+		const keys = reorder(
+			pinned.map((c) => collectionKey(c.id)),
+			from,
+			to
+		);
+		try {
+			await library.organise('/api/library/pins', { targets: keys }, 'PUT');
+		} catch (e) {
+			toasts.error(describeFailure(e));
+		}
+	}
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -77,19 +107,30 @@
 	{:else if !rows.length}
 		<p class="muted empty">No {SOURCE_LABEL[source]} collections yet. Paste a link above.</p>
 	{:else}
+		{#snippet item(c: Collection, i: number, isPinned: boolean)}
+			<li data-sort-index={i} data-testid="collection" data-id={c.id}>
+				<a href="/elsewhere/{c.id}">
+					{#if c.artworkUrl}<img src={c.artworkUrl} alt="" width="56" height="56" loading="lazy" referrerpolicy="no-referrer" />{:else}<span class="ph"><Icon name="note" size={22} /></span>{/if}
+					<span class="t">
+						<b class="ell">{c.title}</b>
+						<span class="cap muted ell">{c.owner ?? ''}{c.owner ? ' · ' : ''}{c.itemCount} item{c.itemCount === 1 ? '' : 's'} · checked {fmtDate(c.lastSyncedAt)}</span>
+					</span>
+					<span class="src {c.source}">{SOURCE_LABEL[c.source]}</span>
+				</a>
+				{#if !library.orgError}
+					<button class="pinbtn" class:on={isPinned} aria-pressed={isPinned} aria-label="{isPinned ? 'Unpin' : 'Pin'} {c.title}" title={isPinned ? 'Unpin (Rotor only)' : 'Pin to the top (Rotor only)'} onclick={() => togglePin(c)}><Icon name="pin" size={16} /></button>
+				{/if}
+				{#if isPinned && pinned.length > 1}<button class="pinbtn" data-sort-handle aria-label="Reorder {c.title} (drag, or arrow keys)"><Icon name="drag" size={16} /></button>{/if}
+			</li>
+		{/snippet}
+		{#if pinned.length}
+			<p class="cap muted pinh"><Icon name="pin" size={12} /> Pinned · in Rotor only</p>
+			<ul class="list" data-testid="pinned-collections" use:sortable={{ onreorder: reorderPinned }}>
+				{#each pinned as c, i (c.id)}{@render item(c, i, true)}{/each}
+			</ul>
+		{/if}
 		<ul class="list">
-			{#each rows as c (c.id)}
-				<li>
-					<a href="/elsewhere/{c.id}">
-						{#if c.artworkUrl}<img src={c.artworkUrl} alt="" width="56" height="56" loading="lazy" referrerpolicy="no-referrer" />{:else}<span class="ph"><Icon name="note" size={22} /></span>{/if}
-						<span class="t">
-							<b class="ell">{c.title}</b>
-							<span class="cap muted ell">{c.owner ?? ''}{c.owner ? ' · ' : ''}{c.itemCount} item{c.itemCount === 1 ? '' : 's'} · checked {fmtDate(c.lastSyncedAt)}</span>
-						</span>
-						<span class="src {c.source}">{SOURCE_LABEL[c.source]}</span>
-					</a>
-				</li>
-			{/each}
+			{#each unpinned as c, i (c.id)}{@render item(c, i, false)}{/each}
 		</ul>
 	{/if}
 </section>
@@ -157,5 +198,31 @@
 	}
 	.empty {
 		padding: 16px 0;
+	}
+	.list li {
+		display: flex;
+		align-items: center;
+		touch-action: pan-y;
+	}
+	.list li > a {
+		flex: 1;
+		min-width: 0;
+	}
+	.pinbtn {
+		flex: none;
+		width: 40px;
+		height: 40px;
+		display: grid;
+		place-items: center;
+		color: var(--text-3);
+	}
+	.pinbtn.on {
+		color: var(--accent);
+	}
+	.pinh {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin: 12px 0 0;
 	}
 </style>

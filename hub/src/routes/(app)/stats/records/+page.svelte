@@ -2,7 +2,7 @@
 	import Header from '$lib/components/Header.svelte';
 	import StatTile from '$lib/components/StatTile.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { Records } from '$lib/server/stats/sections';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
@@ -18,7 +18,7 @@
 
 <div class="view">
 	<Header title="Records" />
-	<StatsNav />
+	<StatsBar />
 	{#if !r || !a}
 		<StatsError r={data.r} />
 	{:else}

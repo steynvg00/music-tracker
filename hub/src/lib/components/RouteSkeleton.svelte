@@ -1,6 +1,5 @@
 <script lang="ts">
 	import Header from './Header.svelte';
-	import StatsNav from './stats/StatsNav.svelte';
 	import { greeting } from '$lib/shared/format';
 	import type { SkeletonKind } from '$lib/shared/skeleton';
 	/**
@@ -35,15 +34,14 @@
 			<div class="skel h2"></div>
 			<div class="shelf">{#each [1, 2, 3, 4, 5] as i (i)}<div class="card"><div class="skel cart"></div><div class="skel l1"></div></div>{/each}</div>
 		{:else if kind === 'stats'}
-			<StatsNav />
+			<div class="pillph" aria-hidden="true"><div class="skel pill" style="width:96px"></div><div class="skel pill" style="width:72px"></div><div class="skel pill" style="width:84px"></div></div>
 			<div class="tiles">{#each [1, 2, 3, 4] as i (i)}<div class="skel tile"></div>{/each}</div>
 			<div class="skel h2"></div>
 			<div class="skel chart"></div>
 			<div class="skel h2"></div>
 			{@render rows(5, 40)}
 		{:else if kind === 'library'}
-			<div class="skel pill" style="width:260px;margin-top:8px"></div>
-			<div class="acts"><div class="skel pill" style="width:190px"></div><div class="skel pill" style="width:80px"></div><div class="skel pill" style="width:130px"></div></div>
+			<div class="pillph" aria-hidden="true"><div class="skel pill" style="width:72px"></div><div class="skel pill" style="width:84px"></div><div class="skel pill" style="width:104px"></div></div>
 			{@render rows(8)}
 		{:else if kind === 'radar'}
 			<div class="skel pill" style="width:240px;margin-top:8px"></div>
@@ -165,5 +163,17 @@
 		.tiles {
 			grid-template-columns: repeat(4, minmax(0, 1fr));
 		}
+	}
+	/* Same box as PillBar (v0.91): 44 px high, 2px 0 10px margin. */
+	.pillph {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		height: 44px;
+		margin: 2px 0 10px;
+	}
+	.pillph .pill {
+		height: 32px;
+		border-radius: var(--r-pill);
 	}
 </style>

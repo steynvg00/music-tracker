@@ -7,14 +7,20 @@
 	import LibraryRowItem from './LibraryRowItem.svelte';
 	import { customSheet } from './custom-playlist-sheet/store.svelte';
 	import { library } from '$lib/stores/library.svelte';
-	import { CHIP_LABEL, filterRows, sortRows, type Chip } from '$lib/shared/library';
+	import { KIND_LABEL, playlistKey, rowIsKind, sortRows, type LibKind } from '$lib/shared/library';
 	import type { DailyCandidate } from '$lib/shared/daily-types';
 	import { onMount } from 'svelte';
 	/** Laptop sidebar: navigation, Today's pick, and the library (chips + compact rows). */
 	let { current }: { current: DailyCandidate | null } = $props();
-	const SIDEBAR_CHIPS: Chip[] = ['managed', 'snapshots', 'custom', 'yours', 'followed'];
-	let chip = $state<Chip | null>(null);
-	const rows = $derived(sortRows(filterRows(library.rows, new Set(chip ? [chip] : [])), 'az'));
+	const SIDEBAR_CHIPS: LibKind[] = ['managed', 'snapshots', 'custom', 'followed'];
+	let chip = $state<LibKind | null>(null);
+	// v0.91: pinned playlists first (your pinned order), then A–Z.
+	const pinPos = (id: string) => library.org.items.find((i) => i.key === playlistKey(id))?.pinPos ?? null;
+	const rows = $derived.by(() => {
+		const list = sortRows(chip ? library.rows.filter((r) => rowIsKind(r, chip!)) : library.rows, 'az');
+		const pinned = list.filter((r) => pinPos(r.id) !== null).sort((a, b) => pinPos(a.id)! - pinPos(b.id)!);
+		return [...pinned, ...list.filter((r) => pinPos(r.id) === null)];
+	});
 	onMount(() => {
 		if (window.matchMedia('(min-width: 768px)').matches) void library.load();
 	});
@@ -45,7 +51,7 @@
 		</div>
 		<div class="chips" role="group" aria-label="Library filter">
 			{#each SIDEBAR_CHIPS as c (c)}
-				<button class="chip" class:on={chip === c} aria-pressed={chip === c} onclick={() => (chip = chip === c ? null : c)}>{CHIP_LABEL[c]}</button>
+				<button class="chip" class:on={chip === c} aria-pressed={chip === c} onclick={() => (chip = chip === c ? null : c)}>{KIND_LABEL[c]}</button>
 			{/each}
 		</div>
 		<a class="sbrow" class:on={page.url.pathname.startsWith('/daily')} href="/daily">
