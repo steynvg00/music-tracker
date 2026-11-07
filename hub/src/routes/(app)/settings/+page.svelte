@@ -6,6 +6,7 @@
 	import type { ConnectionStatus } from '$lib/server/spotify/token';
 	import { invalidateAll } from '$app/navigation';
 	import JobStatus from '$lib/components/JobStatus.svelte';
+	import NotificationTypes from '$lib/components/settings/NotificationTypes.svelte';
 	import { JobTracker } from '$lib/stores/jobs.svelte';
 	import { toasts } from '$lib/stores/toasts.svelte';
 	import { apiPost, describeFailure } from '$lib/player/api-client';
@@ -128,7 +129,7 @@
 
 	<section class="section">
 		<div class="sec-h"><h2>Notifications</h2></div>
-		<p class="cap">Today's pick is ready, Spotify sign-in expiring (14 and 3 days ahead), and when a job you started finishes.</p>
+		<p class="cap">Everything Rotor and the crons tell you arrives as a notification on the devices you turn on here: today's pick, the weekly digest, badges, snapshots, alerts and more. There is no e-mail any more (since v0.89).</p>
 		{#if !data.push.publicKey}
 			<p class="cap muted">Not set up: add the VAPID public key to the Vercel env and the private key + subject to the GitHub secrets (see hub/.env.example).</p>
 		{:else if pushState === 'install'}
@@ -147,6 +148,7 @@
 			<JobStatus tracker={testJob} />
 		{/if}
 		<p class="cap muted">{data.push.devices} device{data.push.devices === 1 ? '' : 's'} subscribed.</p>
+		{#if data.push.publicKey}<NotificationTypes jobsAvailable={data.reseedAvailable} />{/if}
 	</section>
 
 	<section class="section">

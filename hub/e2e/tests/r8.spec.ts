@@ -164,7 +164,7 @@ test.describe('R8 Phantom plays', () => {
 test.describe('R8 This week', () => {
 	test('R8-4 the Monday digest in-app: stored by the real send_digest, sections and rank arrows as in the mail @both', async ({ page }) => {
 		const f = ensureDigest();
-		expect(sql(`SELECT run_type || ':' || delivery_status FROM digest_runs ORDER BY id DESC LIMIT 1`)).toBe('weekly:mail_dry_run');
+		expect(sql(`SELECT run_type || ':' || delivery_status FROM digest_runs ORDER BY id DESC LIMIT 1`)).toBe('weekly:push_sent');
 		await page.goto('/library');
 		await page.getByRole('link', { name: 'This week' }).click();
 		await expect(page).toHaveURL(/\/digest$/);
@@ -180,7 +180,7 @@ test.describe('R8 This week', () => {
 		const other = page.locator(`article[data-name="${f.other}"]`);
 		await expect(other).toContainText('+1 added, −1 removed');
 		await expect(page.locator('article[data-name="E2E Brand new · Auto 🤖🔄"]')).toContainText('2 tracks added at creation.');
-		await expect(page.locator('[data-testid=digest-run]')).toContainText('mail dry-run');
+		await expect(page.locator('[data-testid=digest-run]')).toContainText('pushed');
 	});
 
 	test('R8-5 browsable per week: last week is rebuilt from rank history with the same arrows @laptop', async ({ page }) => {

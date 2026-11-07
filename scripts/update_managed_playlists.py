@@ -178,7 +178,7 @@ def main():
         try:
             n_multi = 0
             for track_uri, badge_type, context in detect_multi_top_badge(conn):
-                if award_special_badge(conn, track_uri, badge_type, context, send_mail=True):
+                if award_special_badge(conn, track_uri, badge_type, context, notify_user=True):
                     n_multi += 1
             if n_multi > 0:
                 print(f"Awarded {n_multi} multi_top badge(s).", flush=True)
@@ -191,22 +191,22 @@ def main():
         try:
             n_dynasty = 0
             for artist_id, badge_type, context in detect_dynasty_badges(conn):
-                if award_artist_badge(conn, artist_id, badge_type, context, send_mail=True):
+                if award_artist_badge(conn, artist_id, badge_type, context, notify_user=True):
                     n_dynasty += 1
             if n_dynasty > 0:
                 print(f"Awarded {n_dynasty} dynasty badge(s).", flush=True)
         except Exception as e:
             print(f"WARNING: dynasty detection failed: {e}", file=sys.stderr)
 
-    # Email digest is best-effort: playlist ops already succeeded above, so a mail
+    # The digest push is best-effort: playlist ops already succeeded above, so a notification
     # failure must NOT change the script's exit code (a failed step would read as
     # "playlist update failed" to the user).
     try:
         sent = send_digest(collector, conn, run_type="weekly")
         if sent:
-            print(f"Sent weekly digest with {len(collector.events)} events.", flush=True)
+            print(f"Pushed weekly digest with {len(collector.events)} events.", flush=True)
         else:
-            print("No events this run, skipped digest email.", flush=True)
+            print("No digest pushed (no events, no device, or the type is off in Settings).", flush=True)
     except Exception as e:
         print(f"WARNING: Failed to send weekly digest: {e}", file=sys.stderr)
 

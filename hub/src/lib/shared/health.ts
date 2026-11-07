@@ -8,6 +8,7 @@
  * workflow. A private repository isn't subject to the rule.
  */
 import type { RadarSourceHealth } from './radar';
+import type { PushDevice } from './notifications';
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'info';
 
@@ -93,6 +94,8 @@ export interface DataHealth {
 	radar: RadarSourceHealth[] | null;
 	phantom: { count: number; latestAt: string | null };
 	digest: { lastAt: string | null; runType: string | null; delivery: string | null } | null;
+	/** R9: every subscribed device; push is the only notification channel. */
+	devices: PushDevice[];
 }
 
 /** Rule above. null when there is no activity date at all. */

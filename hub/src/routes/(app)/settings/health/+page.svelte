@@ -126,6 +126,27 @@
 			</ul>
 		</section>
 
+		<section class="section" aria-labelledby="h-push">
+			<div class="sec-h"><h2 id="h-push">Notification devices</h2><a class="more" href="/settings">Settings</a></div>
+			{#if !h.devices.length}
+				<p class="cap" data-testid="health-push-none" style="color:var(--warning)">No device is subscribed: notifications (the only channel since v0.89) reach nobody. Turn them on in Settings › Notifications.</p>
+			{:else}
+				<ul class="rows" data-testid="health-push">
+					{#each h.devices as d, i (i)}
+						{@const tone: Tone = d.warning === 'failing' ? 'danger' : d.warning === 'silent' ? 'warn' : 'ok'}
+						<li data-tone={tone} data-warning={d.warning ?? ''}>
+							{@render dot(tone)}
+							<span class="l"><b>{d.label}</b><span class="cap muted">subscribed {fmtDate(d.createdAt)}</span>
+								{#if d.warning === 'failing'}<span class="cap" style="color:var(--danger)">Last {d.failures} deliver{d.failures === 1 ? 'y' : 'ies'} failed. Turn notifications off and on again on that device.</span>
+								{:else if d.warning === 'silent'}<span class="cap" style="color:var(--warning)">Nothing received in 7 days. Send a test from Settings to check it.</span>{/if}
+							</span>
+							<span class="v">{d.lastSuccessAt ? `last push ${ago(d.lastSuccessAt, now)}` : 'never received one'}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
+
 		<section class="section" aria-labelledby="h-radar">
 			<div class="sec-h"><h2 id="h-radar">Release radar sources</h2></div>
 			{#if h.radar}
@@ -154,7 +175,7 @@
 			{#if h.digest === null}
 				<p class="cap muted">Digests aren't stored yet (apply migration 0029). Older weeks are rebuilt from rank history.</p>
 			{:else if h.digest.lastAt}
-				<p class="cap" data-testid="health-digest">Last {h.digest.runType} digest {ago(h.digest.lastAt, now)} · {h.digest.delivery ? h.digest.delivery.replace('_', ' ') : 'being delivered'}.</p>
+				<p class="cap" data-testid="health-digest">Last {h.digest.runType} digest {ago(h.digest.lastAt, now)} · {h.digest.delivery ? ({ push_sent: 'pushed', push_no_device: 'no device to push to', push_off: 'notification off', mail_sent: 'mailed', mail_failed: 'mail failed' } as Record<string, string>)[h.digest.delivery] ?? h.digest.delivery : 'being delivered'}.</p>
 			{:else}
 				<p class="cap muted">No digest stored yet: the first one arrives with the next Monday refresh.</p>
 			{/if}

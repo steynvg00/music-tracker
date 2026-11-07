@@ -1,7 +1,7 @@
 """One-off: backfill badge_events with every historical special badge (v0.67 / v0.67.1).
 
 Runs each detection function in FULL mode (batch_track_uris=None) and awards what it
-finds with send_mail=False — a decade of historical badge alerts would be inbox spam,
+finds with notify_user=False — a decade of historical badge alerts would be inbox spam,
 so the backfill is silent. Run it once against production AFTER merge and BEFORE the
 next ingest cron, so live detection only mails genuinely new crossings.
 
@@ -111,7 +111,7 @@ def main() -> None:
                 if args.dry_run:
                     distribution[badge_type] = distribution.get(badge_type, 0) + 1
                     total += 1
-                elif award_special_badge(conn, track_uri, badge_type, context, send_mail=False):
+                elif award_special_badge(conn, track_uri, badge_type, context, notify_user=False):
                     distribution[badge_type] = distribution.get(badge_type, 0) + 1
                     total += 1
     finally:

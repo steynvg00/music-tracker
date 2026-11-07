@@ -12,7 +12,7 @@
 	const SECTIONS: DigestSection[] = ['created', 'updated', 'snapshot'];
 	const when = (s: string) => fmtDate(s, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 	const playlistHref = (p: DigestPlaylist) => (p.playlistId ? `/playlist/${encodeURIComponent(p.playlistId)}` : null);
-	const DELIVERY: Record<string, string> = { mail_sent: 'mailed', mail_dry_run: 'mail dry-run', mail_failed: 'mail failed' };
+	const DELIVERY: Record<string, string> = { push_sent: 'pushed', push_no_device: 'no device to push to', push_off: 'notification off', mail_sent: 'mailed', mail_failed: 'mail failed' };
 </script>
 
 <svelte:head><title>Rotor · This week</title></svelte:head>

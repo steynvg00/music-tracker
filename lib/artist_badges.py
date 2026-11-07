@@ -26,12 +26,10 @@ context['window'].
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, datetime, timedelta
-from html import escape
 
 from lib.badges import TZ_AMSTERDAM, _end_of_day_iso, _end_of_month_iso
-from lib.email_notify import _smtp_send_with_inline_images
+from lib import notify
 
 # ── Badge catalog ─────────────────────────────────────────────────────────────────
 ARTIST_PLAY_THRESHOLDS = [100, 250, 500, 1000, 2500, 5000]
@@ -63,7 +61,7 @@ ARTIST_BADGE_TYPES = (
 # Multi-fire badges carry a non-NULL context['window']; everything else is once-per-artist.
 ARTIST_MULTI_FIRE_BADGE_TYPES = set(ARTIST_RANKING_BADGE_TYPES) | {"rediscovery"}
 
-# Category render order — shared by the mail digest and the dashboard artist-lookup grid.
+# Category render order — shared with the dashboard artist-lookup grid.
 # (display name, [badge_types in slot order], category emoji).
 ARTIST_BADGE_CATEGORY_ORDER: list[tuple[str, list[str], str]] = [
     ("Cumulative plays", ARTIST_CUMULATIVE_BADGE_TYPES, "🏆"),
@@ -100,7 +98,7 @@ ARTIST_BADGE_HEADLINE = {
     "rediscovery": "Rediscovery (a dormant favorite revived)",
 }
 
-# Category emoji per badge_type (for per-badge mail headers / digest grouping).
+# Category emoji per badge_type (push titles).
 ARTIST_BADGE_EMOJI = {
     bt: emoji for _name, badge_types, emoji in ARTIST_BADGE_CATEGORY_ORDER for bt in badge_types
 }
@@ -152,24 +150,6 @@ def artist_display_name(conn, artist_id: str) -> str:
     return row[0] if row and row[0] else "(unknown artist)"
 
 
-def _artist_top_tracks(conn, artist_id: str, limit: int = 3) -> list[tuple[str, int]]:
-    """(track_name, plays) for the artist's most-played tracks (all-credited)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT sp.track_name, COUNT(*) AS plays
-            FROM spotify_plays sp
-            JOIN track_metadata tm ON tm.track_uri = sp.track_uri
-            WHERE %s = ANY(tm.artist_ids) AND sp.track_uri IS NOT NULL
-            GROUP BY sp.track_name
-            ORDER BY plays DESC
-            LIMIT %s
-            """,
-            (artist_id, limit),
-        )
-        return [(name or "(unknown track)", plays) for name, plays in cur.fetchall()]
-
-
 def _artist_first_play_in_year(conn, artist_id: str, year: int):
     """MIN(played_at) for any track crediting this artist within a local calendar year."""
     with conn.cursor() as cur:
@@ -194,13 +174,13 @@ def award_artist_badge(
     artist_id: str,
     badge_type: str,
     context: dict,
-    send_mail: bool = True,
+    notify_user: bool = True,
 ) -> bool:
     """Insert an artist badge_events row (ON CONFLICT DO NOTHING on the windowed unique
-    index) and optionally send its mail. Mirrors lib.badges.award_special_badge.
+    index) and optionally push it (kind 'artist_badge'). Mirrors lib.badges.award_special_badge.
 
-    Returns True if newly inserted (and mailed OR send_mail=False); False on a UNIQUE
-    conflict or a post-insert mail failure (the row is kept — the badge WAS earned). An
+    Returns True if newly inserted; False on a UNIQUE conflict. A push problem never changes
+    the result (the badge WAS earned). An
     'awarded_at' ISO string in context is lifted onto the awarded_at column; multi-fire
     badges must include context['window'].
     """
@@ -236,24 +216,24 @@ def award_artist_badge(
 
     if not inserted:
         return False
-    if not send_mail:
+    if not notify_user:
         return True
 
     try:
-        subject, html, plaintext, inline_images = _build_artist_badge_mail(conn, artist_id, badge_type, ctx)
-        return _smtp_send_with_inline_images(subject, html, plaintext, inline_images)
-    except Exception as e:
-        print(
-            f"WARNING: artist badge {artist_id} {badge_type} recorded but mail failed: {e}",
-            file=sys.stderr,
-        )
-        return False
+        who = artist_display_name(conn, artist_id)
+    except Exception:
+        who = artist_id
+    window = ctx.get("window")
+    notify.notify(conn, "artist_badge", title=f"{ARTIST_BADGE_EMOJI.get(badge_type, '🎤')} {ARTIST_BADGE_HEADLINE.get(badge_type, badge_type)}",
+                  body=who + (f" · {window}" if window else ""), url=f"/artist/{artist_id}",
+                  dedupe_key=f"badge:artist:{artist_id}:{badge_type}:{window or ''}")
+    return True
 
 
 def award_artist_badge_to_collector(conn, collector, artist_id: str, badge_type: str, context: dict) -> bool:
-    """Insert the artist badge (send_mail=False) and, if newly inserted, add it to the
+    """Insert the artist badge (notify_user=False) and, if newly inserted, add it to the
     ingest-run collector for the coalesced digest. Returns True if newly inserted."""
-    inserted = award_artist_badge(conn, artist_id, badge_type, context, send_mail=False)
+    inserted = award_artist_badge(conn, artist_id, badge_type, context, notify_user=False)
     if inserted:
         collector.add_artist(artist_id, badge_type, context)
     return inserted
@@ -573,148 +553,3 @@ def detect_rediscovery_badges(conn, batch_artist_ids: list[str] | None = None) -
     return results
 
 
-# ── Mail rendering ────────────────────────────────────────────────────────────────
-
-def _artist_subject(badge_type: str, artist_name: str, context: dict) -> str:
-    label = ARTIST_BADGE_HEADLINE.get(badge_type, badge_type)
-    if badge_type in ARTIST_CUMULATIVE_BADGE_TYPES:
-        n = context.get("total_plays", "")
-        return f"music-tracker: '{artist_name}' just hit {badge_type.split('_')[-1]}+ plays"
-    if badge_type in ARTIST_DISTINCT_BADGE_TYPES:
-        return f"music-tracker: '{artist_name}' — {badge_type.split('_')[-1]}+ tracks explored"
-    if badge_type in ARTIST_STREAK_BADGE_TYPES:
-        return f"music-tracker: '{artist_name}' — {label} achievement"
-    if badge_type == "dynasty":
-        return f"music-tracker: '{artist_name}' claimed Dynasty ({context.get('count', '?')} tracks in all-time Top 100)"
-    if badge_type == "rediscovery":
-        return f"music-tracker: '{artist_name}' — Rediscovery ({context.get('window', '')})"
-    if badge_type in ARTIST_RANKING_BADGE_TYPES:
-        return f"music-tracker: '{artist_name}' — {label} ({context.get('window', '')})"
-    return f"music-tracker: '{artist_name}' — new artist badge"
-
-
-def _artist_context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
-    def _fmt(v):
-        return ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
-
-    keys = {
-        **{bt: [("total_plays", "Total plays"), ("distinct_tracks_played", "Distinct tracks"), ("first_played", "First played")] for bt in ARTIST_CUMULATIVE_BADGE_TYPES},
-        **{bt: [("distinct_tracks", "Distinct tracks"), ("cumulative_plays", "Cumulative plays")] for bt in ARTIST_DISTINCT_BADGE_TYPES},
-        **{bt: [("consecutive_years", "Consecutive years"), ("streak_start_year", "Streak start"), ("streak_end_year", "Streak end")] for bt in ARTIST_STREAK_BADGE_TYPES},
-        **{bt: [("window", "Period"), ("plays", "Plays in period")] for bt in ARTIST_RANKING_BADGE_TYPES},
-        "dynasty": [("count", "Tracks in Top 100"), ("tracks_in_alltime_top_100", "Tracks")],
-        "rediscovery": [("window", "Revival month"), ("plays", "Plays that month"), ("last_active", "Last active"), ("prior_total", "Prior total plays")],
-    }.get(badge_type, [])
-    rows = []
-    for key, label in keys:
-        if key in context and context[key] is not None:
-            rows.append((label, _fmt(context[key])))
-    return rows
-
-
-def _build_artist_badge_mail(conn, artist_id: str, badge_type: str, context: dict) -> tuple[str, str, str, dict[str, bytes]]:
-    """(subject, html, plaintext, inline_images) for one artist-badge crossing. Text-focused
-    (no artist PNG assets yet); inline_images is always empty, matching the mail sender's
-    graceful-degrade contract."""
-    artist_name = artist_display_name(conn, artist_id)
-    subject = _artist_subject(badge_type, artist_name, context)
-    emoji = ARTIST_BADGE_EMOJI.get(badge_type, "🏅")
-    headline = ARTIST_BADGE_HEADLINE.get(badge_type, badge_type)
-    rows = _artist_context_rows(badge_type, context)
-    top_tracks = _artist_top_tracks(conn, artist_id)
-
-    context_html = "".join(
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">{escape(label)}</td>'
-        f'<td style="padding:2px 0;">{escape(value)}</td></tr>'
-        for label, value in rows
-    )
-    tracks_html = "".join(
-        f'<li>{escape(name)} <span style="color:#888;">— {plays} plays</span></li>'
-        for name, plays in top_tracks
-    )
-
-    html = "\n".join([
-        "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
-        "color:#222;max-width:640px;\">",
-        f'<h2 style="margin:0 0 6px 0;">{emoji} {escape(headline)}</h2>',
-        f'<p style="font-size:16px;margin:8px 0;"><strong>{escape(artist_name)}</strong></p>',
-        '<table style="border-collapse:collapse;font-size:13px;margin:12px 0;">' + context_html + "</table>",
-        ('<p style="font-size:13px;color:#888;margin:8px 0 2px 0;">Top tracks</p>'
-         f'<ul style="font-size:13px;margin:2px 0;">{tracks_html}</ul>') if tracks_html else "",
-        "</body></html>",
-    ])
-
-    plain_lines = [f"{headline}!", "", f"Artist: {artist_name}"]
-    for label, value in rows:
-        plain_lines.append(f"{label}: {value}")
-    if top_tracks:
-        plain_lines.append("")
-        plain_lines.append("Top tracks:")
-        for name, plays in top_tracks:
-            plain_lines.append(f"  - {name} ({plays} plays)")
-    plaintext = "\n".join(plain_lines)
-
-    return subject, html, plaintext, {}
-
-
-def build_artist_badge_digest_section(conn, artist_awards: list[tuple[str, str, dict]]) -> tuple[str, str, dict[str, bytes]]:
-    """(html, plaintext, inline_images) for the artist section of the coalesced ingest
-    digest — grouped by badge_type in canonical ARTIST_BADGE_TYPES order. Called by
-    lib.badges.send_badge_digest_mail after the track section."""
-    grouped: dict[str, list[tuple[str, dict]]] = {}
-    for artist_id, badge_type, context in artist_awards:
-        grouped.setdefault(badge_type, []).append((artist_id, context))
-
-    ordered = [bt for bt in ARTIST_BADGE_TYPES if bt in grouped]
-    ordered += [bt for bt in grouped if bt not in ARTIST_BADGE_TYPES]
-
-    n = len(artist_awards)
-    plural = "s" if n != 1 else ""
-    html_parts = [f'<h2 style="margin:16px 0 6px 0;">🎤 {n} new artist badge{plural}</h2>']
-    plain_parts = [f"{n} new artist badge{plural}", ""]
-
-    for badge_type in ordered:
-        entries = grouped[badge_type]
-        emoji = ARTIST_BADGE_EMOJI.get(badge_type, "🏅")
-        headline = ARTIST_BADGE_HEADLINE.get(badge_type, badge_type)
-        html_parts.append(
-            f'<h3 style="margin:16px 0 4px 0;font-size:15px;">{emoji} {escape(headline)} '
-            f'<span style="font-size:12px;font-weight:normal;color:#888;">({len(entries)})</span></h3>'
-        )
-        plain_parts.append(f"{emoji} {headline} ({len(entries)}):")
-
-        rows = []
-        for artist_id, context in entries:
-            artist_name = artist_display_name(conn, artist_id)
-            metric = _artist_digest_metric(badge_type, context)
-            rows.append(
-                f'<tr><td style="padding:2px 10px 2px 0;">{escape(artist_name)}</td>'
-                f'<td style="padding:2px 0;color:#888;">{escape(metric)}</td></tr>'
-            )
-            suffix = f" ({metric})" if metric else ""
-            plain_parts.append(f"  - {artist_name}{suffix}")
-
-        html_parts.append(
-            '<table style="border-collapse:collapse;font-size:13px;margin:2px 0 8px 0;">'
-            + "".join(rows) + "</table>"
-        )
-        plain_parts.append("")
-
-    return "\n".join(html_parts), "\n".join(plain_parts), {}
-
-
-def _artist_digest_metric(badge_type: str, context: dict) -> str:
-    if badge_type in ARTIST_CUMULATIVE_BADGE_TYPES:
-        return f"{context.get('total_plays', '?')} plays"
-    if badge_type in ARTIST_DISTINCT_BADGE_TYPES:
-        return f"{context.get('distinct_tracks', '?')} tracks"
-    if badge_type in ARTIST_STREAK_BADGE_TYPES:
-        return f"{context.get('consecutive_years', '?')}-year run"
-    if badge_type in ARTIST_RANKING_BADGE_TYPES:
-        w, p = context.get("window"), context.get("plays")
-        return f"{w} · {p} plays" if w else ""
-    if badge_type == "dynasty":
-        return f"{context.get('count', '?')} tracks in Top 100"
-    if badge_type == "rediscovery":
-        return f"{context.get('plays', '?')} plays in {context.get('window', '?')}"
-    return ""

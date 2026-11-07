@@ -1,6 +1,6 @@
-# 07 — Streamlit → Rotor parity (after R8)
+# 07 — Streamlit → Rotor parity (after R8 + R9)
 
-> Status of every item in `02-inventory.md` once R1–R4, R6, R7 (merged: #86–#89, #91–#94) and **R8** (`v0.88-hub-parity-gaps`, this update) are in. R5 (mixed sessions) is ignored: it may never ship, and nothing here depends on it. R6 (Wrapped) and R7 (Release radar) add features Streamlit never had, so they don't change any row below. First written 2026-11-06 (after R4); updated 2026-11-07 for R8, which closes every gap except the Web Push versions of the mails (E14, R9).
+> Status of every item in `02-inventory.md` once R1–R4, R6, R7 (merged: #86–#89, #91–#94) and **R8** (`v0.88-hub-parity-gaps`, this update) are in. R5 (mixed sessions) is ignored: it may never ship, and nothing here depends on it. R6 (Wrapped) and R7 (Release radar) add features Streamlit never had, so they don't change any row below. First written 2026-11-06 (after R4); updated 2026-11-07 for R8 (every gap except the push versions of the mails) and R9 (those, with Gmail removed).
 
 **Status legend:**
 - **done**: Rotor covers what Streamlit does, or the inventory's planned replacement.
@@ -16,10 +16,10 @@
 | B. Stats (22) | 22 | 0 | 0 | 0 |
 | C. Playlist Modification (7) | 7 | 0 | 0 | 0 |
 | D. Playlist Rules (2) | 2 | 0 | 0 | 0 |
-| E. Cron/script features in the UI (20) | 16 | 1 | 0 | 3 |
-| **Total (55)** | **49** | **1** | **0** | **5** |
+| E. Cron/script features in the UI (20) | 17 | 0 | 0 | 3 |
+| **Total (55)** | **50** | **0** | **0** | **5** |
 
-After R4 it was 44 / 5 / 0 / 6. R8 moves Skeleton loaders (A), Phantom plays (B22, counted as cut before because it had left the main nav), the weekly digest view (E1), enrichment age (E5) and cron health (E12) to done. The one partial row left is E14, the Web Push versions of the mails, which is R9 (`v0.89-hub-notifications`).
+After R4 it was 44 / 5 / 0 / 6. R8 moves Skeleton loaders (A), Phantom plays (B22, counted as cut before because it had left the main nav), the weekly digest view (E1), enrichment age (E5) and cron health (E12) to done. R9 (`v0.89-hub-notifications`) then closes E14: every mail is a Web Push, and Gmail is gone.
 
 **Before Streamlit can be retired (v1.0):** nothing in Streamlit is missing from Rotor any more once R8 is merged. What R8 added, per former gap:
 
@@ -27,7 +27,7 @@ After R4 it was 44 / 5 / 0 / 6. R8 moves Skeleton loaders (A), Phantom plays (B2
 2. **Data health** (E5, E12): Settings › Data health (`/settings/health`): last ingest per source, cron health per scheduled workflow with GitHub's 60-day auto-disable date (GitHub API, read-only, with the existing dispatch token; "unknown" without it), enrichment coverage (metadata, durations, artist ids, ISRC; audio features are not collected), rollup refresh time, database size against the 500 MB cap, both token expiries, radar source status, phantom count and the last digest.
 3. **Weekly digest view** (E1): "This week" (`/digest`, from Library), one week at a time, with the mail's sections and rank arrows. From migration 0029 on, `send_digest` stores every digest before it mails, so the page is complete even when Gmail is down; older weeks are rebuilt from `playlist_rank_history` (Top lists only).
 4. **Skeleton loaders** (A): skeletons on Home, Stats, Library, Wrapped and Release radar, with no layout shift (E2E R8-6 measures CLS < 0.02 on each page's first load).
-5. **Still open — Web Push versions of the mails** (E14): R9. Not a blocker for retiring Streamlit: the mails come from the crons, not from Streamlit.
+5. **Web Push versions of the mails** (E14, R9): every message the crons mailed is a push now (digests, sweep, snapshots, milestones and badges, the ingest alert), switchable and testable per type in Settings › Notifications. Gmail/SMTP was removed entirely (it had failed for every mail since 2026-10-21).
 
 ## A. App shell (`app.py`)
 
@@ -103,7 +103,7 @@ Streamlit is read-only since R3: these actions exist only in Rotor.
 | E11 | Ingest freshness monitor | done | Home header health dot (ok / amber / red) | — |
 | E12 | Keepalive | done (R8) | Data health › Crons: state, last run and auto-disable date per scheduled workflow (max(last push, last good keepalive) + 60 days), from the GitHub API | — |
 | E13 | Badges (track + artist) | done | Badge grids on detail pages, Stats › Badges, Home Recent badges | — |
-| E14 | Mails | partial | Push: daily pick ready, token expiry, job finished (R2). The digests are readable in-app (This week, R8) | Push versions of the weekly/monthly digest, sweep, milestone/badge, snapshot and monitor mails, plus the Gmail fix: R9 |
+| E14 | Mails | done (R9) | Every former mail is a Web Push: weekly/monthly digest, custom-playlist sweep, snapshots, milestones, special/artist badges, badge digest, ingest alert (plus R2's daily pick, token expiry, job finished). Per-type switch + Send test in Settings › Notifications; device health in Data health. No mail any more | — |
 | E15 | Playlist cover backups | done | Covers shown from the mirror; the backup stays a CLI tool | — |
 | E16 | Spotify refresh token | done | Settings › Connections: Reconnect, authorization date, countdown, expiry push | — |
 | E17 | Extended history import | cut | CLI only | — |
@@ -111,11 +111,11 @@ Streamlit is read-only since R3: these actions exist only in Rotor.
 | E19 | Feature coverage test | cut | — | — |
 | E20 | Daily playlist + rotation | done | Home hero, daily pick detail (R1) | — |
 
-No row is missing. E14 is the only partial row, and R9 closes it.
+No row is missing or partial after R9.
 
 ## Retirement checklist (feeds the v1.0 release in `06-roadmap.md`)
 
-1. Merge R8 (`v0.88-hub-parity-gaps`, migration 0029) and, optionally, R9 (`v0.89-hub-notifications`).
+1. Merge R8 (`v0.88-hub-parity-gaps`, migration 0029) and R9 (`v0.89-hub-notifications`, migration 0030).
 2. Run R3's smoke test on your real account (five numbers, On this day, Track badge grid) and R8's (Data health, Phantom plays, This week). E2E already proves parity against Streamlit's SQL on a throwaway DB.
 3. Then the v1.0 branch (`v1.0-retire-streamlit`): it deletes `app.py`, `views/`, `.streamlit/` and drops `streamlit`/`altair`, keeping every module the crons import. Deleting the Streamlit Cloud app is a manual step (its PR has the checklist).
 

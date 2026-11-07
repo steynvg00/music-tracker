@@ -1,11 +1,11 @@
-"""Digest runs stored as data (v0.88, migration 0029) so Rotor can show the Monday mail in-app.
+"""Digest runs stored as data (v0.88, migration 0029) so Rotor can show the Monday digest in-app.
 
 ``send_digest`` calls :func:`record_digest` BEFORE it tries to deliver, and :func:`mark_delivery` after,
-so a digest is kept even when Gmail is down (as it was from 2026-10-21). Both are best-effort:
+so a digest is kept whatever happens to its notification. Both are best-effort:
 a missing table (0029 not applied yet) or any DB error prints a warning and never changes the
-digest mail's behaviour or the caller's exit code.
+digest notification or the caller's exit code.
 
-The stored content is exactly what the mail renders, before name hydration: the same
+The stored content is exactly what the digest mail rendered until v0.88, before name hydration: the same
 ``_aggregate`` grouping, the same previous-rank baseline (``_fetch_previous_ranks``) and the same
 "show arrows" rule. Track names are hydrated by the hub at render time from the rollups.
 """
@@ -98,13 +98,13 @@ def record_digest(conn, events, run_type: RunType) -> int | None:
             row = cur.fetchone()
         conn.commit()
         return int(row[0]) if row else None
-    except Exception as e:  # 0029 not applied, or any DB hiccup: the mail still goes out
+    except Exception as e:  # 0029 not applied, or any DB hiccup: the push still goes out
         print(f"WARNING: digest not stored for Rotor ({type(e).__name__}: {e})", file=sys.stderr)
         return None
 
 
 def mark_delivery(conn, digest_id: int | None, status: str, error: str | None = None) -> None:
-    """Record how the digest was delivered, e.g. mail_sent | mail_dry_run | mail_failed (best-effort)."""
+    """Record how the digest was delivered: push_sent | push_no_device | push_off (best-effort)."""
     if digest_id is None:
         return
     try:

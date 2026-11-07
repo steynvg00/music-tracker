@@ -49,9 +49,8 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: notifications are Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
 
   spotify-recent:
     name: Spotify recently-played ingest
@@ -77,9 +76,8 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: notifications are Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
 
   sync-liked-songs:
     name: Spotify liked songs sync
@@ -204,6 +202,8 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: notifications are Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
 
   create-snapshots:
     name: Create period snapshots
@@ -231,9 +231,8 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: notifications are Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
 
   daily-missed-tracks:
     name: Daily Missed New Tracks refresh
@@ -289,9 +288,8 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           TOKEN_ENC_KEY: ${{ secrets.TOKEN_ENC_KEY }}  # v0.81 option A: cron token from hub_oauth_tokens
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: notifications are Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
 
   mid-month-playlist-refresh:
     name: Mid-month playlist refresh (Forgotten favorites)

@@ -14,7 +14,7 @@ from lib.badges import (
     process_batch_milestones,
     BadgeAwardCollector,
     award_special_badge_to_collector,
-    send_badge_digest_mail,
+    send_badge_digest,
     detect_streak_badges,
     detect_daily_intensity_badges,
     detect_release_timing_badges,
@@ -41,19 +41,19 @@ def main() -> None:
         result = ingest_recent(conn)
 
         # Badge milestone detection piggy-backs on this ingest. Non-fatal: the
-        # plays are already committed above, so a badge/mail failure must never
+        # plays are already committed above, so a badge/notification failure must never
         # fail the ingest cron.
         try:
             batch_track_uris = list(set(result.get("track_uris", [])))
             if batch_track_uris:
-                n_sent = process_batch_milestones(conn, batch_track_uris)
-                if n_sent > 0:
-                    print(f"Sent {n_sent} milestone mail(s).", flush=True)
+                n_new = process_batch_milestones(conn, batch_track_uris)
+                if n_new > 0:
+                    print(f"Awarded {n_new} milestone badge(s) (pushed).", flush=True)
 
                 # v0.73: Recently Added Tracks maintenance — piggybacks on the
                 # 30-min cron after play-milestone detection and before special
                 # badge detection. Non-fatal: a failure here must never fail the
-                # ingest cron. Sends no mail (matches v0.72 quiet-cron convention).
+                # ingest cron. Sends no notification (matches v0.72 quiet-cron convention).
                 try:
                     from lib.spotify import get_spotify_client
                     from lib.recently_added_manager import manage_recently_added_tracks
@@ -112,8 +112,8 @@ def main() -> None:
 
                 if collector.has_awards():
                     n_awards = len(collector.awards) + len(collector.artist_awards)
-                    if send_badge_digest_mail(conn, collector):
-                        print(f"Sent badge digest with {n_awards} awards.", flush=True)
+                    if send_badge_digest(conn, collector):
+                        print(f"Pushed badge digest with {n_awards} awards.", flush=True)
         except Exception as e:
             print(
                 f"WARNING: Badge milestone detection/notification failed: {e}",

@@ -5,9 +5,9 @@ plays_300 / plays_400 / plays_500. Detection piggy-backs on the 30-min
 recently-played ingest cron: after each ingest, process_batch_milestones() is
 called with the track_uris that appeared in this batch.
 
-Mails are per-crossing (one dedicated email per threshold crossed), not digested.
-v0.63 mails are text-only; the badge visual PNG (CID embed) arrives in v0.64 —
-see the placeholder comment in _build_milestone_mail.
+Notifications are per crossing (one push per threshold crossed), not digested. Until v0.88
+these were HTML mails with embedded badge PNGs; since v0.89 (R9) every one is a Web Push
+through lib/notify.py, which links to the track page (the badge grid lives there).
 """
 
 from __future__ import annotations
@@ -17,15 +17,15 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from html import escape
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from PIL import Image
 
-from lib.email_notify import _smtp_send_with_inline_images
+from lib import notify
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
@@ -103,38 +103,6 @@ def _badge_png_bytes(badge_type: str, size: int, desaturated: bool = False) -> b
     return buf.getvalue()
 
 
-def _badge_cid(badge_type: str, size: int, desaturated: bool = False) -> str:
-    """Deterministic CID for a badge/size/state combo. Used in HTML img src and MIME headers."""
-    suffix = f"_{size}"
-    if desaturated:
-        suffix += "_desat"
-    return f"badge_{badge_type}{suffix}@music-tracker"
-
-
-def _badge_img_html(
-    inline_images: dict[str, bytes],
-    badge_type: str,
-    size: int,
-    *,
-    desaturated: bool = False,
-    alt: str = "",
-    width: int | None = None,
-    height: int | None = None,
-    style: str = "",
-) -> str | None:
-    """Returns an <img src="cid:..."> tag for a badge, registering its PNG bytes into
-    inline_images so the sender can embed them. Returns None when the PNG is absent — the
-    caller then renders its existing text placeholder (graceful degrade for late_bloomer)."""
-    png = _badge_png_bytes(badge_type, size, desaturated)
-    if png is None:
-        return None
-    cid = _badge_cid(badge_type, size, desaturated)
-    inline_images[cid] = png
-    w = width if width is not None else size
-    h = height if height is not None else size
-    style_attr = f' style="{style}"' if style else ""
-    return f'<img src="cid:{cid}" width="{w}" height="{h}" alt="{escape(alt)}"{style_attr}>'
-
 PLAY_MILESTONE_THRESHOLDS = [50, 100, 200, 300, 400, 500]
 
 # v0.65: per-snapshot "#1 of this period" badges. One fixed badge_type per period
@@ -188,10 +156,10 @@ SPECIAL_BADGE_TYPES = (
     + META_BADGE_TYPES
 )
 
-# v0.67.2: badge types that are awarded to badge_events but NEVER trigger a mail on live
-# detection — too high-volume (5-10/day for an active listener) for a per-crossing mail to
+# v0.67.2: badge types that are awarded to badge_events but NEVER trigger a notification on live
+# detection — too high-volume (5-10/day for an active listener) for a per-crossing one to
 # stay valuable. They remain fully visible in the milestone-mail Special strip and Track
-# lookup (v0.70); they're just passive achievement flags. award_special_badge skips the mail
+# lookup (v0.70); they're just passive achievement flags. award_special_badge skips the push
 # for these, and BadgeAwardCollector excludes them from the coalesced ingest digest entirely.
 SILENT_BADGE_TYPES = {"played_on_day_one"}
 
@@ -226,7 +194,7 @@ _SPECIAL_STRIP: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
 ]
 
-# Category emoji per badge_type, used by the per-badge mail header.
+# Category emoji per badge_type, used in the push title.
 _SPECIAL_BADGE_EMOJI: dict[str, str] = {
     bt: emoji.split()[0]
     for emoji, slots in _SPECIAL_STRIP
@@ -381,233 +349,23 @@ def award_top_1st_badge(
     return inserted
 
 
-def _fetch_track_rankings(conn, track_uri: str) -> dict[str, list[str]]:
-    """Returns {kind: [window, ...]} for every top_1st_* badge this track holds.
-
-    Keys are the short kinds (month/season/year/alltime/decade); windows are ordered
-    by awarded_at ascending. Kinds with no awards map to an empty list.
-    """
-    rankings: dict[str, list[str]] = {kind: [] for kind, _label in _TOP_1ST_LABELS}
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT badge_type, context->>'window' AS window
-            FROM badge_events
-            WHERE entity_type = 'track'
-              AND entity_id = %s
-              AND badge_type LIKE 'top_1st_%%'
-            ORDER BY awarded_at ASC
-            """,
-            (track_uri,),
-        )
-        for badge_type, window in cur.fetchall():
-            kind = badge_type.removeprefix("top_1st_")
-            if kind in rankings and window:
-                rankings[kind].append(window)
-    return rankings
+def _track_url(track_uri: str) -> str:
+    return f"/track/{quote(track_uri, safe='')}"
 
 
-def _build_milestone_mail(conn, track_uri: str, threshold: int) -> tuple[str, str, str, dict[str, bytes]]:
-    """Returns (subject, html_body, plaintext_body, inline_images) for one milestone crossing.
-
-    inline_images maps CID -> PNG bytes for every badge icon the HTML references; the caller
-    passes it to _smtp_send_with_inline_images. Empty when no PNGs resolve (text fallback)."""
-    track_name, artist_display, total_plays, first_played_at = _track_display(conn, track_uri)
-    first_play_str = first_played_at.date().isoformat() if first_played_at is not None else "unknown"
-
-    subject = f"music-tracker: '{track_name}' just hit {threshold}+ plays"
-
-    # v0.68: badge PNG icons collected here during rendering, embedded via CID by the sender.
-    inline_images: dict[str, bytes] = {}
-
-    # Which play milestones has THIS track already earned? Drives the progression strip.
-    # NOTE: scoped to this exact track_uri, NOT canonical-aggregated across URI variants.
-    # Milestone mails alert on a specific URI's play-count crossing; rolling badges up to a
-    # canonical group is a larger design question deferred to v0.70 (Track lookup badge display).
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT badge_type FROM badge_events
-            WHERE entity_type = 'track'
-              AND entity_id = %s
-              AND badge_type LIKE 'plays_%%'
-            """,
-            (track_uri,),
-        )
-        earned_badge_types = {row[0] for row in cur.fetchall()}
-
-    earned_flags = [(n, f"plays_{n}" in earned_badge_types) for n in PLAY_MILESTONE_THRESHOLDS]
-    earned_count = sum(1 for _n, ok in earned_flags if ok)
-    total_milestones = len(PLAY_MILESTONE_THRESHOLDS)
-    if earned_count == total_milestones:
-        # At 6/6 the celebration string stands alone — no "Play milestones — " prefix,
-        # to avoid the redundant "milestones ... milestones" reading.
-        progress_line = f"All {total_milestones} milestones reached! 🏆"
-        strip_label = progress_line
-    else:
-        progress_line = f"{earned_count} of {total_milestones} reached"
-        strip_label = f"Play milestones — {progress_line}"
-
-    # v0.68: badge PNG icons (48px) replace the ✓/— text placeholders. Earned = full colour,
-    # not-earned = desaturated 40%-opacity. If a PNG is missing (None), fall back to the
-    # v0.67.1 coloured-block text cell so nothing breaks visually.
-    strip_cells = []
-    for n, ok in earned_flags:
-        img = _badge_img_html(
-            inline_images, f"plays_{n}", 48,
-            desaturated=not ok,
-            alt=f"{n} plays" + ("" if ok else " (not earned)"),
-            style="display:block;margin:0 auto;",
-        )
-        if img is not None:
-            label_color = "#4a5" if ok else "#666"
-            strip_cells.append(
-                '<td style="padding:6px 10px;text-align:center;min-width:64px;">'
-                f'{img}'
-                f'<div style="font-weight:bold;font-size:12px;color:{label_color};">{n}</div></td>'
-            )
-        elif ok:
-            strip_cells.append(
-                '<td style="padding:6px 10px;background:#1a5f1a;color:#fff;border-radius:4px;'
-                'text-align:center;min-width:44px;">'
-                f'<div style="font-weight:bold;">{n}</div>'
-                '<div style="font-size:11px;opacity:0.85;">✓</div></td>'
-            )
-        else:
-            strip_cells.append(
-                '<td style="padding:6px 10px;background:#333;color:#888;border-radius:4px;'
-                'text-align:center;min-width:44px;">'
-                f'<div style="font-weight:bold;">{n}</div>'
-                '<div style="font-size:11px;opacity:0.7;">—</div></td>'
-            )
-    strip_html = (
-        '<div style="margin:16px 0;">'
-        f'<p style="font-size:13px;color:#888;margin:0 0 6px 0;">{escape(strip_label)}</p>'
-        '<table style="border-collapse:separate;border-spacing:6px 0;font-size:13px;"><tr>'
-        + "".join(strip_cells)
-        + "</tr></table></div>"
-    )
-
-    # Rankings strip (v0.65) — the "Pokémon badge doos": every top_1st_* category this
-    # track has ever won, one row per cadence. Rows always present; a category with no
-    # win shows an em-dash. If the track has no rankings at all, show a compact line.
-    rankings = _fetch_track_rankings(conn, track_uri)
-    any_ranking = any(rankings[kind] for kind, _label in _TOP_1ST_LABELS)
-    if any_ranking:
-        ranking_rows = []
-        for kind, label in _TOP_1ST_LABELS:
-            windows = rankings[kind]
-            if windows:
-                value_cell = f'<td style="padding:4px 0;">{escape(", ".join(windows))}</td>'
-            else:
-                value_cell = '<td style="padding:4px 0;color:#555;">—</td>'
-            # v0.68: a 32px rank badge PNG (full colour when won, desaturated otherwise) next
-            # to the label. Missing PNG → label text only.
-            icon = _badge_img_html(
-                inline_images, f"top_1st_{kind}", 32,
-                desaturated=not windows,
-                alt=label,
-                style="vertical-align:middle;margin-right:8px;",
-            )
-            label_cell = (
-                f'<td style="padding:4px 12px 4px 0;color:#888;min-width:100px;'
-                'vertical-align:middle;">'
-                f'{icon or ""}{escape(label)}</td>'
-            )
-            ranking_rows.append(f'<tr>{label_cell}{value_cell}</tr>')
-        rankings_html = (
-            '<div style="margin:16px 0;">'
-            '<p style="font-size:13px;color:#888;margin:0 0 6px 0;">Rankings</p>'
-            '<table style="font-size:13px;color:#ccc;">'
-            + "".join(ranking_rows)
-            + "</table></div>"
-        )
-    else:
-        rankings_html = '<p style="font-size:13px;color:#888;margin:16px 0;">Rankings — none yet 🎯</p>'
-
-    # Special badges strip (v0.67) — the third "Pokémon doos": all 10 special badge
-    # types in 4 category rows, earned vs not-earned. Same scoping caveat as the
-    # rankings strip (this exact track_uri, not canonical-aggregated).
-    special_html, special_plain = _build_special_strip(conn, track_uri, inline_images)
-
-    # v0.68: 96px milestone-tier badge PNG in the header, replacing the 🏆 emoji. Falls back
-    # to the emoji header when the PNG isn't present.
-    header_img = _badge_img_html(
-        inline_images, f"plays_{threshold}", 96,
-        alt=f"{threshold}+ plays",
-        style="vertical-align:middle;",
-    )
-    if header_img is not None:
-        header_html = (
-            '<h2 style="display:flex;align-items:center;gap:12px;margin:0 0 6px 0;">'
-            f'{header_img}{threshold}+ plays milestone</h2>'
-        )
-    else:
-        header_html = f'<h2 style="margin:0 0 6px 0;">🏆 {threshold}+ plays milestone</h2>'
-
-    html_body = "\n".join([
-        "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
-        "color:#222;max-width:640px;\">",
-        header_html,
-        f'<p style="font-size:16px;margin:8px 0;"><strong>{escape(track_name)}</strong></p>',
-        f'<p style="font-size:14px;color:#555;margin:2px 0;">{escape(artist_display)}</p>',
-        '<table style="border-collapse:collapse;font-size:13px;margin:12px 0;">'
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">Total plays</td>'
-        f'<td style="padding:2px 0;"><strong>{total_plays}</strong></td></tr>'
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">Milestone</td>'
-        f'<td style="padding:2px 0;">{threshold}+ plays</td></tr>'
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">First played</td>'
-        f'<td style="padding:2px 0;">{escape(first_play_str)}</td></tr>'
-        "</table>",
-        strip_html,
-        rankings_html,
-        special_html,
-        "</body></html>",
-    ])
-
-    strip_plain_cells = "  ".join(
-        f"[{n} {'✓' if ok else '—'}]" for n, ok in earned_flags
-    )
-
-    if any_ranking:
-        label_width = max(len(label) for _kind, label in _TOP_1ST_LABELS) + 1  # + colon
-        ranking_lines = ["Rankings:"]
-        for kind, label in _TOP_1ST_LABELS:
-            windows = rankings[kind]
-            value = ", ".join(windows) if windows else "—"
-            ranking_lines.append(f"  {(label + ':').ljust(label_width)} {value}")
-        rankings_plain = "\n".join(ranking_lines)
-    else:
-        rankings_plain = "Rankings — none yet 🎯"
-
-    plaintext_body = "\n".join([
-        f"{threshold}+ plays milestone!",
-        "",
-        f"Track:       {track_name}",
-        f"Artist(s):   {artist_display}",
-        f"Total plays: {total_plays}",
-        f"Milestone:   {threshold}+ plays",
-        f"First played: {first_play_str}",
-        "",
-        f"{strip_label}:",
-        f"  {strip_plain_cells}",
-        "",
-        rankings_plain,
-        "",
-        special_plain,
-    ])
-
-    return subject, html_body, plaintext_body, inline_images
+def _track_line(conn, track_uri: str) -> str:
+    try:
+        name, artist, _plays, _first = _track_display(conn, track_uri)
+        return f"{name} — {artist}"
+    except Exception:
+        return track_uri
 
 
 def record_and_notify_milestone(conn, track_uri: str, threshold: int) -> bool:
-    """Insert a badge_events row (awarded_at=NOW()) and send the milestone mail.
+    """Insert a badge_events row (awarded_at=NOW()) and push the milestone (kind 'milestone').
 
-    Returns True if the row was inserted AND the mail was sent, False otherwise:
-      - row already existed (UNIQUE conflict — another process beat us to it): no mail.
-      - row inserted but mail send failed: warning logged, row kept (badge WAS earned),
-        return False so it isn't counted as a sent mail. Same non-fatal pattern as
-        v0.62's send_digest — a mail failure never breaks the caller.
+    Returns True if the row was newly inserted (the badge was earned now), False if it already
+    existed (backfill or a concurrent run: no notification). A push problem is never fatal.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -623,18 +381,11 @@ def record_and_notify_milestone(conn, track_uri: str, threshold: int) -> bool:
     conn.commit()
 
     if not inserted:
-        # Already awarded (backfill or concurrent process) — harmless, skip mail.
+        # Already awarded (backfill or concurrent process) — harmless, no notification.
         return False
 
-    try:
-        subject, html_body, plaintext_body, inline_images = _build_milestone_mail(conn, track_uri, threshold)
-        mail_sent = _smtp_send_with_inline_images(subject, html_body, plaintext_body, inline_images)
-    except Exception as e:
-        print(
-            f"WARNING: badge {track_uri} plays_{threshold} recorded but mail failed: {e}",
-            file=sys.stderr,
-        )
-        mail_sent = False
+    notify.notify(conn, "milestone", title=f"🏆 {threshold} plays", body=_track_line(conn, track_uri),
+                  url=_track_url(track_uri), dedupe_key=f"badge:track:{track_uri}:plays_{threshold}")
 
     # v0.67.1: crossing plays_50 is the trigger point for the window-scoped release-timing
     # badges (day_one_fan / release_week_fan / late_bloomer). detect_* returns ALL that
@@ -644,18 +395,18 @@ def record_and_notify_milestone(conn, track_uri: str, threshold: int) -> bool:
     if threshold == 50:
         try:
             for badge_type_earned, ctx in detect_release_timing_at_50_plays(conn, track_uri):
-                award_special_badge(conn, track_uri, badge_type_earned, ctx, send_mail=True)
+                award_special_badge(conn, track_uri, badge_type_earned, ctx, notify_user=True)
         except Exception as e:
             print(
                 f"WARNING: release-timing badge check for {track_uri} failed: {e}",
                 file=sys.stderr,
             )
 
-    return mail_sent
+    return True
 
 
 def process_batch_milestones(conn, batch_track_uris: list[str]) -> int:
-    """Orchestrator called from the ingest script. Returns count of mails sent.
+    """Orchestrator called from the ingest script. Returns how many milestones were newly awarded (each pushed).
 
     No-op (no queries, no logging noise) when detection finds nothing.
     """
@@ -753,15 +504,14 @@ def award_special_badge(
     track_uri: str,
     badge_type: str,
     context: dict,
-    send_mail: bool = True,
+    notify_user: bool = True,
 ) -> bool:
     """Insert a special-badge row (ON CONFLICT DO NOTHING on the windowed unique index)
-    and optionally send its mail.
+    and optionally push it (kind 'special_badge').
 
-    Returns True if the row was newly inserted and (mailed OR send_mail=False OR the badge
-    type is silent); False on a UNIQUE conflict (already awarded) or a post-insert mail
-    failure (row is kept — the badge WAS earned — and a warning is logged, same non-fatal
-    pattern as v0.63). Silent badges (SILENT_BADGE_TYPES) never mail on live detection.
+    Returns True if the row was newly inserted, False on a UNIQUE conflict (already awarded).
+    A push problem never changes the result (the badge WAS earned). Silent badges
+    (SILENT_BADGE_TYPES) never notify on live detection.
 
     context may include an 'awarded_at' ISO string: it's lifted onto the awarded_at
     column and removed from the stored JSONB (so backfill gets true historical times;
@@ -800,29 +550,27 @@ def award_special_badge(
 
     if not inserted:
         return False
-    # Silent badges (v0.67.2) are row-only: inserted, but never mailed on live detection.
-    if not send_mail or badge_type in SILENT_BADGE_TYPES:
+    # Silent badges (v0.67.2) are row-only: inserted, but never notified on live detection.
+    if not notify_user or badge_type in SILENT_BADGE_TYPES:
         return True
 
-    try:
-        subject, html_body, plaintext_body, inline_images = _build_special_badge_mail(conn, track_uri, badge_type, ctx)
-        return _smtp_send_with_inline_images(subject, html_body, plaintext_body, inline_images)
-    except Exception as e:
-        print(
-            f"WARNING: special badge {track_uri} {badge_type} recorded but mail failed: {e}",
-            file=sys.stderr,
-        )
-        return False
+    emoji = _SPECIAL_BADGE_EMOJI.get(badge_type, "⭐")
+    headline = _SPECIAL_HEADLINE.get(badge_type, badge_type)
+    window = ctx.get("window")
+    notify.notify(conn, "special_badge", title=f"{emoji} {headline}",
+                  body=_track_line(conn, track_uri) + (f" · {window}" if window else ""),
+                  url=_track_url(track_uri), dedupe_key=f"badge:track:{track_uri}:{badge_type}:{window or ''}")
+    return True
 
 
 # ── v0.67.2: coalesced ingest-run badge digest ───────────────────────────────────
 
 @dataclass
 class BadgeAwardCollector:
-    """Collects badges awarded during one ingest cron run for a single coalesced mail.
+    """Collects badges awarded during one ingest cron run for a single coalesced push.
 
     Silent badges (SILENT_BADGE_TYPES, e.g. played_on_day_one) are excluded entirely —
-    they are row-only and never mailed, so they never enter the digest.
+    they are row-only and never notified, so they never enter the digest.
 
     v0.74: also coalesces artist badges (entity_type='artist') into the same digest via
     artist_awards / add_artist. The digest renders a track section then an artist section.
@@ -850,156 +598,41 @@ def award_special_badge_to_collector(
     badge_type: str,
     context: dict,
 ) -> bool:
-    """Insert the badge (award_special_badge with send_mail=False) and, if newly inserted,
+    """Insert the badge (award_special_badge with notify_user=False) and, if newly inserted,
     add it to the collector for the end-of-run digest. Returns True if newly inserted,
     False on a UNIQUE conflict (already awarded) — keeping detection loops idempotent while
-    coalescing all this run's mails into one.
+    coalescing all this run's notifications into one push.
 
     Silent badges still get inserted here; the collector's add() drops them from the digest.
     """
-    inserted = award_special_badge(conn, track_uri, badge_type, context, send_mail=False)
+    inserted = award_special_badge(conn, track_uri, badge_type, context, notify_user=False)
     if inserted:
         collector.add(track_uri, badge_type, context)
     return inserted
 
 
-def _badge_digest_metric(badge_type: str, context: dict) -> str:
-    """Short per-badge context line for the coalesced ingest digest."""
-    if badge_type == "streak_5_years":
-        return "5-year streak reached"
-    if badge_type == "streak_8_years":
-        return "8-year streak reached"
-    if badge_type == "streak_10_years":
-        return "10-year streak reached"
-    if badge_type in ("plays_20_in_day", "plays_40_in_day", "plays_60_in_day"):
-        n, day = context.get("plays_that_day"), context.get("window")
-        return f"{n} plays on {day}" if n and day else "daily-intensity milestone"
-    if badge_type == "comeback":
-        n, mon = context.get("plays_that_month"), context.get("window")
-        return f"{n} plays in {mon}" if n and mon else "comeback"
-    if badge_type == "day_one_fan":
-        return f"{context.get('plays_on_release_day', '?')} plays on release day"
-    if badge_type == "release_week_fan":
-        return f"{context.get('plays_in_release_week', '?')} plays in release week"
-    if badge_type == "late_bloomer":
-        return f"discovered {context.get('gap_days', '?')}d after release"
-    if badge_type == "season_regular":
-        return f"top 25 of {context.get('count', '?')} seasons"
-    if badge_type == "multi_top":
-        return f"in {context.get('count', '?')} Top playlists"
-    if badge_type == "on_repeat":
-        return f"{context.get('qualifying_sessions', '?')} loop sessions"
-    if badge_type in ("dominant", "sovereign"):
-        won = context.get("months_won") or []
-        return f"#1 in {len(won)} months" if won else "multiple monthly #1s"
-    if badge_type == "played_on_day_one":
-        return "played on release day"
-    return ""
+def send_badge_digest(conn, collector: BadgeAwardCollector) -> bool:
+    """One push (kind 'badge_digest') for every badge awarded in this ingest run.
 
-
-def _build_badge_digest(conn, awards: list[tuple[str, str, dict]]) -> tuple[str, str, dict[str, bytes]]:
-    """(html, plaintext, inline_images) for a coalesced badge digest, grouped by badge_type in
-    the canonical SPECIAL_BADGE_TYPES order. Each group: emoji + headline header, then a
-    track/artist/metric table with a 32px badge icon (v0.68) on each row. Track names/artists
-    via the same DISTINCT ON pattern (Lesson #18b) as _track_display.
-    """
-    inline_images: dict[str, bytes] = {}
-    grouped: dict[str, list[tuple[str, dict]]] = {}
-    for track_uri, badge_type, context in awards:
-        grouped.setdefault(badge_type, []).append((track_uri, context))
-
-    ordered_types = [bt for bt in SPECIAL_BADGE_TYPES if bt in grouped]
-    ordered_types += [bt for bt in grouped if bt not in SPECIAL_BADGE_TYPES]  # defensive tail
-
-    n = len(awards)
-    plural = "s" if n != 1 else ""
-    html_parts = [
-        "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
-        "color:#222;max-width:640px;\">",
-        f'<h2 style="margin:0 0 6px 0;">🏅 {n} new special badge{plural}</h2>',
-    ]
-    plain_parts = [f"{n} new special badge{plural}", ""]
-
-    for badge_type in ordered_types:
-        entries = grouped[badge_type]
-        emoji = _SPECIAL_BADGE_EMOJI.get(badge_type, "🏅")
-        headline = _SPECIAL_HEADLINE.get(badge_type, badge_type)
-        html_parts.append(
-            f'<h3 style="margin:16px 0 4px 0;font-size:15px;">{emoji} {escape(headline)} '
-            f'<span style="font-size:12px;font-weight:normal;color:#888;">({len(entries)})</span></h3>'
-        )
-        plain_parts.append(f"{emoji} {headline} ({len(entries)}):")
-
-        # v0.68: 32px badge icon on each row of this subsection. Shared CID across rows of the
-        # same badge_type → one inline image. Missing PNG → no icon cell (plaintext unchanged).
-        row_icon = _badge_img_html(
-            inline_images, badge_type, 32,
-            alt=headline,
-            style="vertical-align:middle;",
-        )
-        icon_cell = f'<td style="padding:2px 8px 2px 0;vertical-align:middle;">{row_icon}</td>' if row_icon else ""
-
-        rows = []
-        for track_uri, context in entries:
-            track_name, artist_display, _total, _first = _track_display(conn, track_uri)
-            metric = _badge_digest_metric(badge_type, context)
-            rows.append(
-                f'<tr>{icon_cell}<td style="padding:2px 10px 2px 0;">{escape(track_name)}</td>'
-                f'<td style="padding:2px 10px 2px 0;color:#555;">{escape(artist_display)}</td>'
-                f'<td style="padding:2px 0;color:#888;">{escape(metric)}</td></tr>'
-            )
-            suffix = f" ({metric})" if metric else ""
-            plain_parts.append(f"  - {track_name} — {artist_display}{suffix}")
-
-        html_parts.append(
-            '<table style="border-collapse:collapse;font-size:13px;margin:2px 0 8px 0;">'
-            + "".join(rows)
-            + "</table>"
-        )
-        plain_parts.append("")
-
-    html_parts.append("</body></html>")
-    return "\n".join(html_parts), "\n".join(plain_parts), inline_images
-
-
-def send_badge_digest_mail(conn, collector: BadgeAwardCollector) -> bool:
-    """Send one coalesced mail for all badges awarded in this ingest run. Returns False and
-    sends nothing when the collector has no (non-silent) awards. Non-fatal: a mail failure is
-    logged and swallowed so the ingest cron never fails on notification.
-
-    v0.74: track badges render first; artist badges (if any) render as a second section
-    built by lib.artist_badges (imported lazily to avoid a module-load cycle)."""
+    Returns False and sends nothing when the collector has no (non-silent) awards; True when
+    a push reached at least one device. Never fatal (lib/notify.py)."""
     if not collector.has_awards():
         return False
+    from lib.artist_badges import ARTIST_BADGE_HEADLINE, artist_display_name
 
-    n_track = len(collector.awards)
-    n_artist = len(collector.artist_awards)
-    n = n_track + n_artist
-    subject = f"music-tracker: {n} new badge{'s' if n != 1 else ''}"
-    try:
-        html_parts: list[str] = []
-        plain_parts: list[str] = []
-        inline_images: dict[str, bytes] = {}
-
-        if n_track:
-            t_html, t_plain, t_imgs = _build_badge_digest(conn, collector.awards)
-            html_parts.append(t_html)
-            plain_parts.append(t_plain)
-            inline_images.update(t_imgs)
-
-        if n_artist:
-            from lib.artist_badges import build_artist_badge_digest_section
-            a_html, a_plain, a_imgs = build_artist_badge_digest_section(conn, collector.artist_awards)
-            html_parts.append(a_html)
-            plain_parts.append(a_plain)
-            inline_images.update(a_imgs)
-
-        html = "\n".join(html_parts)
-        plaintext = "\n\n".join(plain_parts)
-        return _smtp_send_with_inline_images(subject, html, plaintext, inline_images)
-    except Exception as e:
-        print(f"WARNING: badge digest mail failed: {e}", file=sys.stderr)
-        return False
+    lines: list[str] = []
+    for track_uri, badge_type, _ctx in collector.awards:
+        lines.append(f"{_SPECIAL_HEADLINE.get(badge_type, badge_type)} · {_track_line(conn, track_uri).split(' — ')[0]}")
+    for artist_id, badge_type, _ctx in collector.artist_awards:
+        try:
+            who = artist_display_name(conn, artist_id)
+        except Exception:
+            who = artist_id
+        lines.append(f"{ARTIST_BADGE_HEADLINE.get(badge_type, badge_type)} · {who}")
+    n = len(lines)
+    body = ", ".join(lines[:2]) + (f", and {n - 2} more" if n > 2 else "")
+    sent = notify.notify(conn, "badge_digest", title=notify.plural(n, "new badge"), body=body, url="/stats/badges")
+    return sent > 0
 
 
 # ── Detection: streaks ──────────────────────────────────────────────────────────
@@ -1630,31 +1263,9 @@ def detect_dominant_sovereign_badges(conn, batch_track_uris: list[str] | None = 
     return results
 
 
-# ── Per-badge mail template ──────────────────────────────────────────────────────
+# ── Push titles ──────────────────────────────────────────────────────────────────
 
-def _special_subject(badge_type: str, track_name: str, context: dict) -> str:
-    window = context.get("window", "")
-    return {
-        "streak_5_years": f"music-tracker: '{track_name}' just hit a 5-year streak",
-        "streak_8_years": f"music-tracker: '{track_name}' — 8-year streak achievement",
-        "streak_10_years": f"music-tracker: '{track_name}' — 10-year streak achievement",
-        "plays_20_in_day": f"music-tracker: '{track_name}' — 20 plays in one day ({window})",
-        "plays_40_in_day": f"music-tracker: '{track_name}' — 40 plays in one day ({window})",
-        "plays_60_in_day": f"music-tracker: '{track_name}' — 60 plays in one day ({window})",
-        "played_on_day_one": f"music-tracker: '{track_name}' played on day one",
-        "day_one_fan": f"music-tracker: Day-one fan achievement — '{track_name}'",
-        "release_week_fan": f"music-tracker: Release-week fan — '{track_name}'",
-        "late_bloomer": f"music-tracker: Late bloomer badge — '{track_name}'",
-        "comeback": f"music-tracker: '{track_name}' is having a comeback",
-        "season_regular": f"music-tracker: '{track_name}' — Season regular achievement",
-        "multi_top": f"music-tracker: '{track_name}' hit 10+ Top playlists simultaneously",
-        "on_repeat": f"music-tracker: '{track_name}' — On repeat achievement",
-        "dominant": f"music-tracker: '{track_name}' is Dominant (2+ monthly #1s)",
-        "sovereign": f"music-tracker: '{track_name}' is Sovereign (3+ monthly #1s)",
-    }[badge_type]
-
-
-# Human-readable headline per badge type, paired with its category emoji at render time.
+# Human-readable headline per badge type, paired with its category emoji (the push title).
 _SPECIAL_HEADLINE = {
     "streak_5_years": "5-year listening streak",
     "streak_8_years": "8-year listening streak",
@@ -1675,183 +1286,3 @@ _SPECIAL_HEADLINE = {
 }
 
 
-def _context_rows(badge_type: str, context: dict) -> list[tuple[str, str]]:
-    """(label, value) pairs describing a badge's context box, badge-type specific."""
-    def _fmt_list(v):
-        return ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
-
-    keys: list[tuple[str, str]] = {
-        "streak_5_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
-        "streak_8_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
-        "streak_10_years": [("streak_start_year", "Streak start"), ("longest_streak_years", "Longest run (yrs)")],
-        "plays_20_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
-        "plays_40_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
-        "plays_60_in_day": [("window", "Day"), ("plays_that_day", "Plays that day")],
-        "played_on_day_one": [("release_date", "Release date"), ("first_played_at", "First played")],
-        "day_one_fan": [("plays_on_release_day", "Plays on release day"), ("release_date", "Release date")],
-        "release_week_fan": [("plays_in_release_week", "Plays within release week (day 0-7)"), ("release_date", "Release date")],
-        "late_bloomer": [
-            ("release_date", "Release date"), ("first_played", "First played"),
-            ("gap_days", "Gap (days)"), ("plays_within_90d_of_first_play", "Plays in first 90 days"),
-        ],
-        "comeback": [("window", "Comeback month"), ("plays_that_month", "Plays that month"), ("dormant_since", "Dormant since")],
-        "season_regular": [("count", "Seasons in top 25"), ("seasons_qualified", "Seasons")],
-        "multi_top": [("count", "Top playlists"), ("playlists", "In")],
-        "on_repeat": [("qualifying_sessions", "Loop sessions (10+ in a row)"), ("longest_run", "Longest loop"), ("example_dates", "Example dates")],
-        "dominant": [("months_won", "Months won")],
-        "sovereign": [("months_won", "Months won")],
-    }.get(badge_type, [])
-    rows = []
-    for key, label in keys:
-        if key in context and context[key] is not None:
-            rows.append((label, _fmt_list(context[key])))
-    return rows
-
-
-def _build_special_badge_mail(conn, track_uri: str, badge_type: str, context: dict) -> tuple[str, str, str, dict[str, bytes]]:
-    """Returns (subject, html, plaintext, inline_images) for one special-badge crossing.
-    Generic across all special types — the subject, category emoji, headline, and context
-    box vary by type. inline_images carries the header badge PNG (empty on text fallback)."""
-    track_name, artist_display, total_plays, _first = _track_display(conn, track_uri)
-    subject = _special_subject(badge_type, track_name, context)
-    emoji = _SPECIAL_BADGE_EMOJI.get(badge_type, "🏅")
-    headline = _SPECIAL_HEADLINE.get(badge_type, badge_type)
-    rows = _context_rows(badge_type, context)
-
-    inline_images: dict[str, bytes] = {}
-
-    context_html = "".join(
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">{escape(label)}</td>'
-        f'<td style="padding:2px 0;">{escape(value)}</td></tr>'
-        for label, value in rows
-    )
-
-    # v0.68: 128px badge PNG to the left of the headline; the category emoji stays in the
-    # headline text as a family indicator. Falls back to the emoji-only header if no PNG.
-    header_img = _badge_img_html(
-        inline_images, badge_type, 128,
-        alt=headline,
-        style="vertical-align:middle;",
-    )
-    if header_img is not None:
-        header_html = (
-            '<h2 style="display:flex;align-items:center;gap:16px;margin:0 0 6px 0;">'
-            f'{header_img}<span>{emoji} {escape(headline)}</span></h2>'
-        )
-    else:
-        header_html = f'<h2 style="margin:0 0 6px 0;">{emoji} {escape(headline)}</h2>'
-
-    html_body = "\n".join([
-        "<html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;"
-        "color:#222;max-width:640px;\">",
-        header_html,
-        f'<p style="font-size:16px;margin:8px 0;"><strong>{escape(track_name)}</strong></p>',
-        f'<p style="font-size:14px;color:#555;margin:2px 0;">{escape(artist_display)}</p>',
-        '<table style="border-collapse:collapse;font-size:13px;margin:12px 0;">'
-        f'<tr><td style="padding:2px 10px 2px 0;color:#888;">Total plays</td>'
-        f'<td style="padding:2px 0;"><strong>{total_plays}</strong></td></tr>'
-        + context_html
-        + "</table>",
-        "</body></html>",
-    ])
-
-    plain_lines = [
-        f"{headline}!",
-        "",
-        f"Track:       {track_name}",
-        f"Artist(s):   {artist_display}",
-        f"Total plays: {total_plays}",
-    ]
-    for label, value in rows:
-        plain_lines.append(f"{label}: {value}")
-    plaintext_body = "\n".join(plain_lines)
-
-    return subject, html_body, plaintext_body, inline_images
-
-
-# ── Special badges strip (Design B, third strip in the milestone mail) ────────────
-
-def _build_special_strip(conn, track_uri: str, inline_images: dict[str, bytes]) -> tuple[str, str]:
-    """Returns (html, plaintext) for the special-badges strip: all special types in 4
-    category rows, earned vs not-earned, with a ×N multiplier for multi-fire badges.
-    Mirrors the rankings strip's compact-when-empty behaviour.
-
-    v0.68: each slot renders a 48px badge PNG (earned = full colour, not-earned =
-    desaturated) with the label underneath; registers CIDs into inline_images. A missing
-    PNG (late_bloomer) degrades to the v0.67.1 coloured text span."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT badge_type, COUNT(*)
-            FROM badge_events
-            WHERE entity_type = 'track' AND entity_id = %s AND badge_type = ANY(%s)
-            GROUP BY badge_type
-            """,
-            (track_uri, SPECIAL_BADGE_TYPES),
-        )
-        counts = {bt: c for bt, c in cur.fetchall()}
-
-    earned = sum(1 for bt in SPECIAL_BADGE_TYPES if counts.get(bt, 0) >= 1)
-    total = len(SPECIAL_BADGE_TYPES)
-
-    if earned == 0:
-        return (
-            '<p style="font-size:13px;color:#888;margin:16px 0;">Special badges — none yet 🎯</p>',
-            "Special badges — none yet 🎯",
-        )
-
-    if earned == total:
-        progress = f"All {total} special badges earned! 🌟"
-    else:
-        progress = f"Special badges — {earned} of {total} earned"
-
-    def _slot(bt: str, label: str) -> tuple[str, str]:
-        c = counts.get(bt, 0)
-        earned = c >= 1
-        mult = f" ×{c}" if c > 1 else ""
-        img = _badge_img_html(
-            inline_images, bt, 48,
-            desaturated=not earned,
-            alt=label,
-            style="display:block;margin:0 auto;",
-        )
-        if img is not None:
-            label_color = "#4a5" if earned else "#666"
-            label_txt = f"{label}{mult}" if earned else label
-            html = (
-                '<div style="display:inline-block;vertical-align:top;text-align:center;'
-                'width:88px;margin:0 6px 8px 0;">'
-                f'{img}'
-                f'<div style="font-size:11px;color:{label_color};margin-top:2px;">{escape(label_txt)}</div></div>'
-            )
-            plain = f"{label} ✓{mult}" if earned else f"{label} —"
-            return html, plain
-        # PNG missing (late_bloomer) — v0.67.1 coloured text span fallback.
-        if earned:
-            return (
-                f'<span style="color:#ccc;">{escape(label)} ✓{escape(mult)}</span>',
-                f"{label} ✓{mult}",
-            )
-        return (f'<span style="color:#555;">{escape(label)} —</span>', f"{label} —")
-
-    html_rows, plain_rows = [], []
-    for cat_label, slots in _SPECIAL_STRIP:
-        html_slots, plain_slots = zip(*(_slot(bt, lbl) for bt, lbl in slots))
-        # PNG slots are inline-block cells with their own margins → join without commas;
-        # plaintext keeps the comma-joined layout unchanged.
-        html_rows.append(
-            f'<tr><td style="padding:4px 12px 4px 0;color:#888;min-width:120px;'
-            f'vertical-align:top;">{escape(cat_label)}</td>'
-            f'<td style="padding:4px 0;">{" ".join(html_slots)}</td></tr>'
-        )
-        plain_rows.append(f"  {cat_label}: {', '.join(plain_slots)}")
-
-    html = (
-        '<div style="margin:16px 0;">'
-        f'<p style="font-size:13px;color:#888;margin:0 0 6px 0;">{escape(progress)}</p>'
-        '<table style="font-size:13px;color:#ccc;">'
-        + "".join(html_rows)
-        + "</table></div>"
-    )
-    plaintext = "\n".join([f"{progress}:", *plain_rows])
-    return html, plaintext

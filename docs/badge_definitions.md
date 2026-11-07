@@ -7,6 +7,8 @@ version: v0.67.1
 
 # Music-tracker Badge System
 
+> **v0.89 (R9):** badges are announced by Web Push, not mail (`lib/notify.py`; types `milestone`, `special_badge`, `badge_digest`, `artist_badge`, switchable in Rotor's Settings › Notifications). The "Mail subject" lines below are kept as the historical wording; the push title is the badge's headline (e.g. "🏆 100 plays", "⭐ Day-one fan") and the body is the track or artist.
+
 Complete reference of all badge types, their semantic definitions, detection queries, and
 edge cases. Auto-generated during the v0.67.1 audit. All SQL below is copied **verbatim**
 from `lib/badges.py` (and `lib/playlists.py` for the ranking source) so this document
@@ -655,6 +657,7 @@ its production backfill.*
   within 90 days of first play. `detect_release_timing_at_50_plays` now returns a **list** of
   applicable badges. Total special badges: **11**; Special strip shows "N of 11 earned".
 - **v0.68**: badge PNG icons (Defqon.1 hardstyle set) embedded into mails via CID.
+- **v0.89**: mails replaced by Web Push (one push per crossing, one per ingest-run digest); Gmail/SMTP removed.
 - **v0.70**: Track-lookup badge grid ("Pokémon-doos") in the dashboard (`_badge_display.py`).
 - **v0.74 — Track retuning + Artist badges arc.**
   - **Track (5 new + 1 fix)**: `late_bloomer` decoupled from the plays_50 gate (standalone
@@ -671,4 +674,4 @@ its production backfill.*
     rediscovery), daily snapshot (rankings), and weekly (Dynasty) crons; coalesced into the same
     ingest digest via an extended `BadgeAwardCollector`. Artist lookup added to the dashboard.
   - Backfills: `backfill_special_badges.py` extended; new `backfill_artist_badges.py` (bulk chunked
-    inserts). Both idempotent, `--dry-run`, `send_mail=False`. Executed against production.
+    inserts). Both idempotent, `--dry-run`, `send_mail=False` (`notify_user=False` since v0.89). Executed against production.
