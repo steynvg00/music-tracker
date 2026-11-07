@@ -60,6 +60,43 @@ export function createMock(stateFile) {
 	const device = (idOrNull) => state.devices.find((d) => d.id === idOrNull) ?? null;
 	const activeDevice = () => state.devices.find((d) => d.is_active) ?? null;
 
+	/**
+	 * Time passes (R5): progress advances in real time; at the end of a track Spotify moves to the
+	 * next one in the list; after the last one it stops, or with state.autoplay it carries on with
+	 * state.autoplayUri (device Autoplay, F3).
+	 */
+	function tick() {
+		const pb = state.playback;
+		const now = Date.now();
+		if (!pb) return;
+		if (!pb.is_playing) {
+			pb.since = now;
+			return;
+		}
+		let prog = (pb.progress_ms ?? 0) + (now - (pb.since ?? now));
+		pb.since = now;
+		const list = pb.list ?? contextItems(pb.context_uri);
+		for (let guard = 0; guard < 500; guard++) {
+			const dur = track(pb.item_uri).duration_ms;
+			if (prog < dur) break;
+			prog -= dur;
+			if (list.length && (pb.index ?? 0) < list.length - 1) {
+				pb.index = (pb.index ?? 0) + 1;
+				pb.item_uri = list[pb.index];
+			} else if (state.autoplay && state.autoplayUri && pb.item_uri !== state.autoplayUri) {
+				pb.item_uri = state.autoplayUri;
+				pb.list = [state.autoplayUri];
+				pb.index = 0;
+				pb.context_uri = null;
+			} else {
+				pb.is_playing = false;
+				prog = 0;
+				break;
+			}
+		}
+		pb.progress_ms = prog;
+	}
+
 	function playbackBody() {
 		const pb = state.playback;
 		if (!pb) return null;
@@ -85,6 +122,7 @@ export function createMock(stateFile) {
 
 	function spotifyApi(method, path, query, body) {
 		const p = path.replace(/^\/v1/, '').replace(/\/+$/, '') || '/';
+		tick();
 		let m;
 		if (method === 'GET' && p === '/me') return ok({ id: state.loginUser ?? state.owner, display_name: 'E2E', product: 'premium', country: 'NL', email: 'e2e@example.invalid' });
 		// ── player ──
@@ -114,7 +152,8 @@ export function createMock(stateFile) {
 				list,
 				index: off,
 				shuffle: prev?.shuffle ?? false,
-				repeat: prev?.repeat ?? 'off'
+				repeat: prev?.repeat ?? 'off',
+				since: Date.now()
 			};
 			return none();
 		}

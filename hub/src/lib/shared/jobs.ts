@@ -4,10 +4,10 @@
  * half lives in lib/hub_jobs.py; GitHub Actions runs it via hub-jobs.yml.
  */
 
-export type JobKind = 'reseed_daily_pick' | 'refresh_managed' | 'push_test' | 'wrapped_build';
+export type JobKind = 'reseed_daily_pick' | 'refresh_managed' | 'push_test' | 'mix_relay' | 'wrapped_build';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
-export const JOB_KINDS: readonly JobKind[] = ['reseed_daily_pick', 'refresh_managed', 'push_test', 'wrapped_build'];
+export const JOB_KINDS: readonly JobKind[] = ['reseed_daily_pick', 'refresh_managed', 'push_test', 'mix_relay', 'wrapped_build'];
 export const MAX_ATTEMPTS = 3;
 /** Same thresholds as lib/hub_jobs.py STALE_QUEUED / STALE_RUNNING. */
 export const STALE_QUEUED_MS = 15 * 60 * 1000;
@@ -61,6 +61,8 @@ function doneDetail(job: JobRow): string {
 			const n = Number(r.delivered ?? 0);
 			return `Sent to ${n} device${n === 1 ? '' : 's'}`;
 		}
+		case 'mix_relay':
+			return r.skipped ? 'Not needed: Rotor carried on by itself' : `Relay sent to ${Number(r.delivered ?? 0)} device(s)`;
 		case 'wrapped_build':
 			return r.created ? `Rotor Wrapped ${String(r.year ?? '')} is ready` : `Rotor Wrapped ${String(r.year ?? '')} was already built`;
 	}
@@ -107,5 +109,6 @@ export const JOB_KIND_LABEL: Record<JobKind, string> = {
 	reseed_daily_pick: 'Shuffle the deck',
 	refresh_managed: 'Refresh playlist',
 	push_test: 'Test notification',
+	mix_relay: 'Mix relay',
 	wrapped_build: 'Build Rotor Wrapped'
 };

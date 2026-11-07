@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { mixesEnabled, setMixesEnabled, POLICY_WARNING } from '$lib/conductor/opt-in';
 	import { onMount } from 'svelte';
 	import Header from '$lib/components/Header.svelte';
 	import { getSdkMode, setSdkMode, type SdkMode } from '$lib/player/spotify-sdk';
@@ -63,6 +64,20 @@
 		void navigator.serviceWorker?.controller?.postMessage({ type: 'clear-data' });
 	}
 	const color = (c: ConnectionStatus) => (c.health === 'danger' ? 'var(--danger)' : c.health === 'warn' ? 'var(--warning)' : 'var(--success)');
+	let mixesOn = $state(false);
+	$effect(() => {
+		mixesOn = mixesEnabled();
+	});
+	function toggleMixes() {
+		if (mixesOn) {
+			setMixesEnabled(false);
+			mixesOn = false;
+			return;
+		}
+		if (!confirm(POLICY_WARNING)) return;
+		setMixesEnabled(true);
+		mixesOn = true;
+	}
 </script>
 
 <svelte:head><title>Rotor · Settings</title></svelte:head>
@@ -118,6 +133,12 @@
 			{/each}
 		</div>
 		<p class="cap muted">Applies after a reload.</p>
+	</section>
+
+	<section class="section" id="experimental" aria-label="Experimental">
+		<div class="sec-h"><h2>Experimental</h2></div>
+		<p class="cap"><b>Mixed sessions</b> (conflicts with Spotify’s developer policy): play Spotify and YouTube/SoundCloud items in one session, one after another. Off by default, per device.</p>
+		<button class="btn {mixesOn ? 'sec' : 'ghost'}" aria-pressed={mixesOn} onclick={toggleMixes}>{mixesOn ? 'On for this device — turn off' : 'Turn on for this device…'}</button>
 	</section>
 
 	<section class="section" aria-label="Elsewhere sources">

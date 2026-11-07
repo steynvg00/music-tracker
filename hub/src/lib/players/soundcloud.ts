@@ -28,6 +28,7 @@ interface ScWidget {
 	getCurrentSound(cb: (s: ScSound | null) => void): void;
 	getCurrentSoundIndex(cb: (i: number) => void): void;
 	getSounds(cb: (s: ScSound[]) => void): void;
+	load(url: string, opts: Record<string, unknown>): void;
 }
 interface ScNamespace {
 	Widget: ((el: HTMLIFrameElement) => ScWidget) & { Events: Record<'READY' | 'PLAY' | 'PAUSE' | 'FINISH' | 'ERROR', string> };
@@ -68,6 +69,8 @@ export interface ScController {
 	next(): void;
 	prev(): void;
 	current(): Promise<ScSound | null>;
+	/** Load another track or set into the same widget (mixed sessions). */
+	load(url: string, autoplay: boolean): void;
 }
 
 export async function createSoundCloudWidget(
@@ -91,6 +94,7 @@ export async function createSoundCloudWidget(
 		pause: () => w.pause(),
 		next: () => w.next(),
 		prev: () => w.prev(),
-		current: () => new Promise((r) => w.getCurrentSound((s) => r(s)))
+		current: () => new Promise((r) => w.getCurrentSound((s) => r(s))),
+		load: (url, autoplay) => w.load(url, { auto_play: autoplay, visual: true, show_comments: false })
 	};
 }

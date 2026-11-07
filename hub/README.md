@@ -29,6 +29,14 @@ full-screen sheet on mobile, never hidden or in the background), Previous/Next w
 collection, non-embeddable and Go+ items flagged and skipped, a 30-day metadata refresh
 (YouTube III.E.4) in the daily hub-jobs run. Home only gets a link card. Migration 0024.
 
+R5 (`v0.85-hub-mixed-sessions`, experimental, **off unless you opt in per device** in
+Settings › Experimental — it conflicts with Spotify's Developer Policy III.5/III.7): Mixes in
+Elsewhere (Spotify items as text + badge only), a conductor that plays Spotify runs as `uris`
+on "This laptop" and hands off to the visible YouTube/SoundCloud player without overlap, the
+"music would jump rooms" check, every failure UI (autoplay blocked, can't embed, diverged,
+Spotify autoplay), handoff telemetry with a session summary, and iPhone relay mode (a Web Push
+when a Spotify part ends). Migration 0025.
+
 ## How it fits together
 
 ```
