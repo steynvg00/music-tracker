@@ -24,7 +24,8 @@ test.describe('R6 Rotor Wrapped', () => {
 		await expect(page.getByText(`${thisYear()} so far`)).toBeVisible();
 		await expect(page.locator('.years li')).toHaveCount(thisYear() - 2017);
 		await expect(page.locator('.years li').last()).toHaveAttribute('data-year', '2017');
-		await expect(page.getByRole('navigation', { name: 'Stats sections' }).getByRole('link', { name: 'Wrapped' })).toHaveAttribute('aria-current', 'page');
+		// v0.91: the section is the ▾ pill of the Stats filter bar.
+		await expect(page.getByTestId('stats-pills').getByTestId('pill-menu-section')).toHaveText(/Wrapped/);
 	});
 
 	test('R6-2 story controls on the iPhone: tap right/left, swipe, hold to pause, swipe down closes @mobile', async ({ page }) => {

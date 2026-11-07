@@ -1,6 +1,6 @@
-/** The Library (mirror), shared by the Library page and the laptop sidebar. */
-import { apiGet, apiPost } from '$lib/player/api-client';
-import type { LibraryRow } from '$lib/shared/library';
+/** The Library (mirror) + the Rotor-only organiser (pins, folders, custom order), shared by the Library page and the laptop sidebar. */
+import { ApiFailure, apiGet, apiPost, apiPut } from '$lib/player/api-client';
+import { EMPTY_ORGANISER, type LibraryRow, type Organiser } from '$lib/shared/library';
 
 interface LibraryResponse {
 	rows: LibraryRow[];
@@ -14,13 +14,17 @@ class LibraryStore {
 	loaded = $state(false);
 	loading = $state(false);
 	error = $state<string | null>(null);
+	/** v0.91: pins, folders, custom order (Rotor only; migration 0034). */
+	org = $state<Organiser>(EMPTY_ORGANISER);
+	/** Set when the organiser isn't available (0034 not applied): pins and folders are hidden. */
+	orgError = $state<string | null>(null);
 	#synced = false;
 
 	async load(force = false): Promise<void> {
 		if (this.loading || (this.loaded && !force)) return;
 		this.loading = true;
 		try {
-			const r = await apiGet<LibraryResponse>('/api/playlists');
+			const [r] = await Promise.all([apiGet<LibraryResponse>('/api/playlists'), this.loadOrg()]);
 			this.rows = r.rows;
 			this.categories = r.categories;
 			this.loaded = true;
@@ -40,6 +44,23 @@ class LibraryStore {
 		} finally {
 			this.loading = false;
 		}
+	}
+
+	async loadOrg(): Promise<void> {
+		try {
+			this.org = await apiGet<Organiser>('/api/library');
+			this.orgError = null;
+		} catch (e) {
+			this.org = EMPTY_ORGANISER;
+			this.orgError = e instanceof ApiFailure && e.status === 503 ? 'Pins and folders need migration 0034.' : 'Could not load your pins and folders.';
+		}
+	}
+
+	/** Organiser writes (database only, never Spotify), then a fresh organiser. */
+	async organise(path: string, body: unknown, method: 'POST' | 'PUT' = 'POST'): Promise<void> {
+		const r = method === 'PUT' ? await apiPut<Organiser | object>(path, body) : await apiPost<Organiser | object>(path, body);
+		if (r && typeof r === 'object' && 'folders' in r && 'items' in r) this.org = r as Organiser;
+		else await this.loadOrg();
 	}
 
 	/** After create/delete: reload in the background. */

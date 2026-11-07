@@ -70,6 +70,11 @@
 			{#each home.shortcuts as p (p.uri)}<Shortcut {p} />{/each}
 		</div>
 	{/if}
+	<!-- v0.91: moved here from the Library (one filter bar there). Static, so no layout shift. -->
+	<nav class="hublinks" aria-label="What's new">
+		<a href="/radar" data-testid="home-radar"><span aria-hidden="true">📡</span> Release radar</a>
+		<a href="/digest" data-testid="home-digest"><span aria-hidden="true">🗓️</span> This week</a>
+	</nav>
 
 	{#if t}
 		<section class="section">
@@ -332,5 +337,28 @@
 			padding: 0;
 			gap: 4px;
 		}
+	}
+	.hublinks {
+		display: flex;
+		gap: 8px;
+		margin: 14px 0 0;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.hublinks a {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		height: 36px;
+		padding: 0 14px;
+		border-radius: var(--r-pill);
+		background: var(--surface-2);
+		color: var(--text-1);
+		font-size: 13px;
+		font-weight: 650;
+	}
+	.hublinks a:hover {
+		background: var(--surface-3);
 	}
 </style>

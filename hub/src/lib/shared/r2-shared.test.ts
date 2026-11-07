@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BadInput, DEFAULT_FILTERS, customFullName, expiresFor, filtersSummary, parseFilters, ttlLabel, validateCustomName } from './custom';
 import { nextRun } from './cron';
-import { chipOf, filterRows, groupByCategory, sortRows, type LibraryRow } from './library';
+import { groupByCategory, rowIsKind, sortRows, type LibraryRow } from './library';
 import { ORDER_PREFS } from './order-prefs';
 import { parseSubscription } from '$lib/server/push';
 
@@ -80,6 +80,7 @@ const row = (over: Partial<LibraryRow>): LibraryRow => ({
 	expiresAt: null,
 	lastPlayedOn: null,
 	rotationScore: null,
+	addedAt: null,
 	...over
 });
 
@@ -91,16 +92,17 @@ describe('library', () => {
 		row({ id: 'd', name: 'Road trip', trackCount: 83, rotationScore: 0.7 }),
 		row({ id: 'e', name: 'Followed mix', isOwned: false, trackCount: null, rotationScore: 0.9 })
 	];
-	it('chips', () => {
-		expect(rows.map(chipOf)).toEqual(['managed', 'snapshots', 'custom', 'yours', 'followed']);
-		expect(filterRows(rows, new Set()).length).toBe(5);
-		expect(filterRows(rows, new Set(['custom', 'yours'] as const)).map((r) => r.id)).toEqual(['c', 'd']);
-		expect(filterRows(rows, new Set(['liked'] as const))).toEqual([]);
+	it('kinds (v0.91 pill bar)', () => {
+		const ids = (k: Parameters<typeof rowIsKind>[1]) => rows.filter((r) => rowIsKind(r, k)).map((r) => r.id);
+		expect(ids('managed')).toEqual(['a']);
+		expect(ids('snapshots')).toEqual(['b']);
+		expect(ids('custom')).toEqual(['c']);
+		expect(ids('rules')).toEqual(['a', 'b']);
+		expect(ids('followed')).toEqual(['e']);
 	});
 	it('sorts', () => {
 		expect(sortRows(rows, 'az').map((r) => r.id)).toEqual(['e', 'c', 'd', 'b', 'a']);
 		expect(sortRows(rows, 'tracks')[0]!.id).toBe('d');
-		expect(sortRows(rows, 'rotation')[0]!.id).toBe('e');
 		expect(sortRows(rows, 'recent')[0]!.id).toBe('c');
 	});
 	it('groups managed playlists by rule category in catalog order', () => {

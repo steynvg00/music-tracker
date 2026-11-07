@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import Header from '$lib/components/Header.svelte';
 	import LineChart from '$lib/components/stats/LineChart.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { PeriodSummary } from '$lib/server/stats/sections';
 	import { fmtInt } from '$lib/shared/format';
@@ -45,17 +45,16 @@
 
 <div class="view">
 	<Header title="Compare" />
-	<StatsNav />
+	<StatsBar
+		groups={c ? [{ key: 'mode', label: 'Compare by', required: true, value: c.mode, options: [{ value: 'year', label: 'Year' }, { value: 'month', label: 'Month' }] }] : []}
+		onpick={(_g, v) => v && set('mode', v, ['a', 'b'])}
+	/>
 	{#if !c}
 		<StatsError r={data.r} />
 	{:else}
 		<section class="section">
 			<div class="sec-h"><h2>Period comparison</h2></div>
 			<div class="pick">
-				<div class="seg" role="group" aria-label="Compare by">
-					<button class:on={c.mode === 'year'} aria-pressed={c.mode === 'year'} onclick={() => set('mode', 'year', ['a', 'b'])}>Year</button>
-					<button class:on={c.mode === 'month'} aria-pressed={c.mode === 'month'} onclick={() => set('mode', 'month', ['a', 'b'])}>Month</button>
-				</div>
 				<label>A <select value={c.a} onchange={(e) => set('a', e.currentTarget.value)}>{#each c.options as o (o)}<option value={o}>{o}</option>{/each}</select></label>
 				<label>B <select value={c.b} onchange={(e) => set('b', e.currentTarget.value)}>{#each c.options as o (o)}<option value={o}>{o}</option>{/each}</select></label>
 			</div>
@@ -104,23 +103,6 @@
 		padding: 7px 10px;
 		font: inherit;
 		max-width: 220px;
-	}
-	.seg {
-		display: inline-flex;
-		background: var(--surface-2);
-		border-radius: var(--r-pill);
-		padding: 3px;
-	}
-	.seg button {
-		padding: 6px 14px;
-		border-radius: var(--r-pill);
-		color: var(--text-2);
-		font-weight: 600;
-		min-height: 32px;
-	}
-	.seg button.on {
-		background: var(--accent);
-		color: var(--on-accent);
 	}
 	.cmp {
 		width: 100%;

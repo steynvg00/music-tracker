@@ -4,7 +4,8 @@
 	import StatTile from '$lib/components/StatTile.svelte';
 	import BarChart from '$lib/components/stats/BarChart.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
+	import OptionSheet from '$lib/components/OptionSheet.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { YearReview } from '$lib/server/stats/sections';
 	import { fmtInt } from '$lib/shared/format';
@@ -12,6 +13,7 @@
 	import { shortPeriod } from '$lib/stats-client';
 
 	let { data } = $props();
+	let yearOpen = $state(false);
 	const y = $derived(data.r.data as YearReview | null);
 	const tiles = $derived(
 		y
@@ -29,17 +31,15 @@
 
 <div class="view">
 	<Header title="Year in review" />
-	<StatsNav />
+	<StatsBar menus={y ? [{ key: 'year', label: String(y.year), onclick: () => (yearOpen = true) }] : []} />
+	{#if y}
+		<OptionSheet open={yearOpen} onclose={() => (yearOpen = false)} title="Year" sections={[{ key: 'year', title: 'Year', options: y.years.map((yr) => ({ value: String(yr), label: String(yr) })), value: String(y.year), onselect: (v) => goto(`?year=${v}`, { noScroll: true, keepFocus: true }) }]} />
+	{/if}
 	{#if !y}
 		<StatsError r={data.r} />
 	{:else}
 		<div class="sec-h">
 			<h2 class="big">{y.year}</h2>
-			<label class="cap">Year
-				<select value={y.year} onchange={(e) => goto(`?year=${e.currentTarget.value}`, { noScroll: true, keepFocus: true })}>
-					{#each y.years as yr (yr)}<option value={yr}>{yr}</option>{/each}
-				</select>
-			</label>
 		</div>
 		<div class="tiles">
 			{#each tiles as [label, cur, prev] (label)}
@@ -72,15 +72,6 @@
 	.big {
 		font-size: 32px;
 		font-weight: 800;
-	}
-	select {
-		background: var(--surface-2);
-		color: var(--text-1);
-		border: 0;
-		border-radius: 8px;
-		padding: 6px 8px;
-		font: inherit;
-		margin-left: 6px;
 	}
 	.tiles {
 		display: grid;

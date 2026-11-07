@@ -129,6 +129,16 @@
 | Migrations | — |
 | Smoke test | 1. `uv sync --frozen` + a dry run of every cron script entry point imports cleanly (`python -c "import scripts.<x>"` for each). 2. Next */30 ingest, nightly jobs and Monday refresh green. 3. `grep -rn "import streamlit" lib scripts` → nothing. 4. Old Streamlit URL gone. Rotor covers every "Keep/Merge" row in `02-inventory.md` (checklist). |
 
+## v0.91 — Library organiser (one filter bar, pins, folders, Manage)
+
+`v0.91-hub-library-organiser` · after v1.0 · independent of v0.90 (#99)
+
+| | |
+|---|---|
+| Scope | **One filter bar** (`PillBar`, shared by Library and Stats): Spotify-style pills in one scrollable row, × to clear, ▾ menu pills for long choices, the sort/view (Library) or metric (Stats) icon button at the end opening a sheet. Library: source + kind pills, sort (A–Z, recently played, recently added, track count, custom order) and list/grid in the sheet, search one tap away in the header, "+" for a new custom playlist or folder. Rules / Release radar / This week moved out of the Library: Release radar + This week on Home, Rules in Settings (and Library › Rules-based). Stats: section menu + each page's filters in the same bar (Top: list, period, year, custom range, rank by; Patterns / Year: year; Compare: by year/month). **Pins + folders** (Rotor only, no caps): pin anything (incl. Liked Songs, folders, YouTube/SoundCloud collections in their own space), drag to reorder (handle on the laptop, long-press on the iPhone, arrow keys), folders one level deep, a playlist in one folder, delete moves contents back. **Manage mode**: multi-select, pin/unpin, move to folder; extend/keep/delete for Custom 🎧 only, through the existing guarded API. |
+| Migration | `0034_library_organiser.sql` (additive; 0031–0033 are taken by #99). KBs. |
+| Spotify | Zero writes from organising (E2E V091-10, vitest: the organiser module has no Spotify import). |
+
 ## Timeline view
 
 ```

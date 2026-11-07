@@ -2,7 +2,7 @@
 	import Header from '$lib/components/Header.svelte';
 	import StatTile from '$lib/components/StatTile.svelte';
 	import BarChart from '$lib/components/stats/BarChart.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
 	import { WEEKDAYS_SUN } from '$lib/shared/stats';
@@ -17,7 +17,7 @@
 
 <div class="view">
 	<Header title="Stats" />
-	<StatsNav />
+	<StatsBar />
 	{#if !o}
 		<StatsError r={data.r} />
 	{:else}

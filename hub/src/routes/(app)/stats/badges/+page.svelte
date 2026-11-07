@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Header from '$lib/components/Header.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
 	import {
@@ -25,7 +25,7 @@
 
 <div class="view">
 	<Header title="Badges" />
-	<StatsNav />
+	<StatsBar />
 	{#if !b}
 		<StatsError r={data.r} />
 	{:else}

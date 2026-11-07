@@ -41,10 +41,12 @@ cd hub && npm run check && npm test && npm run build   # hub typecheck, tests, b
 - `docs/feature-spec.md` — full feature specification
 - `hub/` — Rotor hub (SvelteKit); `hub/src/lib/server/spotify/write-guard.ts` is the only path for playlist writes
 - `lib/hub_jobs.py` + `scripts/run_hub_job.py` + `.github/workflows/hub-jobs.yml` — runner for jobs the hub queues in `hub_jobs` (Shuffle the deck, Refresh now, test push) and the daily hub tasks
-- `docs/hub-redesign/` — hub analysis, architecture, design and roadmap (R0–R9, v0.90)
+- `docs/hub-redesign/` — hub analysis, architecture, design and roadmap (R0–R9, v0.90, v0.91)
 - `hub/src/lib/server/catalog/` — v0.90 Artist pages (beta) + catalog search: Spotify catalog reads (rate-limit aware), the 0031 cache (TTL, cap, LRU), your-state queries
 - `hub/e2e/index_audit.py` — replays every E2E query with EXPLAIN to prove which indexes are needed (0032)
 - `scripts/archive_scrobbles.py` — read-only CSV.gz archive of `scrobbles` before the manual migration 0033
+- `hub/src/lib/components/PillBar.svelte` + `hub/src/lib/shared/pills.ts` — the one filter bar (Library and Stats)
+- `hub/src/lib/server/organiser.ts` + `hub/src/lib/shared/library.ts` — Rotor-only pins, folders and custom order (0034); never writes to Spotify
 - `tests/` — pytest; `tests/fixtures/` is shared with the hub's vitest suite
 
 ## Migrations applied

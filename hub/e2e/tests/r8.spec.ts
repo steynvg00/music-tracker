@@ -165,7 +165,7 @@ test.describe('R8 This week', () => {
 	test('R8-4 the Monday digest in-app: stored by the real send_digest, sections and rank arrows as in the mail @both', async ({ page }) => {
 		const f = ensureDigest();
 		expect(sql(`SELECT run_type || ':' || delivery_status FROM digest_runs ORDER BY id DESC LIMIT 1`)).toBe('weekly:push_sent');
-		await page.goto('/library');
+		await page.goto('/home'); // v0.91: "This week" moved from the Library to Home
 		await page.getByRole('link', { name: 'This week' }).click();
 		await expect(page).toHaveURL(/\/digest$/);
 		await expect(page.getByTestId('digest-last')).toContainText('3 changed');
@@ -242,8 +242,8 @@ test.describe('R8 Skeletons', () => {
 			await expect(sk).toHaveAttribute('aria-busy', 'true');
 			await expect(page.locator('[data-testid=skeleton]')).toHaveCount(0, { timeout: 10_000 });
 			await expect(page).toHaveURL(/\/stats$/);
-			await page.goto('/library');
-			await page.getByRole('link', { name: 'Release radar' }).click();
+			await page.goto('/home'); // v0.91: "Release radar" moved from the Library to Home
+			await page.getByTestId('home-radar').click();
 			await expect(page.locator('[data-testid=skeleton][data-kind=radar]')).toBeVisible();
 			await expect(page.locator('[data-testid=skeleton]')).toHaveCount(0, { timeout: 10_000 });
 			// A fast navigation (no delay) never shows a skeleton.

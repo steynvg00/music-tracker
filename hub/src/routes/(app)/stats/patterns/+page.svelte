@@ -4,13 +4,15 @@
 	import BarChart from '$lib/components/stats/BarChart.svelte';
 	import HBars from '$lib/components/stats/HBars.svelte';
 	import Heatmap from '$lib/components/stats/Heatmap.svelte';
-	import StatsNav from '$lib/components/stats/StatsNav.svelte';
+	import StatsBar from '$lib/components/stats/StatsBar.svelte';
+	import OptionSheet from '$lib/components/OptionSheet.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import type { Patterns } from '$lib/server/stats/core';
 	import { fillDays } from '$lib/shared/stats';
 	import { shortPeriod } from '$lib/stats-client';
 
 	let { data } = $props();
+	let yearOpen = $state(false);
 	const p = $derived(data.r.data as Patterns | null);
 	const today = new Date().toISOString().slice(0, 10);
 	const daily = $derived(p ? fillDays(p.daily, `${p.year}-01-01`, String(p.year) === today.slice(0, 4) ? today : `${p.year}-12-31`) : []);
@@ -20,18 +22,16 @@
 
 <div class="view">
 	<Header title="Patterns" />
-	<StatsNav />
+	<StatsBar menus={p ? [{ key: 'year', label: `Daily plays: ${p.year}`, onclick: () => (yearOpen = true) }] : []} />
+	{#if p}
+		<OptionSheet open={yearOpen} onclose={() => (yearOpen = false)} title="Year" sections={[{ key: 'year', title: 'Year', options: p.years.map((y) => ({ value: String(y), label: String(y) })), value: String(p.year), onselect: (v) => goto(`?year=${v}`, { noScroll: true, keepFocus: true }) }]} />
+	{/if}
 	{#if !p}
 		<StatsError r={data.r} />
 	{:else}
 		<section class="section">
 			<div class="sec-h">
-				<h2>Daily plays</h2>
-				<label class="cap">Year
-					<select value={p.year} onchange={(e) => goto(`?year=${e.currentTarget.value}`, { noScroll: true, keepFocus: true })}>
-						{#each p.years as y (y)}<option value={y}>{y}</option>{/each}
-					</select>
-				</label>
+				<h2>Daily plays · {p.year}</h2>
 			</div>
 			<BarChart points={daily} label="Plays per day in {p.year}" xLabel={shortPeriod} height={140} />
 		</section>
@@ -50,15 +50,6 @@
 </div>
 
 <style>
-	select {
-		background: var(--surface-2);
-		color: var(--text-1);
-		border: 0;
-		border-radius: 8px;
-		padding: 6px 8px;
-		font: inherit;
-		margin-left: 6px;
-	}
 	.two {
 		display: grid;
 		gap: 20px;

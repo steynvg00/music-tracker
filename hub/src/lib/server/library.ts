@@ -30,6 +30,7 @@ interface MirrorRow {
 	snapshot_id: string | null;
 	items_snapshot_id: string | null;
 	removed_at: Date | null;
+	first_seen_at?: Date | null;
 }
 
 export async function libraryRows(sql: Queryable): Promise<LibraryRow[]> {
@@ -54,7 +55,8 @@ export async function libraryRows(sql: Queryable): Promise<LibraryRow[]> {
 		category: r.rule_category,
 		expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null,
 		lastPlayedOn: r.last_played_on ? String(r.last_played_on instanceof Date ? r.last_played_on.toISOString() : r.last_played_on).slice(0, 10) : null,
-		rotationScore: r.rotation_score === null ? null : Number(r.rotation_score)
+		rotationScore: r.rotation_score === null ? null : Number(r.rotation_score),
+		addedAt: r.first_seen_at ? new Date(r.first_seen_at).toISOString() : null
 	}));
 }
 
