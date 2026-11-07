@@ -107,6 +107,17 @@
 | Migrations | `0028_release_radar.sql`: additive only (tables + indexes). |
 | Smoke test | 1. Daily run → Radar shows per-source "last success" for Spotify, MusicBrainz, Scantraxx. 2. A release known to two sources shows once, with both source badges. 3. A release you already played shows "In your library". 4. Follow an artist outside your top 200 → their releases appear after the next run. 5. Home "Coming up" lists the next announced releases. 6. "Update playlist" → `New from your artists · Auto 🤖🔄` holds the last 14 days of Spotify releases. 7. A source failing three days in a row → exactly one push. |
 
+## v0.90 — Artist pages (beta), Spotify catalog search, storage-light cache, database diet
+
+`v0.90-hub-artist-pages-beta` · after R9 (#97), independent of v1.0 (#98) and R5 (#90)
+
+| | |
+|---|---|
+| Scope | **Artist pages (beta)**, per-device flag in Settings › Experimental (off by default; off = nothing changes). Header with your numbers (plays, hours, first/last played, tracks played, badges) + "Full stats & badges" (the R3 page). Discography from Spotify with nothing hidden: Albums, Singles & EPs, Compilations, Appears on, all on the page, newest/oldest first, year headers, cover/title/date/type/track count/your state per release. Own releases expand to their tracklist; Appears on shows only this artist's tracks + "Show full album". Every track row: ▶ (Spotify Connect) and "From here" (album context). Artist links everywhere lead there with the flag on. **Search › Spotify** (same flag): artists, albums, tracks, 10 per request, "Load more". Album page with your state per track. |
+| Storage | `0031_artist_catalog_cache.sql`: one compact jsonb row per opened artist, appears-on own tracks in never-rewritten batches, 7-day TTL, 20 MB cap with LRU eviction, hit-rate counters (Data health). Full tracklists are never stored. |
+| Database diet | `0032_index_diet.sql` (three unused indexes, proven by replaying every E2E query with `enable_seqscan = off`); `scripts/archive_scrobbles.py` (CSV.gz + checksums, read-only) and `0033_drop_scrobbles_AFTER_ARCHIVE.sql` (manual, guarded by the archive's row count). Data health warns above 450 MB. |
+| Policy note | Catalog browsing is what Developer Policy III.11 warns about (`01-feasibility.md` §0.3), which is why all of it stays behind the opt-in beta flag and every page carries the Spotify attribution + "Open in Spotify". |
+
 ## v1.0 — Retire Streamlit
 
 `v1.0-rotor` · **~1.5 h** · after R7 (was "R6" in the first plan; Wrapped and Release radar took R6/R7). Gaps to close first: `07-parity.md`.

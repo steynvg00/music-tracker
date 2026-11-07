@@ -10,8 +10,18 @@
 	import { shortPeriod } from '$lib/stats-client';
 	import { apiDelete, apiGet, apiPut, describeFailure } from '$lib/player/api-client';
 	import { toasts } from '$lib/stores/toasts.svelte';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { flags } from '$lib/stores/flags.svelte';
 
 	let { data } = $props();
+	// v0.90: a server-rendered first load of /artist/{id} with the beta flag on → the beta page.
+	let mounted = $state(false);
+	onMount(() => {
+		mounted = true;
+		if (flags.artistPages && !page.url.searchParams.has('stats')) void goto(`/catalog/artist/${page.params.id}`, { replaceState: true });
+	});
 	const a = $derived(data.r.data);
 	const spotifyUrl = $derived(a ? openInSpotify(`spotify:artist:${a.id}`) : null);
 
@@ -56,6 +66,7 @@
 			<div class="acts">
 				{#if spotifyUrl}<a class="btn sec" href={spotifyUrl} target="_blank" rel="noopener">Open Spotify</a>{/if}
 				<a class="btn ghost" href="/stats/compare?artistA={encodeURIComponent(a.name)}">Compare with…</a>
+				{#if mounted && flags.artistPages}<a class="btn ghost" href="/catalog/artist/{a.id}" data-testid="to-beta">Artist page (beta)</a>{/if}
 				{#if followed !== null}
 					<button class="btn {followed ? 'sec' : 'ghost'}" aria-pressed={followed} disabled={followBusy} onclick={toggleFollow}>{followed ? '✓ Following in Rotor' : 'Follow in Rotor'}</button>
 				{/if}

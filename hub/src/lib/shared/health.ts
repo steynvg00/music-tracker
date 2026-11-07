@@ -10,6 +10,21 @@
 import type { RadarSourceHealth } from './radar';
 import type { PushDevice } from './notifications';
 
+export interface CatalogCacheHealth {
+	artists: number;
+	logicalBytes: number;
+	physicalBytes: number;
+	capBytes: number;
+	ttlDays: number;
+	hits: number;
+	misses: number;
+	hitRatePct: number | null;
+	evictions: number;
+	spotifyCalls: number;
+	rateLimited: number;
+	since: string | null;
+}
+
 export type Tone = 'ok' | 'warn' | 'danger' | 'info';
 
 /** Every workflow with a `schedule:` trigger. A vitest checks this against .github/workflows/*.yml. */
@@ -23,6 +38,8 @@ export const SCHEDULED_WORKFLOWS: { file: string; name: string; schedule: string
 export const AUTO_DISABLE_DAYS = 60;
 /** Supabase free tier database cap (roadmap risks 6 and 8). */
 export const DB_CAP_BYTES = 500 * 1024 * 1024;
+/** v0.90: above this Data health shows an explicit warning (writes start failing at the cap). */
+export const DB_WARN_BYTES = 450 * 1024 * 1024;
 const DAY = 86_400_000;
 
 export interface IngestSource {
@@ -89,7 +106,9 @@ export interface DataHealth {
 		tone: Tone;
 	};
 	rollups: { refreshedAt: string | null; tookMs: number | null; fullRebuiltAt: string | null; ingestedMark: string | null; lastIngestAt: string | null; tone: Tone } | null;
-	database: { bytes: number; capBytes: number; pct: number; tables: { name: string; bytes: number }[]; tone: Tone };
+	database: { bytes: number; capBytes: number; pct: number; tables: { name: string; bytes: number }[]; tone: Tone; warnBytes: number; overWarn: boolean };
+	/** v0.90 Artist pages (beta) cache (0031); null when the migration isn't applied. */
+	catalogCache: CatalogCacheHealth | null;
 	tokens: TokenLine[];
 	radar: RadarSourceHealth[] | null;
 	phantom: { count: number; latestAt: string | null };
@@ -118,7 +137,7 @@ export function freshnessTone(lastAt: string | null, everyH: number | null, now:
 
 export function dbTone(bytes: number, cap = DB_CAP_BYTES): Tone {
 	const pct = bytes / cap;
-	return pct >= 0.9 ? 'danger' : pct >= 0.75 ? 'warn' : 'ok';
+	return bytes > DB_WARN_BYTES || pct >= 0.9 ? 'danger' : pct >= 0.75 ? 'warn' : 'ok';
 }
 
 export function workflowTone(state: string | null, conclusion: string | null, daysLeft: number | null): Tone {

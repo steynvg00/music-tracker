@@ -141,8 +141,13 @@ def main() -> None:
     mode.add_argument("--delta", action="store_true", help="Fetch only scrobbles newer than latest in DB")
     args = parser.parse_args()
 
-    client = LastfmClient()
     conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.scrobbles') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            # v0.90: the table was archived (scripts/archive_scrobbles.py) and dropped (migration 0033).
+            sys.exit("scrobbles no longer exists: it was archived and dropped (migration 0033). Nothing to ingest into.")
+    client = LastfmClient()
 
     from_ts: int | None = None
     to_ts: int | None = None

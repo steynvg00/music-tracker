@@ -35,3 +35,12 @@ export function spotify(): SpotifyApi {
 export function writeGuard(): WriteGuard {
 	return (guard ??= createWriteGuard(spotify(), config().ownerSpotifyId));
 }
+
+let catalogClient: import('$lib/server/catalog/spotify').CatalogClient | null = null;
+
+/** v0.90 catalog reads (Artist pages beta, catalog search): the hub client, rate-limit aware. */
+export async function catalog(): Promise<import('$lib/server/catalog/spotify').CatalogClient> {
+	if (catalogClient) return catalogClient;
+	const { CatalogClient } = await import('$lib/server/catalog/spotify');
+	return (catalogClient = new CatalogClient(spotify()));
+}
