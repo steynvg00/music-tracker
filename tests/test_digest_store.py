@@ -1,7 +1,8 @@
-"""v0.88 (R8): send_digest keeps every digest in digest_runs (0029) for Rotor's "This week" page.
+"""v0.88 (R8) + v0.89 (R9): send_digest keeps every digest in digest_runs (0029) for Rotor's
+"This week" page, then pushes it (no mail since v0.89).
 
-Runs on the throwaway Postgres from conftest (all migrations in number order). Never real mail:
-MUSIC_TRACKER_EMAIL_DRY_RUN=1, or the mail function is replaced by a fake that raises.
+Runs on the throwaway Postgres from conftest (all migrations in number order). Never a real push
+service: lib.notify's transport is a recorder, and VAPID values are fakes.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import json
 import psycopg
 import pytest
 
-import lib.email_notify as en
+from lib import notify
 from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, send_digest
 
 PID = "pl_digest_top30"
@@ -49,12 +50,26 @@ def conn(pg_url):
         yield c
 
 
-def test_dry_run_digest_is_stored_with_the_mails_sections_and_ranks(conn, monkeypatch, capsys):
-    monkeypatch.setenv("MUSIC_TRACKER_EMAIL_DRY_RUN", "1")
+@pytest.fixture
+def pushes(monkeypatch, conn):
+    sent: list[dict] = []
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-not-a-key")
+    monkeypatch.setenv("VAPID_SUBJECT", "mailto:test@example.invalid")
+    notify.set_transport(lambda subscription_info, data, **kw: sent.append(json.loads(data)))
+    conn.execute("DELETE FROM push_subscriptions")
+    conn.execute("DELETE FROM push_log")
+    conn.execute("DELETE FROM notification_prefs")
+    conn.execute("INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES ('https://push.invalid/1', 'k', 'a')")
+    conn.commit()
+    yield sent
+    notify.set_transport(None)
+
+
+def test_digest_is_stored_with_the_mails_sections_and_ranks_then_pushed(conn, pushes):
     assert send_digest(_collector(), conn, run_type="weekly") is True
     row = conn.execute("SELECT run_type, event_count, summary, content, delivery_status FROM digest_runs").fetchone()
     run_type, n, summary, content, status = row
-    assert (run_type, n, status) == ("weekly", 4, "mail_dry_run")
+    assert (run_type, n, status) == ("weekly", 4, "push_sent")
     assert summary == "1 playlist created, 2 updated."
     by = {p["name"]: p for p in content["playlists"]}
     top = by["Top 30 last 30 days · Auto 🤖🔄"]
@@ -65,42 +80,46 @@ def test_dry_run_digest_is_stored_with_the_mails_sections_and_ranks(conn, monkey
     assert (g["section"], g["added"], g["removed"]) == ("updated", ["spotify:track:dX"], ["spotify:track:dY"])
     assert by["Fresh list · Auto 🤖🔄"]["section"] == "created"
     assert content["counts"] == {"created": 1, "updated": 2, "snapshots": 0, "deleted": 0}
-    assert "music-tracker: 4 playlist updates" in capsys.readouterr().out  # the mail itself still ran
+    assert pushes == [{"kind": "weekly_digest", "title": "Weekly refresh", "body": "1 playlist created, 2 updated.",
+                       "url": "/digest", "tag": "digest-weekly"}]
 
 
-def test_a_failing_mail_keeps_the_digest_and_records_the_error(conn, monkeypatch):
-    monkeypatch.delenv("MUSIC_TRACKER_EMAIL_DRY_RUN", raising=False)
-
-    def boom(*a, **k):
-        raise en.smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
-
-    monkeypatch.setattr(en, "_send_digest_mail", boom)
-    with pytest.raises(en.smtplib.SMTPServerDisconnected):
-        send_digest(_collector(), conn, run_type="weekly")
-    status, err = conn.execute("SELECT delivery_status, delivery_error FROM digest_runs").fetchone()
-    assert status == "mail_failed"
-    assert err == "SMTPServerDisconnected: Connection unexpectedly closed"
+def test_switched_off_digest_is_stored_but_not_pushed(conn, pushes):
+    conn.execute("INSERT INTO notification_prefs (kind, enabled) VALUES ('weekly_digest', false)")
+    conn.commit()
+    assert send_digest(_collector(), conn, run_type="weekly") is False
+    assert conn.execute("SELECT delivery_status FROM digest_runs").fetchone()[0] == "push_off"
+    assert pushes == []
 
 
-def test_sweep_digest_stores_the_deletions(conn, monkeypatch):
-    monkeypatch.setenv("MUSIC_TRACKER_EMAIL_DRY_RUN", "1")
+def test_no_device_is_recorded(conn, pushes):
+    conn.execute("DELETE FROM push_subscriptions")
+    conn.commit()
+    assert send_digest(_collector(), conn, run_type="monthly") is False
+    assert conn.execute("SELECT delivery_status FROM digest_runs").fetchone()[0] == "push_no_device"
+
+
+def test_sweep_digest_stores_the_deletions_and_pushes_them(conn, pushes):
     c = EmailEventCollector()
     c.add_event(PlaylistEvent(EventType.CUSTOM_DELETED, "Party · Custom 🎧", "custom", False,
                               extra={"expires_at": "2026-11-01", "track_count": 40}))
     assert send_digest(c, conn, run_type="sweep") is True
     content = conn.execute("SELECT content FROM digest_runs WHERE run_type = 'sweep'").fetchone()[0]
     assert content["deleted"] == [{"name": "Party · Custom 🎧", "expiresAt": "2026-11-01", "trackCount": 40}]
+    assert pushes[0]["kind"] == "custom_sweep"
+    assert pushes[0]["body"] == "1 expired custom playlist: Party · Custom 🎧"
 
 
-def test_without_0029_the_mail_still_goes_out(fake_conn, monkeypatch, capsys):
-    """FakeConn has no digest_runs (or transaction()): storing fails quietly, the mail is unchanged."""
-    monkeypatch.setenv("MUSIC_TRACKER_EMAIL_DRY_RUN", "1")
+def test_without_0029_and_0030_the_push_still_goes_out(fake_conn, monkeypatch, capsys):
+    """FakeConn has no digest_runs/notification_prefs (or transaction()): storing fails quietly,
+    the switch reads as on, and the push is still attempted (VAPID unset here → 0 devices)."""
+    monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
     c = EmailEventCollector()
     c.add_event(PlaylistEvent(EventType.TRACKS_ADDED, "Gabber · Auto 🤖🔄", "updating", False, tracks=["spotify:track:dX"]))
-    assert send_digest(c, fake_conn(), run_type="weekly") is True
+    assert send_digest(c, fake_conn(), run_type="weekly") is False
     captured = capsys.readouterr()
     assert "WARNING: digest not stored for Rotor" in captured.err
-    assert "music-tracker: 1 playlist updates" in captured.out
+    assert "VAPID not configured; skipping 'weekly_digest'" in captured.out
 
 
 def test_content_is_json_serialisable_for_every_run_type(conn):

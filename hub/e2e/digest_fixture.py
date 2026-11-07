@@ -1,6 +1,6 @@
 """E2E (R8): one weekly digest through the REAL send_digest into the throwaway DB.
 
-Mail is MUSIC_TRACKER_EMAIL_DRY_RUN=1 (printed, never sent). Also writes three rank snapshots for
+The push goes to the E2E recorder (E2E_PUSH_LOG), never a push service. Also writes three rank snapshots for
 the seeded "Top 30 last 30 days" (two weeks ago, last week, now), so the stored digest has arrows
 and last week can be rebuilt from rank history. Prints the fixture as JSON for the spec.
 """
@@ -19,13 +19,23 @@ url = os.environ.get("E2E_DB") or ""
 if "@127.0.0.1:" not in url and "@localhost:" not in url:
     raise SystemExit("digest_fixture: E2E_DB must be the local throwaway database")
 os.environ["DATABASE_URL"] = url
-os.environ["MUSIC_TRACKER_EMAIL_DRY_RUN"] = "1"
-for k in ("GMAIL_USER", "GMAIL_APP_PASSWORD"):
-    os.environ.pop(k, None)
+os.environ.setdefault("VAPID_PRIVATE_KEY", "e2e-not-a-real-key")
+os.environ.setdefault("VAPID_SUBJECT", "mailto:e2e@example.invalid")
+PUSH_LOG = os.environ.get("E2E_PUSH_LOG")
 
 import psycopg  # noqa: E402
 
+from lib import notify  # noqa: E402
 from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, send_digest  # noqa: E402
+
+
+def _record(subscription_info, data, **kw):
+    if PUSH_LOG:
+        with open(PUSH_LOG, "a") as f:
+            f.write(json.dumps({"endpoint": subscription_info["endpoint"], "data": json.loads(data)}) + "\n")
+
+
+notify.set_transport(_record)
 
 with psycopg.connect(url) as conn:
     pid, top_name = conn.execute(

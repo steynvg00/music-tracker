@@ -8,7 +8,7 @@ v0.72: these playlists moved off the weekly refresh onto their own monthly caden
 
 Runs AFTER the daily 05:00 create-snapshots cron so the just-ended month is already
 final in spotify_plays (and its Top 25 · Month snapshot exists) before My Monthly #1
-picks up that month's #1. Sends a dedicated "monthly" digest email.
+picks up that month's #1. Pushes a dedicated "monthly" digest (v0.89; a mail before).
 """
 import sys
 from pathlib import Path
@@ -71,14 +71,14 @@ def main() -> None:
     duration = time.time() - start
     print(f"\n=== Done. {total} monthly playlists processed in {duration:.1f}s. ===", flush=True)
 
-    # Best-effort monthly digest: playlist ops already succeeded, so a mail failure must
+    # Best-effort monthly digest: playlist ops already succeeded, so a notification problem must
     # not change the exit code.
     try:
         sent = send_digest(collector, conn, run_type="monthly")
         if sent:
-            print(f"Sent monthly digest with {len(collector.events)} events.", flush=True)
+            print(f"Pushed monthly digest with {len(collector.events)} events.", flush=True)
         else:
-            print("No events this run, skipped digest email.", flush=True)
+            print("No digest pushed (no events, no device, or the type is off in Settings).", flush=True)
     except Exception as e:
         print(f"WARNING: Failed to send monthly digest: {e}", file=sys.stderr)
 

@@ -1,7 +1,7 @@
 """One-off: backfill badge_events with every historical artist badge (v0.74, Part B).
 
 Runs each artist detector in FULL mode (batch_artist_ids=None) and awards what it finds
-with send_mail=False — a decade of historical artist-badge alerts would be inbox spam, so
+with notify_user=False — a decade of historical artist-badge alerts would be notification spam, so
 the backfill is silent. Run it once against production AFTER the track backfill (dominant/
 sovereign there depend on top_1st_month data) and BEFORE the next cron, so live detection
 only mails genuinely new crossings.

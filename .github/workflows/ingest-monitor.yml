@@ -14,10 +14,11 @@ name: Ingest freshness monitor
 # looked identical to a dead ingest. Comparing against Spotify measures what we
 # actually care about — plays we failed to capture — regardless of quiet time.
 #
-# Exit codes: a STALE finding emails an alert and emits a ::warning::
-# annotation but exits 0 (no duplicate GitHub "Run failed" email). The run goes
-# red only when the Spotify API/auth call fails, spotify_plays is empty, or the
-# script itself errors (including SMTP failure).
+# Exit codes: a STALE finding pushes an alert (Web Push, v0.89; there is no mail
+# any more) and emits a ::warning:: annotation but exits 0 (no duplicate GitHub
+# "Run failed" notification). The run goes red when the Spotify API/auth call
+# fails, spotify_plays is empty, the script itself errors, or the alert reached
+# no device — then GitHub's own failure notification is the safety net.
 #
 # Deliberately a separate workflow file rather than a job inside
 # scheduled-ingest.yml: the monitor must keep running even when the thing it
@@ -57,9 +58,8 @@ jobs:
         run: uv run python -m scripts.check_ingest_freshness
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}  # v0.89: the alert is a Web Push (no mail)
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}

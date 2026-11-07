@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Callable
 
-from lib import daily_picks, web_push
+from lib import notify, daily_picks, web_push
 from lib.playlist_mirror import managed_kind
 
 KINDS = ("reseed_daily_pick", "refresh_managed", "push_test", "wrapped_build")
@@ -148,6 +148,12 @@ def _refresh(conn, payload: dict, ctx: dict) -> dict:
 def _push_test(conn, payload: dict, ctx: dict) -> dict:
     if not web_push.configured():
         raise JobError("VAPID_PRIVATE_KEY / VAPID_SUBJECT are not set in the GitHub secrets")
+    kind = payload.get("kind")
+    if kind:  # v0.89: Settings › Notifications "Send test" for one type
+        if kind not in notify.KINDS:
+            raise JobError(f"unknown notification type {kind!r}")
+        n = notify.send_test(conn, kind, send=ctx["push"])
+        return {"delivered": n, "kind": kind}
     n = ctx["push"](conn, kind="test", title="Rotor", body="Notifications work on this device.", url="/settings")
     return {"delivered": n}
 
@@ -194,7 +200,7 @@ def run_job(conn, job_id: str, *, sp_factory: Callable, push=web_push.send, run_
         return "skipped"
     print(f"[hub-job] {job.id} {job.kind} attempt {job.attempts} payload={job.payload}", flush=True)
     handler = HANDLERS.get(job.kind)
-    ctx = {"sp": sp_factory, "push": push}
+    ctx = {"sp": sp_factory, "push": notify.gate(push)}
     try:
         if handler is None:
             raise JobError(f"unknown job kind {job.kind!r}")
@@ -271,6 +277,7 @@ def _add_months(dt: datetime, months: int) -> datetime:
 
 def run_daily(conn, *, sp_factory: Callable, push=web_push.send, today: date | None = None) -> dict:
     """Returns a summary; 'errors' lists the steps that failed."""
+    push = notify.gate(push)  # v0.89: the Settings switches apply to every push type
     from lib.managed_refresh import refresh_one
     from lib.rules_catalog import export_rules_catalog
 

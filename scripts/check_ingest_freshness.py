@@ -1,4 +1,4 @@
-"""Daily monitor: alert by email when Spotify has plays that our DB does not.
+"""Daily monitor: alert by Web Push when Spotify has plays that our DB does not.
 
 Asks Spotify for the single most recent play (/me/player/recently-played,
 limit=1) and compares its played_at against max(played_at) in spotify_plays.
@@ -12,9 +12,11 @@ tell "not listening" from "ingest broken" and raised false alarms whenever the
 monitor ran after a stretch without music.
 
 Alert paths:
-  - STALE (Spotify ahead of DB): email, GitHub ::warning:: annotation, exit 0.
-  - Spotify API/auth failing: email, exit 1 (the monitor itself is blind).
-  - spotify_plays empty: email, exit 1.
+  - STALE (Spotify ahead of DB): push, GitHub ::warning:: annotation, exit 0.
+  - Spotify API/auth failing: push, exit 1 (the monitor itself is blind).
+  - spotify_plays empty: push, exit 1.
+  - The push reached no device: ::error:: annotation and exit 1, so GitHub's own
+    "workflow failed" notification is the safety net (v0.89: there is no mail any more).
 
 Background: on 2026-09-11 every cron was found to have been silent since ~6
 September, and roughly 5.5 days of listening history were lost because
@@ -32,12 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 import os
 from datetime import datetime, timedelta, timezone
-from html import escape
 
 from dotenv import load_dotenv
 import psycopg
 
-from lib.email_notify import _smtp_send
+from lib import notify
 from lib.spotify import get_spotify_client
 
 # How far Spotify's newest play may run ahead of the DB's newest play before we
@@ -98,102 +99,40 @@ def fetch_spotify_latest() -> datetime | None:
 
 def build_alert(
     db_latest: datetime | None, spotify_latest: datetime | None = None
-) -> tuple[str, str, str]:
-    """Return (subject, html_body, plaintext_body) for the empty-table or stale alert."""
-    url = actions_url()
-
+) -> tuple[str, str]:
+    """Return (title, body) of the push for the empty-table or stale alert."""
     if db_latest is None:
-        subject = "music-tracker: ingest ALERT — spotify_plays is empty"
-        headline = "spotify_plays contains no rows at all."
-        lines = ["Newest play in DB: none — the table is empty."]
-    else:
-        missing = spotify_latest - db_latest
-        subject = f"music-tracker: ingest STALE — DB is {format_gap(missing)} behind Spotify"
-        headline = "Spotify has plays that the database does not."
-        lines = [
-            f"Newest play on Spotify: {format_ts(spotify_latest)}",
-            f"Newest play in DB: {format_ts(db_latest)}",
-            f"Missing window: {format_gap(missing)} "
-            f"(threshold {format_gap(LAG_THRESHOLD)}).",
-        ]
-
-    plaintext = "\n".join([
-        headline,
-        "",
-        *lines,
-        "",
-        f"Check the Actions page: {url}",
-        "",
-        "Most likely cause: GitHub disabled the scheduled workflows after 60 days",
-        "without a push. Re-enable them there, then check that keepalive.yml ran.",
-    ])
-
-    html_lines = "\n".join(
-        f'  <p style="margin:0 0 6px;"><strong>{escape(line)}</strong></p>' for line in lines
-    )
-    html = f"""\
-<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;">
-  <h2 style="margin:0 0 12px;color:#b00020;">{headline}</h2>
-{html_lines}
-  <p style="margin:16px 0 16px;">
-    <a href="{url}" style="background:#1db954;color:#fff;padding:10px 16px;
-       border-radius:6px;text-decoration:none;display:inline-block;">Open the Actions page</a>
-  </p>
-  <p style="margin:0;color:#555;font-size:14px;">
-    Most likely cause: GitHub disabled the scheduled workflows after 60 days without a
-    push. Re-enable them there, then check that <code>keepalive.yml</code> ran.
-  </p>
-</body></html>"""
-
-    return subject, html, plaintext
+        return ("Ingest alert: no plays in the database",
+                "spotify_plays is empty. Check the Actions page and Rotor's Data health.")
+    missing = spotify_latest - db_latest
+    return (f"Ingest stale: {format_gap(missing)} behind Spotify",
+            f"Spotify's newest play is {format_ts(spotify_latest)}, the database's {format_ts(db_latest)}. "
+            "Most likely the scheduled workflows were disabled: re-enable them and check keepalive.yml.")
 
 
-def build_spotify_failure_alert(exc: BaseException) -> tuple[str, str, str]:
-    """Return (subject, html_body, plaintext_body) for a failing Spotify API/auth call."""
-    subject = "music-tracker: ingest ALERT — Spotify API/auth failing"
-    headline = "The freshness monitor could not query Spotify."
-    error_line = f"{type(exc).__name__}: {exc}"
-    cause = (
-        "Likely cause: SPOTIFY_REFRESH_TOKEN has expired or been revoked, or a "
-        "Spotify secret (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET / "
-        "SPOTIFY_REFRESH_TOKEN) is missing. The ingest itself uses the same "
-        "credentials, so it is probably failing too."
-    )
-    url = actions_url()
-
-    plaintext = "\n".join([
-        headline,
-        "",
-        f"Error: {error_line}",
-        "",
-        cause,
-        "",
-        f"Check the Actions page: {url}",
-    ])
-
-    html = f"""\
-<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;">
-  <h2 style="margin:0 0 12px;color:#b00020;">{headline}</h2>
-  <p style="margin:0 0 16px;"><strong>Error:</strong> <code>{escape(error_line)}</code></p>
-  <p style="margin:0 0 16px;">{escape(cause)}</p>
-  <p style="margin:0;">
-    <a href="{url}" style="background:#1db954;color:#fff;padding:10px 16px;
-       border-radius:6px;text-decoration:none;display:inline-block;">Open the Actions page</a>
-  </p>
-</body></html>"""
-
-    return subject, html, plaintext
+def build_spotify_failure_alert(exc: BaseException) -> tuple[str, str]:
+    """Return (title, body) of the push for a failing Spotify API/auth call."""
+    return ("Ingest alert: Spotify API/auth failing",
+            f"{type(exc).__name__}: {str(exc)[:160]}. The refresh token probably expired or was revoked; "
+            "the ingest uses the same credentials, so it is probably failing too.")
 
 
-def deliver(alert: tuple[str, str, str], dry_run: bool) -> None:
-    """Send the alert, or print it in --dry-run. SMTP errors propagate (exit 1)."""
-    subject, html, plaintext = alert
+def deliver(conn, alert: tuple[str, str], dry_run: bool) -> int:
+    """Push the alert (kind 'ingest_alert'), or print it in --dry-run. Returns devices reached.
+
+    v0.89: a push instead of a mail. When it reaches no device (VAPID missing, no device
+    subscribed, or the type switched off), the caller fails the run so GitHub's own
+    "workflow failed" notification is the safety net.
+    """
+    title, body = alert
     if dry_run:
-        print(f"[freshness] DRY RUN — would send subject={subject}", flush=True)
-        print(plaintext, flush=True)
-        return
-    _smtp_send(subject, html, plaintext)
-    print(f"[freshness] Alert sent: {subject}", flush=True)
+        print(f"[freshness] DRY RUN — would push: {title} — {body}", flush=True)
+        return 1
+    n = notify.notify(conn, "ingest_alert", title=title, body=body, url="/settings/health")
+    print(f"[freshness] Alert pushed to {max(n, 0)} device(s): {title}", flush=True)
+    if n <= 0:
+        print(f"::error::Ingest alert could not be pushed to any device: {title} — see {actions_url()}", flush=True)
+    return n
 
 
 def main() -> int:
@@ -214,12 +153,15 @@ def main() -> int:
     print("[freshness] Opening DB connection...", flush=True)
     conn = psycopg.connect(db_url)
     try:
-        db_latest = fetch_last_played_at(conn)
+        return _check(conn, args.dry_run)
     finally:
         conn.close()
 
+
+def _check(conn, dry_run: bool) -> int:
+    db_latest = fetch_last_played_at(conn)
     if db_latest is None:
-        deliver(build_alert(None), args.dry_run)
+        deliver(conn, build_alert(None), dry_run)
         return 1
 
     print("[freshness] Querying Spotify for the newest play...", flush=True)
@@ -227,7 +169,7 @@ def main() -> int:
         spotify_latest = fetch_spotify_latest()
     except Exception as exc:
         print(f"[freshness] Spotify call failed: {type(exc).__name__}: {exc}", flush=True)
-        deliver(build_spotify_failure_alert(exc), args.dry_run)
+        deliver(conn, build_spotify_failure_alert(exc), dry_run)
         return 1
 
     now = datetime.now(timezone.utc)
@@ -242,10 +184,12 @@ def main() -> int:
         )
         return 0
 
-    deliver(build_alert(db_latest, spotify_latest), args.dry_run)
-    if args.dry_run:
+    n = deliver(conn, build_alert(db_latest, spotify_latest), dry_run)
+    if dry_run:
         return 1
-    print("::warning::Ingest stale — alert emailed", flush=True)
+    if n <= 0:
+        return 1  # nobody was told: let GitHub's failure notification do it
+    print("::warning::Ingest stale — alert pushed", flush=True)
     return 0
 
 

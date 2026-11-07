@@ -401,14 +401,14 @@ def delete_expired_custom_playlists(sp, conn) -> dict:
             extra=extra,
         ))
 
-    # Best-effort email: deletions already committed to Spotify + DB above, so a
-    # mail failure must not change the sweep's exit code.
+    # Best-effort push (v0.89): deletions already committed to Spotify + DB above, so a
+    # notification problem must not change the sweep's exit code.
     try:
         sent = send_digest(collector, conn, run_type="sweep")
         if sent:
-            print(f"Sent sweep digest with {len(collector.events)} deletions.", flush=True)
+            print(f"Pushed sweep digest with {len(collector.events)} deletions.", flush=True)
         else:
-            print("No deletions this run, skipped digest email.", flush=True)
+            print("No sweep push (no deletions, no device, or the type is off in Settings).", flush=True)
     except Exception as e:
         print(f"WARNING: Failed to send sweep digest: {e}", file=sys.stderr)
 

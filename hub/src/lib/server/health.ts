@@ -11,6 +11,7 @@ import { connectionStatus, type ConnectionStatus } from './spotify/token';
 import { cronHealth } from './github-health';
 import { radarSources } from './radar';
 import { phantomSummary } from './phantom';
+import { pushDevices } from './notifications';
 import { DB_CAP_BYTES, dbTone, freshnessTone, type DataHealth, type IngestSource, type Tone, type TokenLine } from '$lib/shared/health';
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
@@ -48,7 +49,7 @@ export async function dataHealth(
 	now: Date = new Date(),
 	opts: { fresh?: boolean } = {}
 ): Promise<DataHealth> {
-	const [stamps, enrich, rollup, size, tables, conns, cron, radar, radarRun, phantom, digest] = await Promise.all([
+	const [stamps, enrich, rollup, size, tables, conns, cron, radar, radarRun, phantom, digest, devices] = await Promise.all([
 		sql<Stamps[]>`
 			SELECT (SELECT max(ingested_at) FROM spotify_plays) AS plays_ingested,
 			       (SELECT max(played_at) FROM spotify_plays) AS plays_played,
@@ -93,7 +94,8 @@ export async function dataHealth(
 				r[0] ? { lastAt: iso(r[0].ran_at), runType: r[0].run_type, delivery: r[0].delivery_status } : { lastAt: null, runType: null, delivery: null }
 			),
 			null
-		)
+		),
+		pushDevices(sql, now)
 	]);
 
 	const src = (key: string, label: string, at: Date | null, everyH: number | null, detail: string | null = null): IngestSource => ({
@@ -157,6 +159,7 @@ export async function dataHealth(
 		tokens: [tokenLine(conns.hub), tokenLine(conns.cron)],
 		radar,
 		phantom,
-		digest
+		digest,
+		devices
 	};
 }

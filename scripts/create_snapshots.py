@@ -2,16 +2,16 @@
 
 Detects month/season/year/decade period-ends by comparing yesterday vs today,
 then for each ended period: creates the snapshot playlist, awards the top_1st_*
-badge to the #1 track, and sends a dedicated snapshot mail.
+badge to the #1 track, and pushes a "Snapshot ready" notification.
 
 Failure of any single period-end event is non-fatal: it's logged and the script
 continues, exiting 0 so the GitHub Action step stays green. State is self-healing —
 if a playlist got created but its badge didn't, the next run's idempotency check
 (no badge for this window) re-processes it; if the badge exists, the whole event
-is skipped, so no duplicate mail.
+is skipped, so no duplicate notification.
 
 Flags:
-    --dry-run              detect + preview only; no Spotify writes, no badge, no mail
+    --dry-run              detect + preview only; no Spotify writes, no badge, no notification
     --force-date YYYY-MM-DD override "today" (for testing a period-end without waiting)
 """
 
@@ -47,7 +47,7 @@ from lib.artist_badges import (        # v0.74: Part B — artist ranking on sna
     award_artist_badge,
     artist_display_name,
 )
-from lib.snapshot_notify import build_and_send_snapshot_mail
+from lib.snapshot_notify import build_and_send_snapshot_notification
 
 TZ_AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 
@@ -146,13 +146,13 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
         print(f"    would award top_1st_{kind} to #1 '{top['track_name']}' "
               f"({top['artist_display']}) — {top['plays_in_period']} plays", flush=True)
         print(f"    badge context: {ctx}", flush=True)
-        print(f"    would send snapshot mail: 'music-tracker: {display_name} snapshot ready'", flush=True)
+        print(f"    would push: 'Snapshot ready: {display_name}'", flush=True)
         return
 
     playlist_id, ranked = _CREATE_DISPATCH[kind](sp, user_id, conn, identifier)
     print(f"[create-snapshots] Created '{playlist_name}' ({len(ranked)} tracks).", flush=True)
     if not ranked:
-        print(f"[create-snapshots] {display_name}: empty period, no badge/mail.", flush=True)
+        print(f"[create-snapshots] {display_name}: empty period, no badge/notification.", flush=True)
         return
 
     top = ranked[0]
@@ -160,9 +160,9 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
     inserted = award_top_1st_badge(conn, top["track_uri"], kind, context)
     if inserted:
         print(f"[create-snapshots] Awarded top_1st_{kind} to '{top['track_name']}'.", flush=True)
-        build_and_send_snapshot_mail(conn, kind, display_name, playlist_name, ranked)
+        build_and_send_snapshot_notification(conn, kind, display_name, playlist_name, ranked, playlist_id)
     else:
-        print(f"[create-snapshots] top_1st_{kind} for {display_name} already existed — skipping mail.", flush=True)
+        print(f"[create-snapshots] top_1st_{kind} for {display_name} already existed — no notification.", flush=True)
 
     # v0.74: artist-of-period ranking — award top_1st_artist_{kind} to the artist with the
     # most in-period plays across this snapshot's tracks (all-credited). Multi-fire per
@@ -172,7 +172,7 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
         if top_artist is not None:
             artist_id, artist_plays = top_artist
             artist_ctx = {"window": display_name, "plays": artist_plays}
-            if award_artist_badge(conn, artist_id, f"top_1st_artist_{kind}", artist_ctx, send_mail=True):
+            if award_artist_badge(conn, artist_id, f"top_1st_artist_{kind}", artist_ctx, notify_user=True):
                 print(f"[create-snapshots] Awarded top_1st_artist_{kind} to "
                       f"'{artist_display_name(conn, artist_id)}'.", flush=True)
     except Exception as e:
@@ -183,7 +183,7 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
     if kind == "month" and inserted:
         try:
             for track_uri, badge_type, ctx in detect_dominant_sovereign_badges(conn, [top["track_uri"]]):
-                if award_special_badge(conn, track_uri, badge_type, ctx, send_mail=True):
+                if award_special_badge(conn, track_uri, badge_type, ctx, notify_user=True):
                     print(f"[create-snapshots] Awarded {badge_type} to '{top['track_name']}'.", flush=True)
         except Exception as e:
             print(f"WARNING: dominant/sovereign detection failed: {e}", file=sys.stderr)
@@ -195,7 +195,7 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
         try:
             candidates = [t["track_uri"] for t in ranked[:25]]
             for track_uri, badge_type, ctx in detect_season_regular_badge(conn, batch_track_uris=candidates):
-                if award_special_badge(conn, track_uri, badge_type, ctx, send_mail=True):
+                if award_special_badge(conn, track_uri, badge_type, ctx, notify_user=True):
                     print(f"[create-snapshots] Awarded season_regular to {track_uri}.", flush=True)
         except Exception as e:
             print(f"WARNING: season_regular detection failed: {e}", file=sys.stderr)
@@ -204,7 +204,7 @@ def _process_event(sp, user_id, conn, event: dict, dry_run: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create period snapshots the day after a period ends.")
     parser.add_argument("--dry-run", action="store_true", default=False,
-                        help="Detect + preview only; no Spotify writes, badge inserts, or mail.")
+                        help="Detect + preview only; no Spotify writes, badge inserts, or notification.")
     parser.add_argument("--force-date", type=str, default=None,
                         help="Override today (YYYY-MM-DD) for testing.")
     args = parser.parse_args()
