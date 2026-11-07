@@ -7,12 +7,21 @@
 	import { daily } from '$lib/stores/daily.svelte';
 	import { player } from '$lib/stores/player.svelte';
 	import { fmtDuration } from '$lib/shared/format';
-	/** Today's pick (03-ux-ia.md §4 row 2): Play · Rotate · candidate dots. */
-	let { wide = false }: { wide?: boolean } = $props();
-	const c = $derived(daily.current);
-	const deck = $derived(daily.deck);
+	import type { DailyDeck } from '$lib/shared/daily-types';
+	/**
+	 * Today's pick (03-ux-ia.md §4 row 2): Play · Rotate · candidate dots.
+	 * R8: the art is 120 px on phones and 200 px from 768 px, chosen by CSS (not by JS after
+	 * hydration), so the server-rendered hero already has its final size: no layout shift.
+	 * `initial` is the page's deck: the store is filled in an effect, which never runs during
+	 * server rendering, so without it the server would render "No pick yet" and the hero would
+	 * grow after hydration.
+	 */
+	let { initial = null }: { initial?: DailyDeck | null } = $props();
+	const deck = $derived(daily.deck ?? initial);
+	const c = $derived(daily.deck ? daily.current : (initial?.current ?? null));
+	const index = $derived(daily.deck ? daily.index : initial && c ? initial.candidates.findIndex((x) => x.rank === c.rank) : -1);
+	const isLast = $derived(daily.deck ? daily.isLast : !!c && !!initial && c.rank === Math.max(...initial.candidates.map((x) => x.rank)));
 	const playing = $derived(daily.isCurrentContext && player.view.isPlaying);
-	const size = $derived(wide ? 200 : 120);
 	const meta = $derived(c ? [c.trackCount ? `${c.trackCount} tracks` : null, fmtDuration(c.durationMs)].filter(Boolean).join(' · ') : '');
 </script>
 
@@ -25,7 +34,7 @@
 	<section class="hero" aria-busy="true">
 		<div class="over">{daily.reseeding ? 'Mixing new picks… usually a minute' : "Today's pick"}</div>
 		<div class="top">
-			<div class="skel" style="width:{size}px;height:{size}px;border-radius:8px;flex:none"></div>
+			<div class="skel hart" style="border-radius:8px;flex:none"></div>
 			<div class="info">
 				<div class="skel" style="height:14px;width:40%"></div>
 				<div class="skel" style="height:24px;width:80%;margin-top:6px"></div>
@@ -39,14 +48,18 @@
 	</section>
 {:else}
 	<section class="hero in" style="--hero:{c.kind === 'generated' ? '#5b3bb3' : '#3a3550'}">
-		<div class="over">Today's pick · {daily.index + 1} of {deck.candidates.length}</div>
+		<div class="over">Today's pick · {index + 1} of {deck.candidates.length}</div>
 		<div class="top">
 			<a href="/daily" class="artlink" aria-label="Open today's pick">
-				{#if c.kind === 'generated'}
-					<RotorCover title={c.title} recipe={c.recipe} {size} />
-				{:else}
-					<Art src={c.playlist?.imageUrl} {size} alt="" />
-				{/if}
+				{#each [120, 200] as size (size)}
+					<span class="hsz s{size}">
+						{#if c.kind === 'generated'}
+							<RotorCover title={c.title} recipe={c.recipe} {size} />
+						{:else}
+							<Art src={c.playlist?.imageUrl} {size} alt="" />
+						{/if}
+					</span>
+				{/each}
 			</a>
 			<div class="info">
 				<div class="badges">
@@ -66,9 +79,9 @@
 			<button class="btn pri" onclick={() => daily.play()} aria-label="{playing ? 'Pause' : 'Play'} today's pick">
 				{#if playing}<Eq /> Pause{:else}<Icon name="play" size={18} /> Play{/if}
 			</button>
-			<button class="btn sec" onclick={() => daily.rotate()} disabled={daily.isLast && !deck.reseedAvailable && deck.candidates.length <= 1}>
+			<button class="btn sec" onclick={() => daily.rotate()} disabled={isLast && !deck.reseedAvailable && deck.candidates.length <= 1}>
 				<Icon name="rotate" size={18} />
-				{daily.isLast ? 'Shuffle the deck' : 'Rotate'}
+				{isLast ? 'Shuffle the deck' : 'Rotate'}
 			</button>
 			<div class="dots" aria-hidden="true">
 				{#each deck.candidates as x (x.rank)}<i class:on={x.rank === c.rank}></i>{/each}
@@ -153,7 +166,30 @@
 	.dots i.on {
 		background: var(--text-1);
 	}
+	.artlink {
+		flex: none;
+	}
+	.hart {
+		width: 120px;
+		height: 120px;
+	}
+	.hsz {
+		display: block;
+	}
+	.hsz.s200 {
+		display: none;
+	}
 	@media (min-width: 768px) {
+		.hsz.s120 {
+			display: none;
+		}
+		.hsz.s200 {
+			display: block;
+		}
+		.hart {
+			width: 200px;
+			height: 200px;
+		}
 		.hero {
 			padding: 24px;
 		}

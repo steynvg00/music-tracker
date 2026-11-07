@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { page } from '$app/state';
+	import { navigating, page } from '$app/state';
+	import RouteSkeleton from '$lib/components/RouteSkeleton.svelte';
+	import { SKELETON_DELAY_MS, skeletonFor, type SkeletonKind } from '$lib/shared/skeleton';
 	import Banner from '$lib/components/Banner.svelte';
 	import DevicePicker from '$lib/components/DevicePicker.svelte';
 	import FullPlayer from '$lib/components/FullPlayer.svelte';
@@ -36,6 +38,19 @@
 			/* private mode */
 		}
 		return () => player.stop();
+	});
+
+	// R8: a skeleton of the target page while its data loads (client navigation to another route).
+	let skeleton = $state<SkeletonKind | null>(null);
+	$effect(() => {
+		const to = navigating.to;
+		const kind = to && to.route.id !== navigating.from?.route.id ? skeletonFor(to.url.pathname) : null;
+		if (!kind) {
+			skeleton = null;
+			return;
+		}
+		const t = setTimeout(() => (skeleton = kind), SKELETON_DELAY_MS);
+		return () => clearTimeout(t);
 	});
 
 	function keys(e: KeyboardEvent) {
@@ -81,7 +96,7 @@
 		{#if player.quotaLimited}
 			<div class="bwrap"><Banner kind="warning"><span>Spotify is rate-limiting Rotor. Updates slowed down.</span></Banner></div>
 		{/if}
-		{@render children()}
+		{#if skeleton}<RouteSkeleton kind={skeleton} />{:else}{@render children()}{/if}
 	</main>
 	{#if ui.rightPanel}<NowPlayingPanel />{/if}
 	<PlayerBar />

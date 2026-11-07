@@ -1,6 +1,6 @@
-# 07 — Streamlit → Rotor parity (after R4)
+# 07 — Streamlit → Rotor parity (after R8)
 
-> Status of every item in `02-inventory.md` once R1–R4 are merged (#86, #87, #88 R3 + 0026, #89 R4). R5 (mixed sessions) is ignored: it may never ship, and nothing here depends on it. R6 (Wrapped) and R7 (Release radar) add features Streamlit never had, so they don't change any row below. Written 2026-11-06 from the code on `v0.84-hub-elsewhere-collections`; no code changes.
+> Status of every item in `02-inventory.md` once R1–R4, R6, R7 (merged: #86–#89, #91–#94) and **R8** (`v0.88-hub-parity-gaps`, this update) are in. R5 (mixed sessions) is ignored: it may never ship, and nothing here depends on it. R6 (Wrapped) and R7 (Release radar) add features Streamlit never had, so they don't change any row below. First written 2026-11-06 (after R4); updated 2026-11-07 for R8, which closes every gap except the Web Push versions of the mails (E14, R9).
 
 **Status legend:**
 - **done**: Rotor covers what Streamlit does, or the inventory's planned replacement.
@@ -12,32 +12,29 @@
 
 | Area | done | partial | missing | cut |
 |---|---|---|---|---|
-| A. App shell (4) | 1 | 1 | 0 | 2 |
-| B. Stats (22) | 21 | 0 | 0 | 1 |
+| A. App shell (4) | 2 | 0 | 0 | 2 |
+| B. Stats (22) | 22 | 0 | 0 | 0 |
 | C. Playlist Modification (7) | 7 | 0 | 0 | 0 |
 | D. Playlist Rules (2) | 2 | 0 | 0 | 0 |
-| E. Cron/script features in the UI (20) | 13 | 4 | 0 | 3 |
-| **Total (55)** | **44** | **5** | **0** | **6** |
+| E. Cron/script features in the UI (20) | 16 | 1 | 0 | 3 |
+| **Total (55)** | **49** | **1** | **0** | **5** |
 
-**Before Streamlit can be retired (v1.0):** close or explicitly cut what the 5 partial rows and the phantom-plays follow-up (B22) still need, then run the R3 smoke test on your real account. The gaps that matter, ranked:
+After R4 it was 44 / 5 / 0 / 6. R8 moves Skeleton loaders (A), Phantom plays (B22, counted as cut before because it had left the main nav), the weekly digest view (E1), enrichment age (E5) and cron health (E12) to done. The one partial row left is E14, the Web Push versions of the mails, which is R9 (`v0.89-hub-notifications`).
 
-1. **Phantom plays** (B22 → Settings › Data health): Streamlit's only view of plays whose track was delisted (`track_uri IS NULL`). Rotor has no screen for them. It's the one Streamlit *stats* view with no Rotor equivalent, even though the inventory moved it out of the main nav.
-2. **Data health is thin** (E5, E12): Settings shows only the last ingest, the mirror age and whether jobs are on. Missing:
-   - keepalive / cron auto-disable date
-   - last metadata enrichment
-   - DB size against the 500 MB cap (roadmap risks 6 and 8)
-3. **Weekly digest view** (E1): "This week: 17 playlists changed", with rank arrows from `playlist_rank_history`. It's only in the Monday mail today; Rotor has no "Last refreshed Mon 06:04" line either.
-4. **Web Push equivalents of the mails** (E14): Rotor pushes daily pick, token expiry and job finished. The weekly digest, custom-playlist sweep, milestone and snapshot mails stay e-mail only, and the Gmail failure handling has been broken since 2026-10-21. Not a blocker for retiring Streamlit (the mails come from the crons, not from Streamlit), but nothing reaches your phone when mail is down.
-5. **Skeleton loaders** (A): Rotor uses spinners and empty states, not the shelf/row skeletons `05-design.md` specifies. Cosmetic.
+**Before Streamlit can be retired (v1.0):** nothing in Streamlit is missing from Rotor any more once R8 is merged. What R8 added, per former gap:
 
-None of these block day-to-day use. Rows 1–3 are the real retirement checklist: Data health (phantom plays + cron health + DB size) and the weekly digest view, or a decision to cut the digest.
+1. **Phantom plays** (B22): Settings › Data health › Phantom plays (`/settings/health/phantom`). The same population as Streamlit's tab (`track_uri IS NULL AND artist_name IS NULL AND track_name IS NULL`, so podcast episodes count too, and Rotor says how many), the same summary, per-month chart, platform and end-reason breakdowns, and the last 30 plays (up to 300). New: each play links to the identified track played just before and after it.
+2. **Data health** (E5, E12): Settings › Data health (`/settings/health`): last ingest per source, cron health per scheduled workflow with GitHub's 60-day auto-disable date (GitHub API, read-only, with the existing dispatch token; "unknown" without it), enrichment coverage (metadata, durations, artist ids, ISRC; audio features are not collected), rollup refresh time, database size against the 500 MB cap, both token expiries, radar source status, phantom count and the last digest.
+3. **Weekly digest view** (E1): "This week" (`/digest`, from Library), one week at a time, with the mail's sections and rank arrows. From migration 0029 on, `send_digest` stores every digest before it mails, so the page is complete even when Gmail is down; older weeks are rebuilt from `playlist_rank_history` (Top lists only).
+4. **Skeleton loaders** (A): skeletons on Home, Stats, Library, Wrapped and Release radar, with no layout shift (E2E R8-6 measures CLS < 0.02 on each page's first load).
+5. **Still open — Web Push versions of the mails** (E14): R9. Not a blocker for retiring Streamlit: the mails come from the crons, not from Streamlit.
 
 ## A. App shell (`app.py`)
 
 | Item | Rotor status | Where in Rotor | Still needed |
 |---|---|---|---|
 | Secrets bridge | cut | Hub server env (`hub/.env.example`, Vercel) | — |
-| Skeleton loaders | partial | Loading states exist per screen (spinners, "Loading…", empty states) | Skeleton shelves/rows per `05-design.md` §7 (cosmetic) |
+| Skeleton loaders | done (R8) | Route skeletons while a page's data loads (Home, Stats, Library, Wrapped, Release radar, plus This week and Data health), Library rows from the first paint, Home's hero and device strip at their final size before hydration. No layout shift: CLS < 0.02 on first load (E2E R8-6) | — |
 | Sidebar "Refresh data" | done | Data comes from rollups refreshed by every ingest (`hub.refresh_rollups`). Stats APIs use a 30 s cache + ETag; Home revalidates on open (SW stale-while-revalidate) | — |
 | Navigation (Stats · Playlist Modification · Playlist Rules) | cut | Replaced by Home / Search / Library / Stats (+ Settings, Elsewhere) | — |
 
@@ -66,7 +63,7 @@ None of these block day-to-day use. Rows 1–3 are the real retirement checklist
 | B19 | Lookup › Album | done | Album detail page (keyed by Spotify album id, not album name; see the R3 PR decisions) | — |
 | B20 | Lookup › Artist | done | Artist detail page (every credited artist, badge grid) | — |
 | B21 | Spotify tab (hours, by year, skips, platforms, shuffle, end reasons) | done | Stats › Behaviour. Hours use the 0026 duration fallback, the same as Streamlit since #88 | — |
-| B22 | Phantom plays | cut (from the main nav) → **not yet in Data health** | — | A Settings › Data health block: count + last 30 delisted plays (`track_uri IS NULL`). Counted in gap 1 above |
+| B22 | Phantom plays | done (R8) | Settings › Data health › Phantom plays: Streamlit's population and breakdowns, last 30 (up to 300) with links to the tracks around each play; count on Data health | — |
 
 ## C. Playlist Modification (`views/playlist_modification.py`)
 
@@ -93,20 +90,20 @@ Streamlit is read-only since R3: these actions exist only in Rotor.
 
 | # | Feature | Rotor status | Where in Rotor | Still needed |
 |---|---|---|---|---|
-| E1 | Weekly managed refresh + digest | partial | "Refresh now" per playlist (job); About shows cadence + next refresh | "Last refreshed Mon 06:04 · 17 changed" line and a **This week** digest view with rank arrows (`playlist_rank_history`). Gap 3 |
+| E1 | Weekly managed refresh + digest | done (R8) | "Refresh now" per playlist (job); About shows cadence + next refresh; **This week** (`/digest`): "Last refreshed Mon 06:04 · 17 changed", the mail's sections and rank arrows, browsable per week (stored from 0029 on, older weeks rebuilt from rank history) | — |
 | E2 | Recently-played ingest + milestone badges + Recently Added | done | Home health dot ("last play synced … ago"), Recent badges shelf, playlist About | — |
 | E3 | Liked songs sync | done (no UI by design) | Feeds the liked flag on track pages and the "liked only" filter | — |
 | E4 | Missed new tracks | done | Home shortcuts to both Missed-new-tracks playlists. R7's Release radar extends this | — |
-| E5 | Track metadata enrichment | partial | Indirect only (track pages, duration fallback) | Data health line "metadata enriched … ago · N tracks unenriched". Gap 2 |
+| E5 | Track metadata enrichment | done (R8) | Data health › Enrichment: coverage of metadata, durations, artist ids, ISRC, last enriched, N not enriched; audio features marked "not collected" | — |
 | E6 | Popularity scores | done (no UI by design) | Feed Top ranking modes and daily-pick recipes | — |
 | E7 | Sweep expired custom playlists | done | TTL countdown chip on Custom playlists | — |
 | E8 | Period snapshots + `top_1st_*` | done | Home "Fresh" shelf (snapshots first seen in the last 7 days), badges | — |
 | E9 | Monthly refresh | done | Rules + About | — |
 | E10 | Mid-month Forgotten favourites | done | Rules + About; daily-pick rotation pool | — |
 | E11 | Ingest freshness monitor | done | Home header health dot (ok / amber / red) | — |
-| E12 | Keepalive | partial | Fixed outside the hub (v0.80.1). Settings has no cron health | Data health: "last scheduled run …, crons auto-disable ≈ …". Gap 2 |
+| E12 | Keepalive | done (R8) | Data health › Crons: state, last run and auto-disable date per scheduled workflow (max(last push, last good keepalive) + 60 days), from the GitHub API | — |
 | E13 | Badges (track + artist) | done | Badge grids on detail pages, Stats › Badges, Home Recent badges | — |
-| E14 | Mails | partial | Push: daily pick ready, token expiry, job finished (R2) | Push for weekly digest / sweep / milestone / snapshot (optional). Gap 4 |
+| E14 | Mails | partial | Push: daily pick ready, token expiry, job finished (R2). The digests are readable in-app (This week, R8) | Push versions of the weekly/monthly digest, sweep, milestone/badge, snapshot and monitor mails, plus the Gmail fix: R9 |
 | E15 | Playlist cover backups | done | Covers shown from the mirror; the backup stays a CLI tool | — |
 | E16 | Spotify refresh token | done | Settings › Connections: Reconnect, authorization date, countdown, expiry push | — |
 | E17 | Extended history import | cut | CLI only | — |
@@ -114,12 +111,22 @@ Streamlit is read-only since R3: these actions exist only in Rotor.
 | E19 | Feature coverage test | cut | — | — |
 | E20 | Daily playlist + rotation | done | Home hero, daily pick detail (R1) | — |
 
-No row is fully missing: the weekly digest view is the missing half of E1, which counts as partial because the refresh trigger exists.
+No row is missing. E14 is the only partial row, and R9 closes it.
 
 ## Retirement checklist (feeds the v1.0 release in `06-roadmap.md`)
 
-1. Merge #88 (with 0026 applied) and #89 (0024). R5 is not needed.
-2. Decide on gap 3 (weekly digest view): port it, or cut it and keep the Monday mail.
-3. Add the Data health items (gaps 1, 2): phantom plays, enrichment age, cron auto-disable date, DB size.
-4. Run R3's smoke test on your real account (five numbers, On this day, Track badge grid). E2E already proves parity against Streamlit's SQL on a throwaway DB.
-5. Then follow `06-roadmap.md` "v1.0 — Retire Streamlit": delete `app.py`, `views/`, `.streamlit/`, drop `streamlit`/`altair`. `lib/listening_time.py` stays (Rotor's tests and the duration-fallback note use it); move its queries' only remaining caller into the tests, or drop them.
+1. Merge R8 (`v0.88-hub-parity-gaps`, migration 0029) and, optionally, R9 (`v0.89-hub-notifications`).
+2. Run R3's smoke test on your real account (five numbers, On this day, Track badge grid) and R8's (Data health, Phantom plays, This week). E2E already proves parity against Streamlit's SQL on a throwaway DB.
+3. Then the v1.0 branch (`v1.0-retire-streamlit`): it deletes `app.py`, `views/`, `.streamlit/` and drops `streamlit`/`altair`, keeping every module the crons import. Deleting the Streamlit Cloud app is a manual step (its PR has the checklist).
+
+### The five deliberately cut items (what you lose with Streamlit gone)
+
+| Item | What you lose |
+|---|---|
+| A. Secrets bridge (`app.py` copying `st.secrets` into the environment) | Nothing: Rotor reads its own server env (Vercel), the crons read GitHub secrets. Only Streamlit Cloud needed the bridge. |
+| A. Navigation (Stats · Playlist Modification · Playlist Rules) | The three-page sidebar layout. Every page behind it exists in Rotor (Home / Search / Library / Stats / Settings). |
+| E17. Extended history import | Nothing in the UI had it: it stays a CLI script (`scripts/ingest_spotify_history.py`). |
+| E18. Backfills | Nothing: one-off CLI scripts (`scripts/backfill_*.py`, `regenerate_season_boundaries.py`), unchanged. |
+| E19. Feature coverage test (`scripts/feature_coverage.py`, only on the unmerged `v0.75-feature-coverage` branch) | Nothing you use today: a manual one-off API probe that never reached `main` or the UI. |
+
+The inventory's sixth cut item, Phantom plays (B22), was ported in R8 instead.

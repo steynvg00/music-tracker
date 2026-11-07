@@ -76,6 +76,38 @@ async function rows(sql: Queryable, where: 'upcoming' | 'recent', today: string,
 		LIMIT ${limit}`;
 }
 
+/** Per-source health (radar_sources), for the radar page and Settings › Data health (R8). */
+export async function radarSources(sql: Queryable): Promise<RadarSourceHealth[]> {
+	const sources = await sql<{
+		source: RadarSource;
+		enabled: boolean;
+		disabled_reason: string | null;
+		last_run_at: Date | null;
+		last_success_at: Date | null;
+		last_error: string | null;
+		last_error_at: Date | null;
+		failing_since: string | null;
+		consecutive_failures: number;
+		last_items: number | null;
+	}[]>`SELECT source, enabled, disabled_reason, last_run_at, last_success_at, last_error, last_error_at,
+	            to_char(failing_since, 'YYYY-MM-DD') AS failing_since, consecutive_failures, last_items
+	     FROM radar_sources ORDER BY array_position(ARRAY['spotify','musicbrainz','scantraxx'], source)`;
+	return sources.map(
+		(s): RadarSourceHealth => ({
+			source: s.source,
+			enabled: s.enabled,
+			disabledReason: s.disabled_reason,
+			lastRunAt: iso(s.last_run_at),
+			lastSuccessAt: iso(s.last_success_at),
+			lastError: s.last_error,
+			lastErrorAt: iso(s.last_error_at),
+			failingSince: s.failing_since,
+			consecutiveFailures: s.consecutive_failures,
+			lastItems: s.last_items
+		})
+	);
+}
+
 export async function loadRadar(sql: Queryable, today: string, opts: { artist?: string | null; followedOnly?: boolean } = {}): Promise<RadarPayload> {
 	const artist = opts.artist ? opts.artist : null;
 	const followedOnly = !!opts.followedOnly;
@@ -86,20 +118,7 @@ export async function loadRadar(sql: Queryable, today: string, opts: { artist?: 
 			SELECT artist_key AS key, max(artist_name) AS name, count(*)::int AS count FROM radar_releases
 			WHERE release_date >= ${today}::date - ${RADAR_RECENT_DAYS}::int
 			GROUP BY artist_key ORDER BY count DESC, name LIMIT 60`,
-		sql<{
-			source: RadarSource;
-			enabled: boolean;
-			disabled_reason: string | null;
-			last_run_at: Date | null;
-			last_success_at: Date | null;
-			last_error: string | null;
-			last_error_at: Date | null;
-			failing_since: string | null;
-			consecutive_failures: number;
-			last_items: number | null;
-		}[]>`SELECT source, enabled, disabled_reason, last_run_at, last_success_at, last_error, last_error_at,
-		            to_char(failing_since, 'YYYY-MM-DD') AS failing_since, consecutive_failures, last_items
-		     FROM radar_sources ORDER BY array_position(ARRAY['spotify','musicbrainz','scantraxx'], source)`,
+		radarSources(sql),
 		sql<{ followed: number; last_run: Date | null; tracks: number }[]>`
 			SELECT (SELECT count(*)::int FROM radar_followed_artists) AS followed,
 			       (SELECT max(ran_at) FROM radar_runs) AS last_run,
@@ -111,20 +130,7 @@ export async function loadRadar(sql: Queryable, today: string, opts: { artist?: 
 		upcoming: upcoming.map((r) => toRelease(r, today)),
 		recent: recent.map((r) => toRelease(r, today)),
 		artists: artists.map((a) => ({ key: a.key, name: a.name, count: a.count })),
-		sources: sources.map(
-			(s): RadarSourceHealth => ({
-				source: s.source,
-				enabled: s.enabled,
-				disabledReason: s.disabled_reason,
-				lastRunAt: iso(s.last_run_at),
-				lastSuccessAt: iso(s.last_success_at),
-				lastError: s.last_error,
-				lastErrorAt: iso(s.last_error_at),
-				failingSince: s.failing_since,
-				consecutiveFailures: s.consecutive_failures,
-				lastItems: s.last_items
-			})
-		),
+		sources,
 		followedCount: meta?.followed ?? 0,
 		lastRunAt: iso(meta?.last_run ?? null),
 		playlistTracks: meta?.tracks ?? 0

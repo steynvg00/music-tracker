@@ -2,7 +2,11 @@
 	import Eq from './Eq.svelte';
 	import Icon from './Icon.svelte';
 	import { player } from '$lib/stores/player.svelte';
-	/** Home's device strip: "Playing on iPhone" / "Nothing playing" (03-ux-ia.md §4 row 1). */
+	/**
+	 * Home's device strip: "Playing on iPhone" / "Nothing playing" (03-ux-ia.md §4 row 1).
+	 * R8: every state (incl. the placeholder before the player's first state) is the same 60 px
+	 * box, so the hero and shelves below never move when it fills in.
+	 */
 	const v = $derived(player.view);
 </script>
 
@@ -16,10 +20,12 @@
 	{:else}
 		<button class="devstrip none" onclick={() => player.openDevices()}>
 			<Icon name="devices" size={18} />
-			<span class="grow"><b>Nothing playing</b><br /><span class="cap">Press Play and Rotor will help you pick or wake a device</span></span>
+			<span class="grow two"><b>Nothing playing</b><span class="cap ell">Press Play and Rotor will help you pick or wake a device</span></span>
 			<Icon name="right" size={18} />
 		</button>
 	{/if}
+{:else}
+	<div class="devstrip skel" aria-hidden="true" data-testid="devstrip-skeleton"></div>
 {/if}
 
 <style>
@@ -33,7 +39,15 @@
 		margin-top: 4px;
 		width: 100%;
 		text-align: left;
-		min-height: 44px;
+		height: 60px;
+		box-sizing: border-box;
+	}
+	.devstrip.skel {
+		padding: 0;
+	}
+	.two {
+		display: flex;
+		flex-direction: column;
 	}
 	.grow {
 		flex: 1;
