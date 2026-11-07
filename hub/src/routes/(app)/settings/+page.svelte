@@ -12,6 +12,7 @@
 	import { apiPost, describeFailure } from '$lib/player/api-client';
 	import { currentSubscription, disablePush, enablePush, needsInstall, pushSupported } from '$lib/push-client';
 	import { describeJob, JOB_KIND_LABEL, type JobRow } from '$lib/shared/jobs';
+	import { flags } from '$lib/stores/flags.svelte';
 
 	let { data } = $props();
 	let sdkMode = $state<SdkMode>('auto');
@@ -176,6 +177,17 @@
 		<p class="cap muted">Every source, cron auto-disable dates, enrichment, rollups, database size, tokens, radar and phantom plays are on the Data health page. The Monday digest is in <a href="/digest">This week</a>.</p>
 	</section>
 
+	<section class="section" aria-labelledby="h-exp">
+		<div class="sec-h"><h2 id="h-exp">Experimental</h2></div>
+		<label class="flag">
+			<input type="checkbox" checked={flags.artistPages} onchange={(e) => flags.set('artistPages', e.currentTarget.checked)} data-testid="flag-artist-pages" />
+			<span>
+				<b>Artist pages (beta)</b>
+				<span class="cap" style="display:block">Artist names open a page with your numbers and the artist's full discography from Spotify (albums, singles & EPs, compilations, appears on), and Search gets a Spotify tab. Only artists you open are cached, for 7 days. Off by default; this device only.</span>
+			</span>
+		</label>
+	</section>
+
 	<section class="section">
 		<div class="sec-h"><h2>Sign out</h2></div>
 		<div class="acts">
@@ -260,5 +272,21 @@
 	}
 	.foot {
 		margin-top: 28px;
+	}
+	.flag {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+		background: var(--surface-2);
+		border-radius: 12px;
+		padding: 14px;
+		cursor: pointer;
+	}
+	.flag input {
+		width: 20px;
+		height: 20px;
+		margin-top: 2px;
+		accent-color: var(--accent);
+		flex: none;
 	}
 </style>

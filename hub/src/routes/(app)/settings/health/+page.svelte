@@ -108,9 +108,33 @@
 			<div class="meter" role="meter" aria-label="Database size" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.min(100, h.database.pct)}>
 				<i style="width:{Math.min(100, h.database.pct)}%;background:{TONE_COLOR[h.database.tone === 'info' ? 'ok' : h.database.tone]}"></i>
 			</div>
+			{#if h.database.overWarn}
+				<p class="dbwarn" role="alert" data-testid="health-db-warn">Above {fmtBytes(h.database.warnBytes)}: Supabase stops accepting writes at {fmtBytes(h.database.capBytes)} (ingest, playlists, badges). Free space first: the index diet (0032) and archiving the last.fm scrobbles (scripts/archive_scrobbles.py, then 0033).</p>
+			{/if}
 			<ul class="tables cap muted">
 				{#each h.database.tables as t (t.name)}<li><span>{t.name}</span><span class="tab-num">{fmtBytes(t.bytes)}</span></li>{/each}
 			</ul>
+		</section>
+
+		<section class="section" aria-labelledby="h-cat">
+			<div class="sec-h"><h2 id="h-cat">Artist pages cache (beta)</h2></div>
+			{#if h.catalogCache}
+				{@const c = h.catalogCache}
+				<p class="cap" data-testid="health-catalog">
+					<b class="tab-num" data-testid="catalog-bytes">{fmtBytes(c.logicalBytes)}</b> of {fmtBytes(c.capBytes)} cap · {c.artists} artist{c.artists === 1 ? '' : 's'} · on disk {fmtBytes(c.physicalBytes)} (incl. indexes and free pages)
+				</p>
+				<div class="meter" role="meter" aria-label="Artist pages cache size" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.min(100, Math.round((100 * c.logicalBytes) / c.capBytes))}>
+					<i style="width:{Math.min(100, (100 * c.logicalBytes) / c.capBytes)}%;background:{TONE_COLOR.ok}"></i>
+				</div>
+				<dl class="kv cap">
+					<dt>Hit rate</dt><dd data-testid="catalog-hitrate">{c.hitRatePct === null ? 'no requests yet' : `${c.hitRatePct}%`} <span class="muted">({c.hits} hits · {c.misses} misses)</span></dd>
+					<dt>Spotify requests</dt><dd>{c.spotifyCalls}{#if c.rateLimited} · <span style="color:var(--warning)">{c.rateLimited} rate-limited (429)</span>{/if}</dd>
+					<dt>Evicted (LRU)</dt><dd data-testid="catalog-evictions">{c.evictions}</dd>
+					<dt>Kept for</dt><dd>{c.ttlDays} days per artist, only artists you open</dd>
+				</dl>
+			{:else}
+				<p class="cap muted">Not set up (migration 0031).</p>
+			{/if}
 		</section>
 
 		<section class="section" aria-labelledby="h-tok">
@@ -260,5 +284,23 @@
 	}
 	.foot {
 		margin-top: 28px;
+	}
+	.dbwarn {
+		color: var(--danger);
+		font-size: 13px;
+		font-weight: 600;
+		margin: 8px 0;
+	}
+	.kv {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 4px 16px;
+		margin: 8px 0 0;
+	}
+	.kv dt {
+		color: var(--text-3);
+	}
+	.kv dd {
+		margin: 0;
 	}
 </style>

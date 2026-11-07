@@ -12,7 +12,8 @@ import { cronHealth } from './github-health';
 import { radarSources } from './radar';
 import { phantomSummary } from './phantom';
 import { pushDevices } from './notifications';
-import { DB_CAP_BYTES, dbTone, freshnessTone, type DataHealth, type IngestSource, type Tone, type TokenLine } from '$lib/shared/health';
+import { cacheHealth } from './catalog/cache';
+import { DB_CAP_BYTES, DB_WARN_BYTES, dbTone, freshnessTone, type DataHealth, type IngestSource, type Tone, type TokenLine } from '$lib/shared/health';
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
 
@@ -39,7 +40,6 @@ interface Stamps {
 	track_pop: Date | null;
 	artist_pop: Date | null;
 	badges: Date | null;
-	lastfm: Date | null;
 }
 
 export async function dataHealth(
@@ -49,7 +49,7 @@ export async function dataHealth(
 	now: Date = new Date(),
 	opts: { fresh?: boolean } = {}
 ): Promise<DataHealth> {
-	const [stamps, enrich, rollup, size, tables, conns, cron, radar, radarRun, phantom, digest, devices] = await Promise.all([
+	const [stamps, enrich, rollup, size, tables, conns, cron, radar, radarRun, phantom, digest, devices, catalogCache, lastfm] = await Promise.all([
 		sql<Stamps[]>`
 			SELECT (SELECT max(ingested_at) FROM spotify_plays) AS plays_ingested,
 			       (SELECT max(played_at) FROM spotify_plays) AS plays_played,
@@ -59,8 +59,7 @@ export async function dataHealth(
 			       (SELECT max(enriched_at) FROM track_metadata) AS metadata,
 			       (SELECT max(computed_at) FROM track_popularity_scores) AS track_pop,
 			       (SELECT max(computed_at) FROM artist_popularity_scores) AS artist_pop,
-			       (SELECT max(awarded_at) FROM badge_events) AS badges,
-			       (SELECT max(played_at) FROM scrobbles WHERE source = 'lastfm') AS lastfm`.then((r) => r[0]!),
+			       (SELECT max(awarded_at) FROM badge_events) AS badges`.then((r) => r[0]!),
 		soft(
 			sql<{ tracks: number; enriched: number; dur: number; artists: number; isrc: number }[]>`
 				SELECT count(*)::int AS tracks,
@@ -95,7 +94,11 @@ export async function dataHealth(
 			),
 			null
 		),
-		pushDevices(sql, now)
+		pushDevices(sql, now),
+		// v0.90: blank when 0031 isn't applied.
+		soft(cacheHealth(sql), null),
+		// Historic last.fm import. Its own query: after 0033 (scrobbles archived + dropped) it is null.
+		soft(sql<{ t: Date | null }[]>`SELECT max(played_at) AS t FROM scrobbles WHERE source = 'lastfm'`.then((r) => r[0]?.t ?? null), null)
 	]);
 
 	const src = (key: string, label: string, at: Date | null, everyH: number | null, detail: string | null = null): IngestSource => ({
@@ -116,7 +119,7 @@ export async function dataHealth(
 		src('artist_pop', 'Artist popularity scores', stamps.artist_pop, 24),
 		src('radar', 'Release radar', radarRun, 24),
 		src('badges', 'Badges (last awarded)', stamps.badges, null),
-		src('lastfm', 'Last.fm scrobbles (historic import)', stamps.lastfm, null)
+		src('lastfm', 'Last.fm scrobbles (historic import)', lastfm, null, lastfm ? null : 'archived (0033) or not imported')
 	];
 	// Enrichment only writes when there's something new; judge it by coverage, not by age alone.
 	const missing = enrich ? enrich.tracks - enrich.enriched : 0;
@@ -154,8 +157,11 @@ export async function dataHealth(
 			capBytes: DB_CAP_BYTES,
 			pct: Math.round((size / DB_CAP_BYTES) * 1000) / 10,
 			tables: tables.map((t) => ({ name: t.name, bytes: Number(t.bytes) })),
-			tone: dbTone(size)
+			tone: dbTone(size),
+			warnBytes: DB_WARN_BYTES,
+			overWarn: size > DB_WARN_BYTES
 		},
+		catalogCache,
 		tokens: [tokenLine(conns.hub), tokenLine(conns.cron)],
 		radar,
 		phantom,

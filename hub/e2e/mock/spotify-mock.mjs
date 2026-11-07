@@ -7,7 +7,7 @@
  *   - over HTTP on 127.0.0.1:<E2E_MOCK_PORT>/v1/… for the Python job runner (spotipy prefix).
  * Nothing here ever reaches the network.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const id22 = () => randomBytes(16).toString('base64url').replace(/[^A-Za-z0-9]/g, 'x').slice(0, 22).padEnd(22, 'x');
@@ -83,9 +83,149 @@ export function createMock(stateFile) {
 		return m && state.playlists[m[1]] ? state.playlists[m[1]].items : [];
 	}
 
-	function spotifyApi(method, path, query, body) {
+	// ── v0.90: Spotify catalog for the Artist pages (beta) + catalog search ──────────────────────
+	// state.catalog = { artists: { [id]: { name, gen?: {album, single, compilation, appears_on}, explicit?: {group: [albumId]} } },
+	//                   albums: { [explicitId]: album-with-tracks }, fail429: n, retryAfter: s }
+	// Synthetic albums/tracks are generated from their id (artist prefix + group + index), so a 600-release
+	// artist costs nothing in the state file and every id resolves the same way on every call.
+	const GROUP_CHAR = { album: 'L', single: 'S', compilation: 'C', appears_on: 'P' };
+	const CHAR_GROUP = { L: 'album', S: 'single', C: 'compilation', P: 'appears_on' };
+	const pad = (n, w) => String(n).padStart(w, '0');
+	// Real cover ids are 40 random-looking hex chars: use SHA-1 so they compress like real ones.
+	const hex40 = (seed) => createHash('sha1').update(seed).digest('hex');
+	const images = (seed) => [640, 300, 64].map((w) => ({ url: `https://i.scdn.co/image/ab67616d0000${w === 640 ? 'b273' : w === 300 ? '1e02' : '4851'}${hex40(seed)}`, width: w, height: w }));
+	const cat = () => state.catalog ?? { artists: {}, albums: {} };
+	const byPrefix = (pre) => Object.keys(cat().artists).find((id) => id.slice(0, 13) === pre) ?? null;
+	function genAlbumMeta(artistId, g, i) {
+		const a = cat().artists[artistId];
+		const n = a?.gen?.[g] ?? 0;
+		const total = g === 'album' ? 12 : g === 'single' ? (i % 5 === 0 ? 5 : 1 + (i % 3)) : g === 'compilation' ? 20 : i % 10 === 0 ? 64 : 10 + (i % 30);
+		const year = 2026 - Math.floor((i * 15) / Math.max(n, 1));
+		const precision = i % 9 === 4 ? 'year' : i % 7 === 3 ? 'month' : 'day';
+		const date = precision === 'year' ? `${year}` : precision === 'month' ? `${year}-${pad(1 + ((i * 7) % 12), 2)}` : `${year}-${pad(1 + ((i * 7) % 12), 2)}-${pad(1 + ((i * 11) % 28), 2)}`;
+		const id = `${artistId.slice(0, 13)}${GROUP_CHAR[g]}${pad(i, 4)}aaaa`;
+		const label = { album: 'Album', single: 'Single', compilation: 'Collected', appears_on: 'Various Hardstyle Vol.' }[g];
+		return {
+			id,
+			name: g === 'appears_on' ? `${label} ${i + 1}` : `${a?.name ?? 'Artist'} ${label} ${i + 1}`,
+			album_type: g === 'appears_on' ? ['compilation', 'album', 'single'][i % 3] : g,
+			total_tracks: total,
+			release_date: date,
+			release_date_precision: precision,
+			images: images(id),
+			artists: g === 'appears_on' ? [{ id: null, name: 'Various Artists' }] : [{ id: artistId, name: a?.name ?? 'Artist' }],
+			uri: `spotify:album:${id}`
+		};
+	}
+	function genTracks(artistId, g, i, meta) {
+		const a = cat().artists[artistId];
+		const own = new Set(g === 'appears_on' ? [1 + (i % meta.total_tracks), ...(i % 4 === 0 ? [1 + ((i + 3) % meta.total_tracks)] : [])] : []);
+		return Array.from({ length: meta.total_tracks }, (_, k) => {
+			const tn = k + 1;
+			const id = `${artistId.slice(0, 13)}${GROUP_CHAR[g]}${pad(i, 4)}t${pad(tn % 100, 2)}x`;
+			const mine = g !== 'appears_on' || own.has(tn);
+			const guest = { id: `Guest${pad(tn, 3)}${'g'.repeat(14)}`, name: `Guest ${tn}` };
+			return {
+				id,
+				uri: `spotify:track:${id}`,
+				name: g === 'appears_on' ? (mine ? `${a?.name ?? 'Artist'} – Anthem ${i + 1}.${tn}` : `Guest track ${i + 1}.${tn}`) : `${meta.name} – ${tn}`,
+				track_number: tn,
+				disc_number: 1,
+				duration_ms: 180000 + ((i * 37 + tn * 13) % 120) * 1000,
+				artists: mine ? (g === 'appears_on' && tn % 2 ? [guest, { id: artistId, name: a?.name }] : [{ id: artistId, name: a?.name }]) : [guest]
+			};
+		});
+	}
+	/** Album (with tracks) for an explicit or synthetic id, or null. */
+	function catalogAlbum(id) {
+		const ex = cat().albums?.[id];
+		if (ex) return ex;
+		const m = /^(.{13})([LSCP])(\d{4})aaaa$/.exec(id);
+		const artistId = m && byPrefix(m[1]);
+		if (!artistId) return null;
+		const g = CHAR_GROUP[m[2]];
+		const i = Number(m[3]);
+		if (i >= (cat().artists[artistId].gen?.[g] ?? 0)) return null;
+		const meta = genAlbumMeta(artistId, g, i);
+		return { ...meta, tracks: genTracks(artistId, g, i, meta) };
+	}
+	function artistReleases(artistId, g) {
+		const a = cat().artists[artistId];
+		const ex = (a.explicit?.[g] ?? []).map((id) => {
+			const { tracks: _t, ...meta } = cat().albums[id];
+			return meta;
+		});
+		const gen = Array.from({ length: a.gen?.[g] ?? 0 }, (_, i) => genAlbumMeta(artistId, g, i));
+		return [...ex, ...gen];
+	}
+	const page = (list, query, max = 50) => {
+		const limit = Number(query.get('limit') ?? 20);
+		const offset = Number(query.get('offset') ?? 0);
+		if (limit > max || limit < 1) return err(400, `Invalid limit (max ${max})`);
+		const items = list.slice(offset, offset + limit);
+		return ok({ items, total: list.length, limit, offset, next: offset + limit < list.length ? 'next' : null });
+	};
+	function catalogApi(method, p, query) {
+		if (method !== 'GET') return null;
+		const c = cat();
+		const isCatalogPath = /^\/(artists|albums)\/|^\/search$/.test(p);
+		if (!isCatalogPath) return null;
+		let m;
+		const known =
+			p === '/search' ||
+			((m = /^\/artists\/([A-Za-z0-9]{22})(?:\/albums)?$/.exec(p)) && c.artists?.[m[1]]) ||
+			((m = /^\/albums\/([A-Za-z0-9]{22})(?:\/tracks)?$/.exec(p)) && catalogAlbum(m[1]));
+		if (!known) return null;
+		if (c.fail429 > 0) {
+			c.fail429--;
+			return { status: 429, body: { error: { status: 429, message: 'API rate limit exceeded' } }, headers: { 'retry-after': String(c.retryAfter ?? 1) } };
+		}
+		if ((m = /^\/artists\/([A-Za-z0-9]{22})$/.exec(p))) {
+			const a = c.artists[m[1]];
+			return ok({ id: m[1], name: a.name, type: 'artist', uri: `spotify:artist:${m[1]}`, images: a.noImage ? [] : images(m[1]) });
+		}
+		if ((m = /^\/artists\/([A-Za-z0-9]{22})\/albums$/.exec(p))) {
+			const g = query.get('include_groups') ?? '';
+			if (!GROUP_CHAR[g]) return err(400, 'E2E mock: request ONE include_groups value at a time');
+			return page(artistReleases(m[1], g), query, c.maxAlbumsLimit ?? 50);
+		}
+		if ((m = /^\/albums\/([A-Za-z0-9]{22})\/tracks$/.exec(p))) return page(catalogAlbum(m[1]).tracks, query, 50);
+		if ((m = /^\/albums\/([A-Za-z0-9]{22})$/.exec(p))) {
+			const a = catalogAlbum(m[1]);
+			const { tracks, ...meta } = a;
+			return ok({ ...meta, tracks: { items: tracks.slice(0, 50), total: tracks.length, limit: 50, offset: 0, next: tracks.length > 50 ? 'next' : null } });
+		}
+		if (p === '/search') {
+			const limit = Number(query.get('limit') ?? 20);
+			if (limit > 10) return err(400, 'Invalid limit (max 10 since Feb 2026)');
+			const q = (query.get('q') ?? '').toLowerCase();
+			const types = (query.get('type') ?? '').split(',');
+			const out = {};
+			const slice = (list) => {
+				const offset = Number(query.get('offset') ?? 0);
+				return { items: list.slice(offset, offset + limit), total: list.length, limit, offset, next: offset + limit < list.length ? 'next' : null };
+			};
+			const matched = Object.entries(c.artists ?? {}).filter(([, a]) => a.name.toLowerCase().includes(q));
+			if (types.includes('artist')) {
+				const fillers = Array.from({ length: 21 }, (_, k) => ({ id: `SrchFillerArtist${pad(k, 6)}`, name: `${query.get('q')} tribute ${k + 1}`, type: 'artist', images: [] }));
+				out.artists = slice([...matched.map(([id, a]) => ({ id, name: a.name, type: 'artist', images: images(id) })), ...fillers]);
+			}
+			const pool = (c.searchPool ?? []).filter((id) => c.artists[id]);
+			const albums = pool.flatMap((id) => [...artistReleases(id, 'album'), ...artistReleases(id, 'single')]);
+			if (types.includes('album')) out.albums = slice(albums);
+			if (types.includes('track')) out.tracks = slice(albums.map((al) => ({ ...catalogAlbum(al.id).tracks[0], album: { id: al.id, name: al.name, images: al.images } })));
+			return ok(out);
+		}
+		return null;
+	}
+
+	function spotifyApi(method, path, query, body, who = 'hub') {
 		const p = path.replace(/^\/v1/, '').replace(/\/+$/, '') || '/';
 		let m;
+		if (who === 'hub') {
+			const c = catalogApi(method, p, query);
+			if (c) return c;
+		}
 		if (method === 'GET' && p === '/me') return ok({ id: state.loginUser ?? state.owner, display_name: 'E2E', product: 'premium', country: 'NL', email: 'e2e@example.invalid' });
 		// ── player ──
 		if (method === 'GET' && p === '/me/player') return state.playback ? ok(playbackBody()) : none();
@@ -316,7 +456,7 @@ export function createMock(stateFile) {
 			const grant = typeof body === 'object' && body ? body.grant_type : null;
 			res = ok({ access_token: `at-e2e-${calls.length}`, token_type: 'Bearer', expires_in: 3600, scope: HUB_SCOPES, ...(grant === 'authorization_code' ? { refresh_token: 'rt-e2e' } : {}) });
 		} else if (u.host === 'api.spotify.com' || (who === 'python' && u.pathname.startsWith('/v1/'))) {
-			res = spotifyApi(method, u.pathname, u.searchParams, body);
+			res = spotifyApi(method, u.pathname, u.searchParams, body, who);
 		} else if (u.host === 'www.googleapis.com' && u.pathname.startsWith('/youtube/v3/')) {
 			res = youtubeApi(u.pathname, u.searchParams);
 		} else if (u.host === 'soundcloud.com' && u.pathname === '/oembed') {

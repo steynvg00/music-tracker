@@ -114,6 +114,8 @@ def pg_url(tmp_path_factory):
     url = f"postgresql://postgres@127.0.0.1:{port}/postgres"
     try:
         with psycopg.connect(url, autocommit=True) as conn:
+            # 0033 (drop scrobbles) refuses without the archive's row count; this throwaway DB's is empty.
+            conn.execute("SET rotor.scrobbles_archived_rows = '0'")
             for f in sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")):
                 conn.execute(f.read_text())
         yield url

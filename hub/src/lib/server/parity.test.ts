@@ -12,7 +12,7 @@ import { fakeFetch, fakeSql } from './test-helpers';
 import { clearCronCache, cronHealth } from './github-health';
 import { PHANTOM_WHERE_SQL } from './phantom';
 import { digestPayload } from './digest';
-import { ago, autoDisableAt, daysUntil, dbTone, fmtBytes, freshnessTone, SCHEDULED_WORKFLOWS, workflowTone, DB_CAP_BYTES } from '$lib/shared/health';
+import { ago, autoDisableAt, daysUntil, dbTone, fmtBytes, freshnessTone, SCHEDULED_WORKFLOWS, workflowTone, DB_CAP_BYTES, DB_WARN_BYTES } from '$lib/shared/health';
 import { arrowFor, isWeek, mondayOf, showArrows, weekLabel } from '$lib/shared/digest';
 import { skeletonFor } from '$lib/shared/skeleton';
 
@@ -48,6 +48,10 @@ describe('health rules', () => {
 		expect(dbTone(100 * 1024 * 1024)).toBe('ok');
 		expect(dbTone(0.8 * DB_CAP_BYTES)).toBe('warn');
 		expect(dbTone(0.95 * DB_CAP_BYTES)).toBe('danger');
+		// v0.90: an explicit warning above 450 MB (the production DB was at 417 MB).
+		expect(DB_WARN_BYTES).toBe(450 * 1024 * 1024);
+		expect(dbTone(417 * 1024 * 1024)).toBe('warn');
+		expect(dbTone(DB_WARN_BYTES + 1)).toBe('danger');
 		expect(fmtBytes(123 * 1024 * 1024)).toBe('123.0 MB');
 		expect(fmtBytes(2048)).toBe('2 kB');
 	});

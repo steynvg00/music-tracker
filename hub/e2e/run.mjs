@@ -61,7 +61,12 @@ process.on('SIGINT', () => process.exit(130));
 try {
 	sh(pg('createdb'), ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', 'rotor_e2e']);
 	const migrations = readdirSync(join(REPO, 'migrations')).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
-	const apply = (f) => sh(pg('psql'), ['-q', '-v', 'ON_ERROR_STOP=1', '-d', DB, '-f', join(REPO, 'migrations', f)], { stdio: ['ignore', 'ignore', 'inherit'] });
+	// 0033 (drop scrobbles) refuses without the archive's row count; the throwaway DB's scrobbles is empty.
+	const apply = (f) =>
+		sh(pg('psql'), ['-q', '-v', 'ON_ERROR_STOP=1', '-d', DB, '-f', join(REPO, 'migrations', f)], {
+			stdio: ['ignore', 'ignore', 'inherit'],
+			env: { ...process.env, PGOPTIONS: '-c rotor.scrobbles_archived_rows=0' }
+		});
 	const before = migrations.filter((f) => Number(f.slice(0, 4)) <= 22 && Number(f.slice(0, 4)) <= MAX_MIGRATION);
 	const after = migrations.filter((f) => Number(f.slice(0, 4)) > 22 && Number(f.slice(0, 4)) <= MAX_MIGRATION);
 	for (const f of before) apply(f);
@@ -75,6 +80,12 @@ try {
 	const applied = execFileSync(pg('psql'), ['-At', '-d', DB, '-c', 'SELECT string_agg(number::text, \',\' ORDER BY number) FROM migrations_applied'], { encoding: 'utf8' }).trim();
 	console.log(`[e2e] migrations_applied: ${applied}`);
 	writeFileSync(join(OUT, 'migrations.txt'), applied);
+	// v0.90 index audit: log every statement the hub + Python jobs send from here on (not the seed or
+	// the migrations), so hub/e2e/index_audit.py can replay them with EXPLAIN afterwards.
+	if (process.env.E2E_LOG_STATEMENTS) {
+		sh(pg('psql'), ['-q', '-d', DB, '-c', "ALTER SYSTEM SET log_statement = 'all'", '-c', 'SELECT pg_reload_conf()'], { stdio: 'ignore' });
+		console.log('[e2e] statement logging on (index audit)');
+	}
 
 	// ── 3. hub ──
 	const env = {
@@ -189,6 +200,18 @@ try {
 	});
 	const code = await new Promise((ok) => pw.on('exit', ok));
 	ctl.close();
+	if (process.env.E2E_INDEX_AUDIT) {
+		await stopPreview();
+		sh(pg('psql'), ['-q', '-d', DB, '-c', 'ALTER SYSTEM RESET log_statement', '-c', 'SELECT pg_reload_conf()'], { stdio: 'ignore' });
+		const args = ['run', '--no-sync', 'python', 'hub/e2e/index_audit.py', '--db', DB, '--log', join(OUT, 'pg.log'), '--out', join(OUT, 'index-audit.json')];
+		for (const ix of process.env.E2E_INDEX_AUDIT.split(',').filter(Boolean)) args.push('--drop', ix);
+		try {
+			sh('uv', args, { cwd: REPO });
+		} catch (e) {
+			console.error('[e2e] index audit failed', e);
+			process.exitCode = 1;
+		}
+	}
 
 	// ── results table ──
 	const resultsFile = join(OUT, 'results.json');
@@ -205,7 +228,7 @@ try {
 		const pass = rows.filter((x) => x.status === 'passed').length;
 		console.log(`\n[e2e] ${pass} / ${rows.length} passed · table: ${join(OUT, 'results.md')}`);
 	}
-	process.exitCode = code ?? 1;
+	process.exitCode = process.exitCode || (code ?? 1);
 } finally {
 	stopAll();
 	try {
