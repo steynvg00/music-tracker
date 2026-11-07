@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="dark" />
+		<title>Rotor · %sveltekit.status%</title>
+		<!-- v0.83.1: the last-resort error page (the root layout itself failed). Visible text, and
+		     Reload / Reset buttons wired by the boot guard (no inline scripts: CSP). -->
+		<script src="/boot-guard.js"></script>
+	</head>
+	<body style="margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;box-sizing:border-box;background:#0B0B0E;color:#F5F5F7;font:16px/1.4 system-ui,-apple-system,sans-serif;text-align:center">
+		<h1 style="font-size:22px;margin:0">Rotor couldn’t load this page</h1>
+		<p style="margin:0;color:#B4B4BF;max-width:40ch">Error %sveltekit.status%: %sveltekit.error.message%</p>
+		<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+			<button type="button" data-rotor-reload style="min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#9D6BFF;color:#0B0B0E;font:600 15px system-ui,sans-serif">Reload</button>
+			<button type="button" data-rotor-reset style="min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#25252D;color:#F5F5F7;font:600 15px system-ui,sans-serif">Reset Rotor on this device</button>
+		</div>
+	</body>
+</html>

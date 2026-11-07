@@ -97,11 +97,29 @@ try {
 		E2E_PUSH_LOG: join(OUT, 'pushes.jsonl'),
 		E2E_JOB_LOG: join(OUT, 'jobs.log')
 	};
-	const build = () => sh('npx', ['vite', 'build'], { cwd: HUB, env, stdio: ['ignore', 'ignore', 'inherit'] });
-	const start = () =>
+	const build = (dir = HUB) => sh('npx', ['vite', 'build'], { cwd: dir, env, stdio: ['ignore', 'ignore', 'inherit'] });
+	// v0.83.1: an OLD release (git tag) built in its own worktree, served on the same origin, so
+	// the service-worker upgrade path from that release to this code can be tested for real.
+	const legacy = new Map();
+	const legacyBuild = (ref) => {
+		if (legacy.has(ref)) return legacy.get(ref);
+		if (!/^[\w./-]+$/.test(ref)) throw new Error(`bad ref ${ref}`);
+		const wt = join(OUT, 'legacy', ref.replace(/[^\w.-]/g, '_'));
+		sh('git', ['worktree', 'add', '--force', '--detach', wt, `refs/tags/${ref}`], { cwd: REPO, stdio: 'ignore' });
+		const hub = join(wt, 'hub');
+		sh('ln', ['-s', join(HUB, 'node_modules'), join(hub, 'node_modules')]);
+		const t = Date.now();
+		build(hub);
+		console.log(`[e2e] built legacy ${ref} in ${Date.now() - t} ms`);
+		legacy.set(ref, hub);
+		return hub;
+	};
+	let servingDir = HUB;
+	const start = (dir = servingDir) =>
 		new Promise((ok, fail) => {
+			servingDir = dir;
 			preview = spawn(process.execPath, ['--import', join(HUB, 'e2e', 'mock', 'preload.mjs'), join(HUB, 'node_modules', 'vite', 'bin', 'vite.js'), 'preview', '--port', String(APP_PORT), '--strictPort'], {
-				cwd: HUB,
+				cwd: dir,
 				env,
 				stdio: ['ignore', 'pipe', 'pipe']
 			});
@@ -112,6 +130,7 @@ try {
 			};
 			preview.stdout.on('data', onData);
 			preview.stderr.on('data', (b) => logs.push(b.toString()));
+			if (process.env.E2E_DEBUG_PREVIEW) preview.stdout.on('data', (b) => console.log(`[preview] ${JSON.stringify(b.toString())}`));
 			preview.on('exit', (c) => c && fail(new Error(`preview exited ${c}: ${logs.join('')}`)));
 			setTimeout(() => fail(new Error('preview did not start')), 30_000);
 		});
@@ -131,8 +150,24 @@ try {
 		if (req.url === '/redeploy' && req.method === 'POST') {
 			await stopPreview();
 			build();
-			await start();
+			await start(HUB);
 			res.writeHead(200).end('redeployed');
+			return;
+		}
+		if (req.url?.startsWith('/deploy') && req.method === 'POST') {
+			// /deploy?ref=<tag> → serve that old release; /deploy → serve this code again (no rebuild).
+			const ref = new URL(req.url, 'http://ctl').searchParams.get('ref');
+			try {
+				const dir = ref ? legacyBuild(ref) : HUB;
+				console.log(`[e2e] deploy ${ref ?? 'current'}: stopping preview`);
+				await stopPreview();
+				console.log(`[e2e] deploy ${ref ?? 'current'}: starting preview in ${dir}`);
+				await start(dir);
+				console.log(`[e2e] deploy ${ref ?? 'current'}: serving`);
+				res.writeHead(200).end(`serving ${ref ?? 'current'}`);
+			} catch (e) {
+				res.writeHead(500).end(String(e));
+			}
 			return;
 		}
 		res.writeHead(404).end();
@@ -165,5 +200,8 @@ try {
 	process.exitCode = code ?? 1;
 } finally {
 	stopAll();
+	try {
+		for (const d of readdirSync(join(OUT, 'legacy'))) execFileSync('git', ['worktree', 'remove', '--force', join(OUT, 'legacy', d)], { cwd: REPO, stdio: 'ignore' });
+	} catch {}
 	if (!process.env.E2E_KEEP) rmSync(join(OUT, 'pgdata'), { recursive: true, force: true });
 }
