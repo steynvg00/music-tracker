@@ -87,7 +87,8 @@ def test_incremental_refresh_picks_up_durations_enriched_after_the_ingest(conn):
     assert conn.execute("SELECT sum(ms) FROM hub.daily_listening").fetchone()[0] == full
 
 
-def test_streamlit_hours_use_the_same_fallback(conn):
+def test_reference_hours_sql_uses_the_same_fallback(conn):
+    """lib/listening_time.py is the SQL Streamlit's Spotify tab ran (v1.0: kept as the parity reference)."""
     today = _today(conn)
     _meta(conn, "spotify:track:A", 1_800_000)
     _play(conn, _at(today, 1), "spotify:track:A", None)
@@ -102,11 +103,3 @@ def test_streamlit_hours_use_the_same_fallback(conn):
     assert [(y, float(h)) for y, h in by_year] == [(today.year, 1.5)]
     album = conn.execute(listening_time.ALBUM_SUMMARY_SQL, ("Album",)).fetchone()
     assert float(album[4]) == 1.5
-
-
-def test_streamlit_pages_use_the_shared_queries():
-    stats = (ROOT / "views" / "stats.py").read_text()
-    album = (ROOT / "views" / "_stats_album_lookup.py").read_text()
-    assert "SUM(ms_played)" not in stats and "SUM(ms_played)" not in album
-    assert "SPOTIFY_OVERVIEW_SQL" in stats and "SPOTIFY_HOURS_BY_YEAR_SQL" in stats
-    assert "ALBUM_SUMMARY_SQL" in album

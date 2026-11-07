@@ -3,6 +3,7 @@
 import random as _random
 import warnings
 
+# The order-preference labels; Rotor's hub/src/lib/shared/order-prefs.ts mirrors them (r2-shared.test.ts).
 ORDER_PREF_OPTIONS: dict[str, str] = {
     "default":        "Default (factory order)",
     "plays_desc":     "Most plays first",
@@ -51,25 +52,6 @@ def get_all_settings(conn) -> dict[str, dict]:
         """
     )
     return {row[0]: dict(zip(_SETTINGS_COLS, row)) for row in cur.fetchall()}
-
-
-def get_all_settings_by_name(conn) -> dict[str, dict]:
-    """Bulk fetch all settings rows, keyed by playlist_name (for dashboard lookup)."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT playlist_id, playlist_name, order_pref,
-               force_refresh_requested_at, force_refresh_completed_at,
-               created_at, updated_at
-        FROM playlist_settings
-        """
-    )
-    result = {}
-    for row in cur.fetchall():
-        d = dict(zip(_SETTINGS_COLS, row))
-        if d["playlist_name"]:
-            result[d["playlist_name"]] = d
-    return result
 
 
 def upsert_order_pref(conn, playlist_id: str, playlist_name: str, order_pref: str) -> None:

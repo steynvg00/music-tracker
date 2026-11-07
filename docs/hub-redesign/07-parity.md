@@ -117,7 +117,7 @@ No row is missing or partial after R9.
 
 1. Merge R8 (`v0.88-hub-parity-gaps`, migration 0029) and R9 (`v0.89-hub-notifications`, migration 0030).
 2. Run R3's smoke test on your real account (five numbers, On this day, Track badge grid) and R8's (Data health, Phantom plays, This week). E2E already proves parity against Streamlit's SQL on a throwaway DB.
-3. Then the v1.0 branch (`v1.0-retire-streamlit`): it deletes `app.py`, `views/`, `.streamlit/` and drops `streamlit`/`altair`, keeping every module the crons import. Deleting the Streamlit Cloud app is a manual step (its PR has the checklist).
+3. Then the v1.0 branch (`v1.0-retire-streamlit`): it deletes `app.py`, `views/`, `.streamlit/` and `docs/streamlit-cloud-deploy.md`, drops `streamlit` and `pandas` (and the 29 packages only they pulled in, `altair` among them), and keeps every module the crons import (checked by import graph and tests). `lib/listening_time.py` stays as the hours-parity reference. Deleting the Streamlit Cloud app is a manual step (its PR has the checklist).
 
 ### The five deliberately cut items (what you lose with Streamlit gone)
 

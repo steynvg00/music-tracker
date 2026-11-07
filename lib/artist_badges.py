@@ -59,7 +59,6 @@ ARTIST_BADGE_TYPES = (
 )
 
 # Multi-fire badges carry a non-NULL context['window']; everything else is once-per-artist.
-ARTIST_MULTI_FIRE_BADGE_TYPES = set(ARTIST_RANKING_BADGE_TYPES) | {"rediscovery"}
 
 # Category render order — shared with the dashboard artist-lookup grid.
 # (display name, [badge_types in slot order], category emoji).
@@ -72,18 +71,6 @@ ARTIST_BADGE_CATEGORY_ORDER: list[tuple[str, list[str], str]] = [
     ("Rediscovery", ARTIST_REDISCOVERY_BADGE_TYPES, "🎭"),
 ]
 
-ARTIST_BADGE_DISPLAY_LABELS = {
-    **{f"artist_plays_{n}": f"{n}+ plays" for n in ARTIST_PLAY_THRESHOLDS},
-    **{f"artist_tracks_{n}": f"{n}+ tracks" for n in ARTIST_TRACK_THRESHOLDS},
-    **{f"artist_streak_{n}_years": f"{n}-year" for n in ARTIST_STREAK_THRESHOLDS},
-    "top_1st_artist_month": "#1 Month",
-    "top_1st_artist_season": "#1 Season",
-    "top_1st_artist_year": "#1 Year",
-    "top_1st_artist_alltime": "#1 All-time",
-    "top_1st_artist_decade": "#1 Decade",
-    "dynasty": "Dynasty",
-    "rediscovery": "Rediscovery",
-}
 
 ARTIST_BADGE_HEADLINE = {
     **{f"artist_plays_{n}": f"{n}+ cumulative plays" for n in ARTIST_PLAY_THRESHOLDS},

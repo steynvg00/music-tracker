@@ -7,13 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0.2",
     "httpx>=0.28.1",
-    "pandas>=3.0.3",
     "pillow",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
     "pywebpush>=2.5.0",
     "spotipy>=2.26.0",
-    "streamlit>=1.57.0",
 ]
 
 [dependency-groups]

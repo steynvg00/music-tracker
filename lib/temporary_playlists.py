@@ -16,25 +16,6 @@ from lib.email_notify import EmailEventCollector, EventType, PlaylistEvent, send
 CUSTOM_NAME_SUFFIX = " · Custom 🎧"
 
 
-def list_artists(conn, limit: int = 1000) -> list[tuple[str, int]]:
-    """Return (artist_name, play_count) for the user's most-played artists."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT artist_name, COUNT(*) AS plays
-        FROM spotify_plays
-        WHERE track_uri IS NOT NULL
-          AND artist_name IS NOT NULL
-          AND artist_name <> ''
-        GROUP BY artist_name
-        ORDER BY plays DESC
-        LIMIT %s
-        """,
-        (limit,),
-    )
-    return [(row[0], row[1]) for row in cur.fetchall()]
-
-
 SORT_ORDERS = (
     "random",
     "plays_desc",
