@@ -11,19 +11,28 @@
  * What it does:
  *   - An /_app/ script, stylesheet or module import fails before the app has started → RESET once:
  *     unregister every service worker, delete every cache, reload from the network.
- *   - It happens again right after a reset, or the app hasn't started after BOOT_MS → a visible
- *     panel ("Rotor couldn't start") with Reload and Reset buttons, never an empty dark page.
- *   - The app signals a successful start with window.__rotorBoot.booted() (root +layout.svelte),
- *     which also removes the panel if it was showing.
+ *   - It happens again right after a reset → a visible panel ("Rotor couldn't start") with
+ *     Reload and Reset buttons, never an empty dark page.
+ *   - The app's entry modules haven't even loaded after BOOT_MS → "Rotor is taking long to
+ *     start". As a small bar at the bottom when the page already shows server-rendered content
+ *     (it is usable to read; v0.83.2), as the full panel only when the page is empty.
+ *   - Two signals from the app:
+ *       shellLoaded()  hooks.client.ts init(): the entry modules loaded and ran, so the shell is
+ *                      fine. No timeout bar/panel after this — slow DATA (a cold Vercel function,
+ *                      a first service-worker install hogging the network, a slow /api/home) is
+ *                      not a broken shell, and hydration waits for that data (v0.83.2 fix: in
+ *                      v0.83.1 the 15 s timer ran until hydration and covered a working page).
+ *       booted()       root +layout.svelte onMount: fully started; removes any bar/panel.
  *   - Buttons anywhere with data-rotor-reload / data-rotor-reset (error pages) use the same
  *     actions, so error pages work without inline scripts (CSP: script-src 'self').
  */
 (function () {
 	'use strict';
-	var BOOT_MS = 15000;
+	var BOOT_MS = 20000;
 	var KEY = 'rotor-boot-reset';
 	var PARAM = 'rotor-reset';
-	var started = false;
+	var started = false; // fully started (hydrated)
+	var shell = false; // entry modules loaded (hooks.client.ts init)
 	var panel = null;
 
 	function now() {
@@ -75,21 +84,33 @@
 		window.__rotorBoot.lastReason = reason;
 	}
 
-	function showPanel(reason) {
+	/** Server-rendered content on screen (the app is readable even before it is interactive). */
+	function hasContent() {
+		var b = document.body;
+		return !!b && (b.innerText || '').replace(/\s+/g, '').length > 40;
+	}
+
+	function showPanel(reason, blocking) {
+		if (blocking === undefined) blocking = true;
 		if (started || panel || !document.body) {
-			if (!document.body) document.addEventListener('DOMContentLoaded', function () { showPanel(reason); });
+			if (!document.body) document.addEventListener('DOMContentLoaded', function () { showPanel(reason, blocking); });
 			return;
 		}
 		panel = document.createElement('div');
 		panel.id = 'rotor-boot-panel';
-		panel.setAttribute('role', 'alert');
+		panel.setAttribute('role', blocking ? 'alert' : 'status');
 		panel.setAttribute('data-reason', reason);
-		panel.style.cssText =
-			'position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
-			'gap:14px;padding:24px;background:#0B0B0E;color:#F5F5F7;font:16px/1.4 system-ui,-apple-system,sans-serif;text-align:center';
+		panel.setAttribute('data-mode', blocking ? 'panel' : 'bar');
+		panel.style.cssText = blocking
+			? 'position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+				'gap:14px;padding:24px;background:#0B0B0E;color:#F5F5F7;font:16px/1.4 system-ui,-apple-system,sans-serif;text-align:center'
+			: 'position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:2147483647;display:flex;' +
+				'flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 12px;padding:12px 14px;border-radius:14px;' +
+				'background:#25252D;color:#F5F5F7;font:14px/1.35 system-ui,-apple-system,sans-serif;text-align:center;' +
+				'box-shadow:0 8px 24px rgba(0,0,0,.5)';
 		var h = document.createElement('h1');
 		h.textContent = reason === 'timeout' ? 'Rotor is taking long to start' : reason === 'offline' ? 'You’re offline' : 'Rotor couldn’t start';
-		h.style.cssText = 'font-size:22px;margin:0';
+		h.style.cssText = blocking ? 'font-size:22px;margin:0' : 'font-size:15px;margin:0';
 		var p = document.createElement('p');
 		p.textContent =
 			reason === 'timeout'
@@ -97,7 +118,7 @@
 				: reason === 'offline'
 					? 'Rotor needs the network to load this page. Reload once you’re back online.'
 					: 'Probably a new version was deployed while an old one was cached on this device.';
-		p.style.cssText = 'margin:0;color:#B4B4BF;max-width:34ch';
+		p.style.cssText = 'margin:0;color:#B4B4BF;max-width:34ch' + (blocking ? '' : ';display:none');
 		var row = document.createElement('div');
 		row.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;justify-content:center';
 		row.appendChild(button('Reload', 'data-rotor-reload', true));
@@ -118,8 +139,14 @@
 		return b;
 	}
 
+	function hidePanel() {
+		if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+		panel = null;
+	}
+
 	function fail(reason) {
 		if (started) return;
+		if (panel && panel.getAttribute('data-reason') === 'timeout') hidePanel(); // a real failure replaces the slow-start bar
 		// Offline: resetting would throw away the offline copy. Show the panel; Reload works once back online.
 		if (navigator.onLine === false) return showPanel('offline');
 		// One automatic reset per minute; after that, show the panel instead of looping.
@@ -128,10 +155,14 @@
 	}
 
 	window.__rotorBoot = {
+		shellLoaded: function () {
+			shell = true;
+			if (panel && panel.getAttribute('data-reason') === 'timeout') hidePanel();
+		},
 		booted: function () {
 			started = true;
-			if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
-			panel = null;
+			shell = true;
+			hidePanel();
 			if (/[?&]rotor-reset=/.test(location.search)) {
 				try {
 					history.replaceState(history.state, '', cleanUrl(0));
@@ -140,6 +171,9 @@
 		},
 		isBooted: function () {
 			return started;
+		},
+		isShellLoaded: function () {
+			return shell;
 		},
 		reset: reset,
 		lastReason: null
@@ -165,10 +199,10 @@
 	window.addEventListener('vite:preloadError', function () {
 		fail('preload');
 	});
-	// 3. Nothing failed loudly, but the app never started: show the panel (no automatic reset —
-	//    a slow network isn't a broken cache).
+	// 3. Nothing failed loudly, but the entry modules never even ran: tell the user (no automatic
+	//    reset: a slow network isn't a broken cache). Never once the shell is up (see shellLoaded).
 	setTimeout(function () {
-		if (!started) showPanel('timeout');
+		if (!started && !shell) showPanel('timeout', !hasContent());
 	}, BOOT_MS);
 	// Buttons on the panel and on the error pages.
 	document.addEventListener('click', function (e) {

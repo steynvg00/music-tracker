@@ -166,6 +166,8 @@ test.describe('v0.83.1 hotfix', () => {
 	};
 	const version = (page: Page) => page.evaluate(async () => (await (await fetch('/_app/version.json', { cache: 'no-store' })).json()).version as string);
 	const booted = (page: Page) => page.evaluate(() => (window as unknown as { __rotorBoot?: { isBooted: () => boolean } }).__rotorBoot?.isBooted() ?? false);
+	const shellLoaded = (page: Page) =>
+		page.evaluate(() => (window as unknown as { __rotorBoot?: { isShellLoaded?: () => boolean } }).__rotorBoot?.isShellLoaded?.() ?? false);
 
 	// The three releases that reached production before this fix, each with its own worker.
 	for (const ref of ['v0.81-hub-remote-and-daily-pick', 'v0.82-hub-playlists-and-rules', 'v0.83-hub-stats-parity']) {
@@ -237,7 +239,7 @@ test.describe('v0.83.1 hotfix', () => {
 		errors.splice(0); // the deliberate 404 import failures
 	});
 
-	test('HF-5 a hung start shows the panel after 15 s; the app replaces it once it starts @laptop', async ({ page }) => {
+	test('HF-5 entry modules hung > 20 s on a server-rendered page: a small bar (page stays readable), gone once it starts @laptop', async ({ page }) => {
 		test.setTimeout(90_000);
 		let release!: () => void;
 		const gate = new Promise<void>((ok) => (release = ok));
@@ -246,11 +248,61 @@ test.describe('v0.83.1 hotfix', () => {
 			await route.continue();
 		});
 		await page.goto('/home', { waitUntil: 'commit' });
-		await expect(page.locator('#rotor-boot-panel')).toHaveAttribute('data-reason', 'timeout', { timeout: 25_000 });
-		await expect(page.getByRole('heading', { name: 'Rotor is taking long to start' })).toBeVisible();
+		const bar = page.locator('#rotor-boot-panel');
+		await expect(bar).toHaveAttribute('data-reason', 'timeout', { timeout: 30_000 });
+		await expect(bar).toHaveAttribute('data-mode', 'bar');
+		await expect(bar.getByText('Rotor is taking long to start')).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Your week' })).toBeVisible(); // the SSR page is not covered
+		const covered = await page.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 3)?.closest('#rotor-boot-panel') !== null);
+		expect(covered).toBe(false);
 		release();
-		await expect(page.getByText(/Today's pick · \d+ of \d+/)).toBeVisible({ timeout: 30_000 });
+		await expect.poll(() => booted(page), { timeout: 30_000 }).toBe(true);
+		await expect(bar).toHaveCount(0);
+	});
+
+	test('HF-5b nothing rendered and nothing starting: the full panel (never a dark empty page) @laptop', async ({ page }) => {
+		test.setTimeout(60_000);
+		await page.route('**/rotor-empty-shell-test', (route) =>
+			route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html><head><script src="/boot-guard.js"></script><script type="module" src="/_app/hangs-forever.js"></script></head><body style="background:#0B0B0E"></body></html>' })
+		);
+		await page.route('**/_app/hangs-forever.js', () => new Promise(() => undefined));
+		await page.goto('/rotor-empty-shell-test', { waitUntil: 'commit' });
+		await expect(page.locator('#rotor-boot-panel')).toHaveAttribute('data-mode', 'panel', { timeout: 30_000 });
+		await expect(page.getByRole('heading', { name: 'Rotor is taking long to start' })).toBeVisible();
+	});
+
+	test('HB-1 v0.83.2: shell fine, but data and route chunks slow (cold function / first worker install): no bar, no panel @mobile', async ({ page }) => {
+		test.setTimeout(120_000);
+		// Everything the app needs AFTER its entry modules: route chunks and its data. 25 s each,
+		// longer than the guard's timer (v0.83.1 showed its full-screen panel here, over a
+		// working server-rendered page, and hydration never seemed to finish).
+		let release!: () => void;
+		const gate = new Promise<void>((ok) => (release = ok));
+		const slow = async (route: import('@playwright/test').Route) => {
+			await gate;
+			await route.continue();
+		};
+		await page.route('**/_app/immutable/nodes/*.js', slow);
+		await page.route('**/api/home', slow);
+		await page.goto('/home', { waitUntil: 'commit' });
+		await expect(page.getByRole('heading', { name: 'Your week' })).toBeVisible(); // server-rendered, readable
+		await page.waitForTimeout(25_000); // past the guard's timer (v0.83.1: 15 s, now 20 s)
 		await expect(page.locator('#rotor-boot-panel')).toHaveCount(0);
+		expect(await shellLoaded(page)).toBe(true); // the entry modules ran: the shell is fine…
+		expect(await booted(page)).toBe(false); // …it is really still waiting for its data
+		release();
+		await expect.poll(() => booted(page), { timeout: 30_000 }).toBe(true);
+		await expect(page.locator('#rotor-boot-panel')).toHaveCount(0);
+	});
+
+	test('HB-2 the first service-worker install on a fresh device never triggers the guard @mobile', async ({ page }) => {
+		await page.goto('/home');
+		await page.waitForFunction(async () => !!(await navigator.serviceWorker.getRegistration())?.active, null, { timeout: 30_000 });
+		await expect.poll(() => booted(page), { timeout: 30_000 }).toBe(true);
+		await page.reload(); // now controlled by the just-installed worker
+		await expect.poll(() => booted(page), { timeout: 30_000 }).toBe(true);
+		await expect(page.locator('#rotor-boot-panel')).toHaveCount(0);
+		expect(await page.evaluate(() => sessionStorage.getItem('rotor-boot-reset'))).toBeNull(); // no reset happened
 	});
 
 	test('HF-6 error pages are visible pages with a way out @both', async ({ page }) => {
