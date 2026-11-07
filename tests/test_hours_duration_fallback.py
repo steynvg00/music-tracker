@@ -3,14 +3,9 @@
 Plays from the recently-played API have ms_played = NULL. Before 0026 every hours/ms rollup summed
 ms_played as-is, so a month of API plays read "0 h". These tests run against a throwaway
 Postgres 16 (initdb in a temp dir; never the real database) with every migration in
-migrations/ applied in number order, and are skipped when no Postgres 16+ binaries are found.
-Set PG_BIN to point at them explicitly.
+migrations/ applied in number order (the session fixture pg_url in conftest.py), and are
+skipped when no Postgres 16+ binaries are found. Set PG_BIN to point at them explicitly.
 """
-import os
-import re
-import shutil
-import socket
-import subprocess
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,51 +20,9 @@ AMS = ZoneInfo("Europe/Amsterdam")
 DUR_A, DUR_C = 200_000, 180_000
 
 
-def _pg_bin() -> Path | None:
-    candidates = [os.environ.get("PG_BIN"), "/usr/local/opt/postgresql@16/bin", "/opt/homebrew/opt/postgresql@16/bin"]
-    candidates += sorted((str(p) for p in Path("/usr/lib/postgresql").glob("*/bin")), reverse=True)
-    for c in candidates:
-        if not c or not (Path(c) / "initdb").exists():
-            continue
-        out = subprocess.run([str(Path(c) / "initdb"), "--version"], capture_output=True, text=True).stdout
-        m = re.search(r"(\d+)", out)
-        if m and int(m.group(1)) >= 16:
-            return Path(c)
-    return None
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def db(tmp_path_factory):
-    pg_bin = _pg_bin()
-    if pg_bin is None:
-        pytest.skip("no Postgres 16+ binaries (brew install postgresql@16, or set PG_BIN)")
-    data = tmp_path_factory.mktemp("pg") / "data"
-    port = _free_port()
-    env = {**os.environ, "LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
-    subprocess.run([pg_bin / "initdb", "-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C",
-                    "-c", "timezone=UTC"], check=True, capture_output=True, env=env)
-    subprocess.run([pg_bin / "pg_ctl", "-D", data, "-o", f"-p {port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=''",
-                    "-l", data.parent / "pg.log", "-w", "start"], check=True, capture_output=True, env=env)
-    url = f"postgresql://postgres@127.0.0.1:{port}/postgres"
-    try:
-        with psycopg.connect(url, autocommit=True) as conn:
-            for f in sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")):
-                conn.execute(f.read_text())
-        yield url
-    finally:
-        subprocess.run([pg_bin / "pg_ctl", "-D", data, "-m", "fast", "stop"], capture_output=True, env=env)
-        shutil.rmtree(data, ignore_errors=True)
-
-
 @pytest.fixture
-def conn(db):
-    with psycopg.connect(db, autocommit=True) as c:
+def conn(pg_url):
+    with psycopg.connect(pg_url, autocommit=True) as c:
         c.execute("TRUNCATE spotify_plays, track_metadata RESTART IDENTITY CASCADE")
         yield c
 

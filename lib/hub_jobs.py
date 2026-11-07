@@ -11,11 +11,13 @@ Lifecycle of a hub_jobs row (migration 0022):
     sweep_stale()          queued > 15 min or running > 30 min → failed
 
 Kinds: reseed_daily_pick ("Shuffle the deck"), refresh_managed ("Refresh this playlist
-now" / snapshot rebuild), push_test ("Send a test notification").
+now" / snapshot rebuild), push_test ("Send a test notification"), wrapped_build (v0.86:
+"Build" a past year in Stats › Wrapped; DB only).
 
 The daily run (run_daily) sweeps stale jobs, rebuilds snapshots with a pending
 force-refresh request, sends "Today's pick is ready" and token-expiry notifications,
-re-exports the rules catalog and (v0.84) refreshes Elsewhere metadata within 30 days.
+re-exports the rules catalog, (v0.84) refreshes Elsewhere metadata within 30 days and
+(v0.86) freezes last year's Rotor Wrapped when it is missing (so on 1 January).
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from typing import Callable
 from lib import daily_picks, web_push
 from lib.playlist_mirror import managed_kind
 
-KINDS = ("reseed_daily_pick", "refresh_managed", "push_test")
+KINDS = ("reseed_daily_pick", "refresh_managed", "push_test", "wrapped_build")
 STALE_QUEUED = timedelta(minutes=15)
 STALE_RUNNING = timedelta(minutes=30)
 TOKEN_NOTICE_DAYS = (14, 3)
@@ -149,10 +151,21 @@ def _push_test(conn, payload: dict, ctx: dict) -> dict:
     return {"delivered": n}
 
 
+def _wrapped_build(conn, payload: dict, ctx: dict) -> dict:
+    from lib import wrapped
+
+    try:
+        year = wrapped.valid_year(payload.get("year"), daily_picks.today_local())
+    except wrapped.WrappedError as e:
+        raise JobError(str(e)) from None
+    return wrapped.freeze(conn, year, "job")
+
+
 HANDLERS: dict[str, Callable[[object, dict, dict], dict]] = {
     "reseed_daily_pick": _reseed,
     "refresh_managed": _refresh,
     "push_test": _push_test,
+    "wrapped_build": _wrapped_build,
 }
 
 
@@ -162,6 +175,9 @@ def _finished_message(job: Job, ok: bool, result: dict | None, error: str | None
         return None
     if not ok:
         return (f"A Rotor job failed: {error}", "/settings")
+    if job.kind == "wrapped_build":
+        year = (result or {}).get("year")
+        return (f"Your Rotor Wrapped {year} is ready", f"/wrapped/{year}")
     if job.kind == "reseed_daily_pick":
         added = (result or {}).get("added", 0)
         return ((f"{added} fresh picks are ready" if added else "No new picks could be mixed today"), "/home")
@@ -323,4 +339,13 @@ def run_daily(conn, *, sp_factory: Callable, push=web_push.send, today: date | N
             return "skipped: migration 0024 not applied"
 
     step("collections", collections)
+
+    def wrapped():
+        # v0.86 (R6): freeze last year's Rotor Wrapped on 1 January (or the first run after it
+        # that finds it missing). A no-op before migration 0027.
+        from lib import wrapped as w
+
+        return w.daily_step(conn, today, push)
+
+    step("wrapped", wrapped)
     return summary

@@ -200,3 +200,45 @@ Connections (Spotify: authorized on, expires on, **Reconnect**; YouTube API key 
 | Quota exceeded | `429 QUOTA_EXCEEDED` | Amber pill "Spotify is rate-limiting Rotor — updates slowed" | none (automatic back-off) |
 
 The pending-intent pattern is the key detail: the user expresses *what* to play once, and Rotor finishes it as soon as a device appears. They never tap Play twice.
+
+## 9. Rotor Wrapped (R6)
+
+A story, not a dashboard: one idea per screen, big numbers, then the long lists on demand.
+
+- **Entry:** Stats › **Wrapped** (always) shows a year picker: 2017 → this year. Each year is *Frozen* (built, never changes), *Build* (a past year without a snapshot; runs a job), or *So far* (this year, live). Home shows one Wrapped card from **1 December to 31 January**: in December it opens *so far*, in January last year's frozen story.
+- **Story player:** fullscreen over everything (no tab bar, no mini-player). A segmented progress bar sits at the top, one segment per card, and each card advances after ~7 s.
+  - **iPhone:** tap the right ⅔ for next, the left ⅓ for back; swipe left/right does the same, swipe down closes. **Hold pauses**; release resumes.
+  - **Laptop:** ← / → step, Space pauses, Esc closes.
+  - Reduced motion: no auto-advance and no animated counters.
+- **Cards** (skipped when there's no data):
+  1. Intro
+  2. Plays + hours. "≈" marks hours that partly come from track lengths (API plays have no `ms_played`).
+  3. Top artist, then top 5
+  4. Top track, then top 5
+  5. Discoveries
+  6. Comebacks
+  7. Listening clock (7 × 24)
+  8. Streak + biggest day
+  9. Favourite month
+  10. Badges earned
+  11. Year over year
+  12. Outro: top 100 lists, **Play your top 100**, **Save image**
+- **Save / share:** every card is drawn as an SVG, so "Save image" renders exactly what you see to a 1080 × 1920 PNG on the device. iPhone uses the share sheet (Save to Photos); the laptop downloads the file. No Spotify logo, no Spotify Wrapped wording or artwork: the brand on the card is the Rotor mark + "Rotor Wrapped ‹year›".
+- **Look:** Rotor's own palette, with one deep gradient per card from the violet/cyan/amber data colours over `--bg`. Album art never appears inside the generated images (artwork rules, `01-feasibility.md` §0.4); the story uses type and data shapes only.
+
+## 10. Release radar (R7)
+
+- **Entry:** Library › **Release radar** row and Home's compact **Coming up** shelf: the next 5 announced releases, each with date, artist and title, and a status chip.
+- **Screen:** two segments.
+  - **Coming up** is grouped by date, soonest first.
+  - **Recently out** covers the last 60 days, newest first.
+  - Filters: an artist filter chip row (artists with releases), plus "Followed only".
+- **Release row:** artist · title · type/label, a date, source badges (Spotify / MusicBrainz / Scantraxx), and a status chip:
+  - **Announced** (amber)
+  - **Out** (violet)
+  - **In your library** (check)
+
+  Tapping a row opens it in Spotify when it's on Spotify, otherwise the source page.
+- **Source health:** a footer with one line per source: "last success 06:48 · 212 artists" or "failing since 3 Nov: HTTP 503". A source failing 3 runs in a row also sends one push.
+- **Follow in Rotor:** a toggle on every artist page. It adds the artist to the radar even when they're outside your top 200. It doesn't follow anyone on Spotify.
+- **Playlist:** "Update `New from your artists · Auto 🤖🔄`" writes the Spotify releases of the last 14 days through the write guard. It's never automatic from the browser.

@@ -453,6 +453,7 @@ export const STATS_SECTIONS = [
 	{ key: 'top', href: '/stats/top', label: 'Top' },
 	{ key: 'patterns', href: '/stats/patterns', label: 'Patterns' },
 	{ key: 'year', href: '/stats/year', label: 'Year in review' },
+	{ key: 'wrapped', href: '/stats/wrapped', label: 'Wrapped' },
 	{ key: 'records', href: '/stats/records', label: 'Records' },
 	{ key: 'behaviour', href: '/stats/behaviour', label: 'Behaviour' },
 	{ key: 'compare', href: '/stats/compare', label: 'Compare' },

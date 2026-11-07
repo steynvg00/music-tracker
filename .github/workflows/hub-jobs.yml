@@ -7,12 +7,15 @@ name: Hub jobs
 #   refresh_managed    "Refresh this playlist now" / Rebuild (writes ONE Auto playlist,
 #                      after a live owner + ' · Auto' suffix check, lib/managed_refresh.py)
 #   push_test          "Send a test notification"
+#   wrapped_build      v0.86: "Build" a past year in Stats › Wrapped (freezes one Rotor Wrapped
+#                      snapshot; DB only, no Spotify)
 # scripts/run_hub_job.py claims the row atomically (queued → running), so a duplicate
 # dispatch does nothing, and reports done/failed back to the row.
 #
 # Daily (schedule, or "Run workflow" with an empty job_id): stale-job sweep, pending
 # snapshot rebuilds, "Today's pick is ready" + token-expiry notifications, rules catalog,
-# and (v0.84) the Elsewhere metadata refresh (YouTube data refreshed or deleted within 30 days).
+# (v0.84) the Elsewhere metadata refresh (YouTube data refreshed or deleted within 30 days), and
+# (v0.86) last year's Rotor Wrapped snapshot when it is missing (so on 1 January) + one push.
 #
 # Deliberately NOT a job in scheduled-ingest.yml: every job there also runs on
 # workflow_dispatch. Listed in keepalive.yml because the daily schedule makes it a

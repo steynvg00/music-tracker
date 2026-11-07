@@ -30,7 +30,9 @@ import { ui } from './ui.svelte';
 
 export type PendingIntent =
 	| { type: 'play'; body: PlayBody; label: string }
-	| { type: 'daily'; date: string; rank: number; offset?: number; label: string };
+	| { type: 'daily'; date: string; rank: number; offset?: number; label: string }
+	/** R6: "Play your top 100" — the server rewrites "Wrapped <year> · Auto 🤖📸" (write guard), then plays it. */
+	| { type: 'wrapped'; year: number; label: string };
 
 type WakeState = 'idle' | 'waiting' | 'timeout';
 
@@ -366,6 +368,10 @@ export class PlayerStore {
 		return this.play({ type: 'daily', date, rank, label, ...(offset ? { offset } : {}) });
 	}
 
+	playWrapped(year: number, label: string): Promise<boolean> {
+		return this.play({ type: 'wrapped', year, label });
+	}
+
 	async #execute(intent: PendingIntent, deviceId: string): Promise<boolean> {
 		const now = performance.now();
 		this.overlay = overlays.playPause(true, now);
@@ -373,6 +379,9 @@ export class PlayerStore {
 			let contextUri: string | null = intent.type === 'play' ? (intent.body.context_uri ?? null) : null;
 			if (intent.type === 'play') {
 				await apiPost('/api/player/play', { ...intent.body, device_id: deviceId });
+			} else if (intent.type === 'wrapped') {
+				const r = await apiPost<{ contextUri: string }>(`/api/wrapped/${intent.year}/play`, { device_id: deviceId });
+				contextUri = r.contextUri;
 			} else {
 				const r = await apiPost<{ contextUri: string }>('/api/daily/play', {
 					date: intent.date,
