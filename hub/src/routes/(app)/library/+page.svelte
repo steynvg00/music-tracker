@@ -94,6 +94,7 @@
 		<button class="btn pri" onclick={() => customSheet.openCreate()}><Icon name="plus" size={18} /> New custom playlist</button>
 		<a class="btn sec" href="/rules">Rules</a>
 		<a class="btn sec" href="/radar">Release radar</a>
+		<a class="btn sec" href="/digest">This week</a>
 	</div>
 	<div class="chips" role="group" aria-label="Filter">
 		{#each CHIPS as c (c)}
@@ -108,17 +109,20 @@
 		<span class="cap muted">{visible.length} playlists</span>
 	</div>
 
-	{#if !library.loaded && library.loading}
-		{#each [1, 2, 3, 4, 5, 6] as i (i)}<div class="skelrow"><div class="skel" style="width:56px;height:56px"></div><div class="skel" style="height:14px;width:50%"></div></div>{/each}
-	{:else if library.error}
+	{#if showLiked && !library.error}
+		<button class="liked" onclick={() => (player.view.context?.uri === likedUri ? player.togglePlay() : player.playContext(likedUri, 'Liked Songs'))}>
+			<span class="art s heart"><Icon name="play" size={22} /></span>
+			<span class="grow"><b>Liked Songs</b><span class="cap">Tap to play · read & play</span></span>
+		</button>
+	{/if}
+	{#if library.error}
 		<p class="notice">{library.error}</p>
+	{:else if !library.loaded}
+		<!-- R8: skeleton rows from the first (server) render until the list arrives: no "Nothing here" flash, no jump. -->
+		<div class="list" data-testid="skeleton" aria-busy="true" aria-label="Loading playlists">
+			{#each [1, 2, 3, 4, 5, 6, 7, 8] as i (i)}<div class="skelrow"><div class="skel" style="width:56px;height:56px;flex:none"></div><div class="skelt"><div class="skel" style="height:14px;width:55%"></div><div class="skel" style="height:12px;width:35%"></div></div></div>{/each}
+		</div>
 	{:else}
-		{#if showLiked}
-			<button class="liked" onclick={() => (player.view.context?.uri === likedUri ? player.togglePlay() : player.playContext(likedUri, 'Liked Songs'))}>
-				<span class="art s heart"><Icon name="play" size={22} /></span>
-				<span class="grow"><b>Liked Songs</b><span class="cap">Tap to play · read & play</span></span>
-			</button>
-		{/if}
 		{#if grouped}
 			{#each grouped as g (g.key)}
 				<section class="group">
@@ -234,11 +238,19 @@
 	.ghead a {
 		text-decoration: underline;
 	}
+	/* Same box as a LibraryRowItem row (min-height 64px, 4px 8px padding, 12px gap). */
 	.skelrow {
 		display: flex;
 		align-items: center;
 		gap: 12px;
-		margin: 8px 0;
+		min-height: 64px;
+		padding: 4px 8px;
+	}
+	.skelt {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
 	}
 	.empty {
 		margin-top: 24px;

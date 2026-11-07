@@ -7,13 +7,12 @@
 	import Shortcut from '$lib/components/Shortcut.svelte';
 	import StatTile from '$lib/components/StatTile.svelte';
 	import { daily } from '$lib/stores/daily.svelte';
-	import { media } from '$lib/stores/media.svelte';
 	import { delta, fmtDate, fmtInt, greeting } from '$lib/shared/format';
 	import { artistHref, badgeIcon, badgeLabel, describeBadge, trackHref } from '$lib/shared/stats';
 	import { player } from '$lib/stores/player.svelte';
 	import type { HomePayload } from '$lib/shared/daily-types';
-	import { homeWrappedCard } from '$lib/shared/wrapped';
 	import { radarDate } from '$lib/shared/radar';
+	import { homeWrappedCard } from '$lib/shared/wrapped';
 
 	let { data } = $props();
 	let fresh = $state<HomePayload | null>(null);
@@ -23,12 +22,16 @@
 		daily.set(home?.daily ?? null);
 	});
 
-	// R6: Rotor Wrapped card, 1 Dec → 31 Jan, from this device's Amsterdam date (set after
-	// hydration, so the server and the browser never disagree about the date mid-render).
-	let wrappedCard = $state<{ year: number; mode: 'so_far' | 'frozen' } | null>(null);
+	// R6: Rotor Wrapped card, 1 Dec → 31 Jan (Amsterdam date). R8: decided in +page.ts, so it is
+	// in the server-rendered page (no late insert, no layout shift). After mount the device's own
+	// date is checked once; it only differs when this device's clock disagrees with the server's.
+	type Card = ReturnType<typeof homeWrappedCard>;
+	let deviceCard = $state<Card | undefined>(undefined);
+	const wrappedCard = $derived(deviceCard === undefined ? data.wrappedCard : deviceCard);
 
 	onMount(() => {
-		wrappedCard = homeWrappedCard(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
+		const mine = homeWrappedCard(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()));
+		if (JSON.stringify(mine) !== JSON.stringify(data.wrappedCard)) deviceCard = mine;
 		// Opened from the service worker's cache: show it, then swap in fresh data.
 		if (data.stale) {
 			fetch('/api/home', { cache: 'no-store' })
@@ -60,7 +63,7 @@
 	{#if data.error && !home}
 		<p class="notice">Rotor couldn't load Home ({data.error}). Check that migrations 0019–0021 are applied and the database connection is configured.</p>
 	{/if}
-	<Hero wide={media.laptop} />
+	<Hero initial={home?.daily ?? null} />
 
 	{#if home?.shortcuts.length}
 		<div class="shortcuts">

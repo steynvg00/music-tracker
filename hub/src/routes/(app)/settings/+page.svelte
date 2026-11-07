@@ -165,12 +165,13 @@
 	</section>
 
 	<section class="section">
-		<div class="sec-h"><h2>Data health</h2></div>
+		<div class="sec-h"><h2>Data health</h2><a class="cap" href="/settings/health" data-testid="open-health">Open Data health ›</a></div>
 		<dl>
 			<dt>Last play ingested</dt><dd>{fmtDate(data.lastPlayAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</dd>
 			<dt>Playlist mirror</dt><dd>{data.mirrorAgeMin === null ? 'empty' : `updated ${data.mirrorAgeMin} min ago`}</dd>
 			<dt>Hub jobs</dt><dd>{data.reseedAvailable ? 'on (GitHub dispatch)' : 'off: no GitHub dispatch token'}</dd>
 		</dl>
+		<p class="cap muted">Every source, cron auto-disable dates, enrichment, rollups, database size, tokens, radar and phantom plays are on the Data health page. The Monday digest is in <a href="/digest">This week</a>.</p>
 	</section>
 
 	<section class="section">

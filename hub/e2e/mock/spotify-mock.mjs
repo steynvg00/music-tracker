@@ -284,6 +284,29 @@ export function createMock(stateFile) {
 		return html ? { status: 200, body: html, html: true } : { status: 404, body: '<h1>Not found</h1>', html: true };
 	}
 
+	/**
+	 * R8 Data health: read-only GitHub REST (repo, workflows, runs). `state.github` overrides the
+	 * defaults per test: { status, pushedAt, private, states: {file: state}, runs: {file: [run]} }.
+	 */
+	function githubRead(path) {
+		const gh = state.github ?? {};
+		if (gh.status && gh.status !== 200) return err(gh.status, 'Bad credentials');
+		const day = 86_400_000;
+		const at = (d) => new Date(Date.now() - d * day).toISOString();
+		const files = ['scheduled-ingest.yml', 'hub-jobs.yml', 'ingest-monitor.yml', 'keepalive.yml', 'ci.yml'];
+		if (/^\/repos\/[^/]+\/[^/]+$/.test(path)) return ok({ pushed_at: gh.pushedAt ?? at(40), private: gh.private ?? false });
+		if (/^\/repos\/[^/]+\/[^/]+\/actions\/workflows$/.test(path))
+			return ok({ total_count: files.length, workflows: files.map((f, i) => ({ id: i + 1, path: `.github/workflows/${f}`, state: gh.states?.[f] ?? 'active' })) });
+		const m = /^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/([\w.-]+)\/runs$/.exec(path);
+		if (m) {
+			const def = m[1] === 'keepalive.yml'
+				? [{ created_at: at(5), updated_at: at(5), conclusion: 'success', status: 'completed', event: 'schedule', html_url: 'https://github.com/e2e/runs/2' }]
+				: [{ created_at: at(0.01), updated_at: at(0.01), conclusion: 'success', status: 'completed', event: 'schedule', html_url: 'https://github.com/e2e/runs/1' }];
+			return ok({ total_count: 1, workflow_runs: gh.runs?.[m[1]] ?? def });
+		}
+		return err(404, 'E2E mock: unknown GitHub call');
+	}
+
 	/** One external request → mocked response. `who` = 'hub' | 'python'. */
 	function handle({ method, url, body, who = 'hub', headers = {} }) {
 		const u = new URL(url);
@@ -308,7 +331,8 @@ export function createMock(stateFile) {
 				state.dispatches.push({ workflow: m[1], inputs: body?.inputs ?? {}, ref: body?.ref });
 				for (const l of listeners.dispatch) l(m[1], body?.inputs ?? {});
 				res = { status: 204 };
-			} else res = err(404, 'E2E mock: unknown GitHub call');
+			} else if (method === 'GET') res = githubRead(u.pathname);
+			else res = err(404, 'E2E mock: unknown GitHub call');
 		} else {
 			res = { status: 599, body: { error: 'E2E: blocked external host' }, blocked: true };
 		}

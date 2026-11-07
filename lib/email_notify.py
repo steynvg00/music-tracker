@@ -824,7 +824,22 @@ def send_digest(
     if not collector.has_events():
         return False
 
-    events = collector.events
+    # v0.88: keep the digest as data for Rotor's "This week" page before mailing, so it
+    # survives a mail failure. Best-effort: never changes what happens to the mail.
+    from lib.digest_store import mark_delivery, record_digest
+
+    digest_id = record_digest(conn, collector.events, run_type)
+    try:
+        sent = _send_digest_mail(collector.events, conn, run_type)
+    except Exception as e:
+        mark_delivery(conn, digest_id, "mail_failed", f"{type(e).__name__}: {e}")
+        raise
+    mark_delivery(conn, digest_id, "mail_dry_run" if os.environ.get("MUSIC_TRACKER_EMAIL_DRY_RUN") == "1" else ("mail_sent" if sent else "mail_failed"))
+    return sent
+
+
+def _send_digest_mail(events: list[PlaylistEvent], conn, run_type: Literal["weekly", "monthly", "sweep"]) -> bool:
+    """The digest mail itself (unchanged since v0.72; split out of send_digest in v0.88)."""
     html_body = build_html_digest(events, run_type, conn)
     text_body = build_plaintext_digest(events, run_type, conn)
 
