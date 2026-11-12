@@ -3,6 +3,11 @@
 	import Header from '$lib/components/Header.svelte';
 	import Collections from '$lib/components/elsewhere/Collections.svelte';
 	import type { Source } from '$lib/shared/elsewhere';
+	import { mixesEnabled } from '$lib/conductor/opt-in';
+	let mixes = $state(false);
+	$effect(() => {
+		mixes = mixesEnabled();
+	});
 	/** Elsewhere: YouTube + SoundCloud, a separate room from Spotify (03-ux-ia.md §3). */
 	const source = $derived<Source>(page.url.searchParams.get('source') === 'soundcloud' ? 'soundcloud' : 'youtube');
 </script>
@@ -14,6 +19,7 @@
 	<nav class="seg" aria-label="Source">
 		<a href="?source=youtube" aria-current={source === 'youtube' ? 'page' : undefined} class:on={source === 'youtube'}>YouTube</a>
 		<a href="?source=soundcloud" aria-current={source === 'soundcloud' ? 'page' : undefined} class:on={source === 'soundcloud'}>SoundCloud</a>
+		{#if mixes}<a href="/elsewhere/mix">Mixes</a>{/if}
 	</nav>
 	{#key source}<Collections {source} />{/key}
 </div>

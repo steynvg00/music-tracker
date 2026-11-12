@@ -11,8 +11,9 @@ Lifecycle of a hub_jobs row (migration 0022):
     sweep_stale()          queued > 15 min or running > 30 min → failed
 
 Kinds: reseed_daily_pick ("Shuffle the deck"), refresh_managed ("Refresh this playlist
-now" / snapshot rebuild), push_test ("Send a test notification"), wrapped_build (v0.86:
-"Build" a past year in Stats › Wrapped; DB only).
+now" / snapshot rebuild), push_test ("Send a test notification"), mix_relay (v0.85: iPhone
+relay push at the end of a mixed session's Spotify part), wrapped_build (v0.86: "Build" a past
+year in Stats › Wrapped; DB only).
 
 The daily run (run_daily) sweeps stale jobs, rebuilds snapshots with a pending
 force-refresh request, sends "Today's pick is ready" and token-expiry notifications,
@@ -34,7 +35,7 @@ from typing import Callable
 from lib import notify, daily_picks, web_push
 from lib.playlist_mirror import managed_kind
 
-KINDS = ("reseed_daily_pick", "refresh_managed", "push_test", "wrapped_build")
+KINDS = ("reseed_daily_pick", "refresh_managed", "push_test", "mix_relay", "wrapped_build")
 STALE_QUEUED = timedelta(minutes=15)
 STALE_RUNNING = timedelta(minutes=30)
 TOKEN_NOTICE_DAYS = (14, 3)
@@ -158,6 +159,13 @@ def _push_test(conn, payload: dict, ctx: dict) -> dict:
     return {"delivered": n}
 
 
+def _mix_relay(conn, payload: dict, ctx: dict) -> dict:
+    # v0.85 (R5): iPhone relay mode for mixed sessions (lib/mix_relay.py).
+    from lib.mix_relay import relay
+
+    return relay(conn, payload, ctx)
+
+
 def _wrapped_build(conn, payload: dict, ctx: dict) -> dict:
     from lib import wrapped
 
@@ -172,14 +180,15 @@ HANDLERS: dict[str, Callable[[object, dict, dict], dict]] = {
     "reseed_daily_pick": _reseed,
     "refresh_managed": _refresh,
     "push_test": _push_test,
+    "mix_relay": _mix_relay,
     "wrapped_build": _wrapped_build,
 }
 
 
 def _finished_message(job: Job, ok: bool, result: dict | None, error: str | None) -> tuple[str, str] | None:
     """(body, url) for the 'job finished' notification, or None for kinds that don't notify."""
-    if job.kind == "push_test":
-        return None
+    if job.kind in ("push_test", "mix_relay"):
+        return None  # these send their own notification (or none)
     if not ok:
         return (f"A Rotor job failed: {error}", "/settings")
     if job.kind == "wrapped_build":

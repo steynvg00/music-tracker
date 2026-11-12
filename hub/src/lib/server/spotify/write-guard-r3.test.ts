@@ -98,7 +98,15 @@ describe('bypass scan covers R3 modules', () => {
 			'routes/api/collections/+server.ts',
 			'routes/api/collections/[id]/+server.ts',
 			'routes/api/collections/[id]/flags/+server.ts',
-			'routes/(app)/elsewhere/[id]/+page.svelte'
+			'routes/(app)/elsewhere/[id]/+page.svelte',
+			// R5 (mixed sessions): playback only, never a playlist write.
+			'lib/server/mixes.ts',
+			'lib/conductor/machine.ts',
+			'lib/conductor/conductor.svelte.ts',
+			'routes/api/mixes/+server.ts',
+			'routes/api/mixes/[id]/+server.ts',
+			'routes/api/mix-sessions/[sid]/relay/+server.ts',
+			'routes/(app)/elsewhere/mix/[id]/+page.svelte'
 		]) {
 			expect(scanned).toContain(f);
 		}
