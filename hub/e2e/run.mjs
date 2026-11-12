@@ -60,7 +60,12 @@ process.on('SIGINT', () => process.exit(130));
 
 try {
 	sh(pg('createdb'), ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', 'rotor_e2e']);
-	const migrations = readdirSync(join(REPO, 'migrations')).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
+	// v0.92: 0025 (R5, not on main) and 0033 (the manual scrobbles drop, applied by hand after an archive)
+	// are skipped, like production; V090-13 still runs 0033 itself against its own archive.
+	const SKIP = new Set((process.env.E2E_SKIP_MIGRATIONS ?? '25,33').split(',').filter(Boolean).map(Number));
+	const migrations = readdirSync(join(REPO, 'migrations'))
+		.filter((f) => /^\d{4}_.*\.sql$/.test(f) && !SKIP.has(Number(f.slice(0, 4))))
+		.sort();
 	// 0033 (drop scrobbles) refuses without the archive's row count; the throwaway DB's scrobbles is empty.
 	const apply = (f) =>
 		sh(pg('psql'), ['-q', '-v', 'ON_ERROR_STOP=1', '-d', DB, '-f', join(REPO, 'migrations', f)], {
@@ -71,7 +76,7 @@ try {
 	const after = migrations.filter((f) => Number(f.slice(0, 4)) > 22 && Number(f.slice(0, 4)) <= MAX_MIGRATION);
 	for (const f of before) apply(f);
 	console.log(`[e2e] applied ${before.length} migrations up to ${before.at(-1)}`);
-	sh('uv', ['run', '--no-sync', 'python', 'hub/e2e/seed.py', '--db', DB, '--state', join(OUT, 'spotify-state.json'), '--plays', process.env.E2E_PLAYS ?? '30000'], { cwd: REPO });
+	sh('uv', ['run', '--no-sync', 'python', 'hub/e2e/seed.py', '--db', DB, '--state', join(OUT, 'spotify-state.json'), '--plays', process.env.E2E_PLAYS ?? '30000', '--scale', process.env.E2E_SCALE ?? 'e2e'], { cwd: REPO });
 	for (const f of after) {
 		const t = Date.now();
 		apply(f);

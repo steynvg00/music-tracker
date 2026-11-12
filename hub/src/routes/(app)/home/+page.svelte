@@ -16,7 +16,7 @@
 
 	let { data } = $props();
 	let fresh = $state<HomePayload | null>(null);
-	const home = $derived(fresh ?? data.home);
+	const home = $derived(fresh ?? data.r?.data ?? data.home);
 
 	$effect.pre(() => {
 		daily.set(home?.daily ?? null);

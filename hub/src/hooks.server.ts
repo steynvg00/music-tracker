@@ -3,8 +3,21 @@ import { db } from '$lib/server/db';
 import { config } from '$lib/server/env';
 import { SESSION_COOKIE, setSessionCookie, validateSession } from '$lib/server/session';
 import { isPublicPath, originAllowed } from '$lib/server/access';
+import { serverTiming, withTimings } from '$lib/server/timing';
 
-export const handle: Handle = async ({ event, resolve }) => {
+/** v0.92: every response carries Server-Timing (db / spotify / total) for the speed work. */
+export const handle: Handle = async (input) => {
+	const { t, result } = withTimings(() => handleInner(input));
+	const response = await result;
+	try {
+		response.headers.set('Server-Timing', serverTiming(t));
+	} catch {
+		/* immutable headers (redirect / fetch passthrough) */
+	}
+	return response;
+};
+
+const handleInner: Handle = async ({ event, resolve }) => {
 	const { url, request, cookies } = event;
 
 	// Origin check for every mutating request (JSON APIs aren't covered by SvelteKit's

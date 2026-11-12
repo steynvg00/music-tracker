@@ -1,19 +1,10 @@
-/** Page loaders for Stats, detail pages and Search (R3): one API call, status kept for error states. */
-export interface Loaded<T> {
-	data: T | null;
-	status: number;
-	message: string | null;
-}
+/** Page loaders for Stats, detail pages and Search (R3): one API call, status kept for error states.
+ * v0.92: through the stale-while-revalidate cache (lib/swr.svelte.ts): instant on a revisit. */
+import { swrLoad, type Loaded } from './swr.svelte';
+export type { Loaded };
 
-export async function loadApi<T>(f: typeof fetch, path: string): Promise<Loaded<T>> {
-	try {
-		const res = await f(path, { headers: { Accept: 'application/json' } });
-		if (res.ok) return { data: (await res.json()) as T, status: res.status, message: null };
-		const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-		return { data: null, status: res.status, message: body.message ?? body.error ?? `HTTP ${res.status}` };
-	} catch {
-		return { data: null, status: 0, message: 'Rotor is offline' };
-	}
+export function loadApi<T>(f: typeof fetch, path: string): Promise<Loaded<T>> {
+	return swrLoad<T>(f, path);
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

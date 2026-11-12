@@ -10,6 +10,8 @@
  * write-guard.ts only (hard rule: unmanaged playlists are read + play only).
  */
 
+import { record } from '$lib/server/timing';
+
 export const SPOTIFY_API = 'https://api.spotify.com/v1';
 
 export type HttpMethod = 'GET' | 'PUT' | 'POST' | 'DELETE';
@@ -121,12 +123,13 @@ export class SpotifyApi {
 			headers['Content-Type'] = 'application/json';
 			body = JSON.stringify(opts.body);
 		}
+		const t0 = performance.now();
 		const res = await f(buildUrl(this.#opts.base ?? SPOTIFY_API, path, opts.query), {
 			method,
 			headers,
 			body,
 			signal: AbortSignal.timeout(opts.timeoutMs ?? 8000)
-		});
+		}).finally(() => record('spotify', performance.now() - t0));
 		if (res.status === 401 && !retried && this.#opts.invalidateToken) {
 			this.#opts.invalidateToken();
 			return this.#send<T>(method, path, opts, true);

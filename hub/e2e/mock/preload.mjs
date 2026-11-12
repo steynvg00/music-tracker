@@ -42,6 +42,9 @@ globalThis.fetch = async (input, init = {}) => {
 	let raw = init.body;
 	if (raw === undefined && req && method !== 'GET') raw = await req.clone().text();
 	if (raw instanceof URLSearchParams) raw = raw.toString();
+	// v0.92: optional Spotify latency (E2E_SPOTIFY_LATENCY_MS) so the perf run sees realistic round trips.
+	const lat = Number(process.env.E2E_SPOTIFY_LATENCY_MS ?? 0);
+	if (lat && url.host === 'api.spotify.com') await new Promise((r) => setTimeout(r, lat));
 	const res = mock.handle({ method, url: url.href, body: parseBody(raw), who: 'hub' });
 	if (res.blocked || !MOCKED.has(url.host)) throw new TypeError(`E2E: blocked external fetch to ${url.host}`);
 	const headers = { 'content-type': 'application/json', ...(res.headers ?? {}) };

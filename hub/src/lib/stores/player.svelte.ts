@@ -98,7 +98,17 @@ export class PlayerStore {
 	visible = $state(true);
 
 	view = $derived(this.overlay ? this.overlay.apply(this.snapshot) : this.snapshot);
-	position = $derived(interpolate(this.view.progressMs, this.fetchedAt, this.now, this.view.isPlaying, this.view.item?.durationMs ?? 0));
+	// v0.92: while a skip / seek is pending, count from the tap (its overlay's position), not from the last poll,
+	// so the bar jumps on the tap itself instead of when Spotify confirms.
+	position = $derived(
+		interpolate(
+			this.view.progressMs,
+			this.overlay && (this.overlay.kind === 'skip' || this.overlay.kind === 'seek') ? Math.max(this.overlay.issuedAt, this.fetchedAt) : this.fetchedAt,
+			this.now,
+			this.view.isPlaying,
+			this.view.item?.durationMs ?? 0
+		)
+	);
 	sdkDriving = $derived(!!this.sdkDeviceId && this.snapshot.device?.id === this.sdkDeviceId);
 	deviceName = $derived(this.sdkDriving ? 'This laptop' : (this.view.device?.name ?? null));
 
@@ -285,8 +295,11 @@ export class PlayerStore {
 	}
 
 	async #command(cmd: string, body: Record<string, unknown>, overlay?: Overlay, sdk?: (p: SpotifyPlayer) => Promise<void>): Promise<void> {
+		// v0.92: the UI changes on the tap itself, not when the command's turn in the queue comes;
+		// a failure rolls it back (#fail) with a toast.
+		if (overlay) this.overlay = overlay;
 		return this.#enqueue(async () => {
-			if (overlay) this.overlay = overlay;
+			if (overlay && this.overlay !== overlay && this.overlay?.kind !== overlay.kind) this.overlay = overlay;
 			try {
 				if (this.sdkDriving && this.#sdk && sdk) {
 					await sdk(this.#sdk);

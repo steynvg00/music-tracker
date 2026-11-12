@@ -13,6 +13,7 @@ import { radarSources } from './radar';
 import { phantomSummary } from './phantom';
 import { pushDevices } from './notifications';
 import { cacheHealth } from './catalog/cache';
+import { tableTone, weekGrowth, type SizeSnapshot } from '$lib/shared/health';
 import { DB_CAP_BYTES, DB_WARN_BYTES, dbTone, freshnessTone, type DataHealth, type IngestSource, type Tone, type TokenLine } from '$lib/shared/health';
 
 const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString() : null);
@@ -71,17 +72,20 @@ export async function dataHealth(
 			null
 		),
 		soft(
-			sql<{ refreshed_at: Date; took_ms: number; full_rebuilt_at: Date | null; ingested_mark: Date | null }[]>`
-				SELECT refreshed_at, took_ms, full_rebuilt_at, ingested_mark FROM hub.rollup_state LIMIT 1`.then((r) => r[0] ?? null),
+			sql<{ refreshed_at: Date; took_ms: number; full_rebuilt_at: Date | null; ingested_mark: Date | null; sizes: SizeSnapshot[] | null }[]>`
+				SELECT refreshed_at, took_ms, full_rebuilt_at, ingested_mark, detail -> 'sizes' AS sizes FROM hub.rollup_state LIMIT 1`.then((r) => r[0] ?? null),
 			null
 		),
 		sql<{ bytes: string }[]>`SELECT pg_database_size(current_database())::text AS bytes`.then((r) => Number(r[0]?.bytes ?? 0)),
-		sql<{ name: string; bytes: string }[]>`
+		// v0.92: + dead tuples and the last (auto)vacuum, for bloat.
+		sql<{ name: string; bytes: string; live: string | null; dead: string | null; vac: Date | null }[]>`
 			SELECT CASE WHEN n.nspname = 'public' THEN c.relname ELSE n.nspname || '.' || c.relname END AS name,
-			       pg_total_relation_size(c.oid)::text AS bytes
+			       pg_total_relation_size(c.oid)::text AS bytes,
+			       s.n_live_tup::text AS live, s.n_dead_tup::text AS dead, greatest(s.last_vacuum, s.last_autovacuum) AS vac
 			FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
 			WHERE c.relkind IN ('r', 'm') AND n.nspname IN ('public', 'hub')
-			ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 6`,
+			ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 8`,
 		connectionStatus(sql, now),
 		cronHealth(cfg, f, now, opts),
 		soft(radarSources(sql), null),
@@ -156,7 +160,14 @@ export async function dataHealth(
 			bytes: size,
 			capBytes: DB_CAP_BYTES,
 			pct: Math.round((size / DB_CAP_BYTES) * 1000) / 10,
-			tables: tables.map((t) => ({ name: t.name, bytes: Number(t.bytes) })),
+			tables: tables.map((t) => {
+				const bytes = Number(t.bytes);
+				const live = t.live === null ? null : Number(t.live);
+				const dead = t.dead === null ? null : Number(t.dead);
+				const deadPct = live !== null && dead !== null && live + dead > 0 ? Math.round((1000 * dead) / (live + dead)) / 10 : null;
+				const g = weekGrowth(t.name, bytes, Array.isArray(rollup?.sizes) ? rollup.sizes : [], now.toISOString().slice(0, 10));
+				return { name: t.name, bytes, liveTuples: live, deadTuples: dead, deadPct, lastVacuumAt: iso(t.vac), weekGrowthPct: g.pct, weekBaseDate: g.base, tone: tableTone(deadPct, g.pct) };
+			}),
 			tone: dbTone(size),
 			warnBytes: DB_WARN_BYTES,
 			overWarn: size > DB_WARN_BYTES

@@ -46,6 +46,8 @@ cd hub && npm run check && npm test && npm run build   # hub typecheck, tests, b
 - `hub/e2e/index_audit.py` — replays every E2E query with EXPLAIN to prove which indexes are needed (0032)
 - `scripts/archive_scrobbles.py` — read-only CSV.gz archive of `scrobbles` before the manual migration 0033
 - `hub/src/lib/components/PillBar.svelte` + `hub/src/lib/shared/pills.ts` — the one filter bar (Library and Stats)
+- `hub/src/lib/swr.svelte.ts` — v0.92 client stale-while-revalidate cache for GET API data (memory + IndexedDB, per build); `hub/src/lib/server/timing.ts` — Server-Timing (db / spotify / total) on every response
+- `hub/e2e/tests/perf.spec.ts` + `E2E_SCALE=prod` seed + `hub/scripts/bundle-report.mjs` — speed measurements (v0.92)
 - `hub/src/lib/server/organiser.ts` + `hub/src/lib/shared/library.ts` — Rotor-only pins, folders and custom order (0034); never writes to Spotify
 - `tests/` — pytest; `tests/fixtures/` is shared with the hub's vitest suite
 

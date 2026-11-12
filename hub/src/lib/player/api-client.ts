@@ -1,5 +1,6 @@
 /** Browser → Rotor API. The browser never talks to Spotify's Web API directly. */
 import type { ApiError } from '$lib/shared/player-types';
+import { swrInvalidate } from '$lib/swr.svelte';
 
 export class ApiFailure extends Error {
 	constructor(
@@ -25,13 +26,20 @@ async function handle<T>(res: Response): Promise<T> {
 	return body as T;
 }
 
+/** v0.92: a successful write makes every cached GET answer stale (refreshed before it's trusted again). */
+async function write<T>(res: Response): Promise<T> {
+	const out = await handle<T>(res);
+	swrInvalidate();
+	return out;
+}
+
 export async function apiGet<T>(path: string, f: typeof fetch = fetch): Promise<T> {
 	return handle<T>(await f(path, { headers: { Accept: 'application/json' }, credentials: 'same-origin' }));
 }
 
 export async function apiPost<T>(path: string, body: unknown = {}, opts: { keepalive?: boolean; f?: typeof fetch } = {}): Promise<T> {
 	const f = opts.f ?? fetch;
-	return handle<T>(
+	return write<T>(
 		await f(path, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -65,8 +73,8 @@ export function describeFailure(e: unknown): string {
 
 /** R7: PUT / DELETE JSON (same handling as apiPost). */
 export async function apiPut<T>(path: string, body: unknown = {}): Promise<T> {
-	return handle<T>(await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' }));
+	return write<T>(await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' }));
 }
 export async function apiDelete<T>(path: string): Promise<T> {
-	return handle<T>(await fetch(path, { method: 'DELETE', headers: { Accept: 'application/json' }, credentials: 'same-origin' }));
+	return write<T>(await fetch(path, { method: 'DELETE', headers: { Accept: 'application/json' }, credentials: 'same-origin' }));
 }

@@ -139,6 +139,16 @@
 | Migration | `0034_library_organiser.sql` (additive; 0031–0033 are taken by #99). KBs. |
 | Spotify | Zero writes from organising (E2E V091-10, vitest: the organiser module has no Spotify import). |
 
+## v0.92 — Speed + rollups without bloat
+
+`v0.92-hub-speed` · after v0.91
+
+| | |
+|---|---|
+| Bloat | `0035_rollup_no_bloat.sql` (CREATE OR REPLACE only): the day rollups are diff-merged (unchanged rows are never rewritten), so the daily full rebuild no longer doubles `hub.day_track`. Daily size snapshot in `hub.rollup_state.detail->sizes`; Data health shows dead tuples and warns when a table grows > 10% in a week. |
+| Measure | `hub/e2e/tests/perf.spec.ts` (E2E_PERF=1, production-sized seed via E2E_SCALE=prod, Fast 4G on the iPhone project), `Server-Timing` on every response (db / spotify / total), `hub/scripts/bundle-report.mjs`. |
+| Instant | Client SWR cache for GET API data (memory + IndexedDB, per build), Library server-rendered + progressive rows, hover/touchstart preload + idle prefetch of the next tabs, optimistic player changes on the tap itself, reopen where you left it, artist detail on the GIN index. |
+
 ## Timeline view
 
 ```
