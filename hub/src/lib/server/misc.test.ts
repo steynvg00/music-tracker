@@ -91,7 +91,8 @@ describe('listening time for plays without ms_played', () => {
 			}
 			return body;
 		};
-		const rebuild = latest(/FUNCTION hub\.rebuild_days[\s\S]*?\n\$\$;/);
+		// v0.92 (0035): rebuild_days delegates to hub.merge_days, which holds the aggregates now.
+		const rebuild = latest(/FUNCTION hub\.merge_days[\s\S]*?\n\$\$;/) || latest(/FUNCTION hub\.rebuild_days[\s\S]*?\n\$\$;/);
 		const trackStats = latest(/MATERIALIZED VIEW hub\.mv_track_stats AS[\s\S]*?GROUP BY 1;/);
 		for (const body of [rebuild, trackStats]) {
 			expect(body).not.toBe('');

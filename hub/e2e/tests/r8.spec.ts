@@ -258,16 +258,16 @@ test.describe('R8 Skeletons', () => {
 			expect(flashed).toBe(false);
 		});
 
-		test('R8-8 Library shows skeleton rows from the first paint until the list arrives (no "Nothing here" flash) @mobile', async ({ page }) => {
+		test('R8-8 Library: the list is in the first paint (server-rendered since v0.92), no "Nothing here" flash @mobile', async ({ page }) => {
+			// The browser's own /api/playlists is slow: the first paint must not wait for it.
 			await page.route('**/api/playlists', async (r) => {
 				await new Promise((res) => setTimeout(res, 1500));
 				await r.continue();
 			});
-			await page.goto('/library');
-			await expect(page.locator('[data-testid=skeleton]')).toBeVisible();
+			await page.goto('/library', { waitUntil: 'commit' });
+			await expect(page.locator('[data-testid=entries] [data-testid=entry]').first()).toBeVisible({ timeout: 1200 });
+			await expect(page.getByText('Nothing here with this filter.')).toHaveCount(0);
 			await expect(page.getByText('Nothing here with these filters.')).toHaveCount(0);
-			await expect(page.locator('[data-testid=skeleton]')).toHaveCount(0, { timeout: 10_000 });
-			await expect(page.locator('.list').first()).toBeVisible();
 		});
 	});
 });

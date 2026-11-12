@@ -1,6 +1,7 @@
 import postgres from 'postgres';
 import { config } from '$lib/server/env';
 import { createHubPool } from './options';
+import { timedSql } from '$lib/server/timing';
 
 export type Sql = postgres.Sql;
 export type Tx = postgres.TransactionSql;
@@ -18,6 +19,7 @@ let pool: Sql | null = null;
  */
 export function db(): Sql {
 	if (pool) return pool;
-	pool = createHubPool(config().databaseUrl);
+	// v0.92: every query's time goes into the request's Server-Timing "db" entry.
+	pool = timedSql(createHubPool(config().databaseUrl));
 	return pool;
 }

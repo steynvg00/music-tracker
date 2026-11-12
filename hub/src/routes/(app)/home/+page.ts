@@ -1,6 +1,7 @@
 import type { HomePayload } from '$lib/shared/daily-types';
 import { homeWrappedCard } from '$lib/shared/wrapped';
 import type { PageLoad } from './$types';
+import { swrLoad } from '$lib/swr.svelte';
 
 /**
  * One /api/home payload. The service worker may answer from cache first (X-Rotor-Stale).
@@ -11,7 +12,7 @@ import type { PageLoad } from './$types';
 export const load: PageLoad = async ({ fetch }) => {
 	const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 	const wrappedCard = homeWrappedCard(today);
-	const res = await fetch('/api/home');
-	if (!res.ok) return { home: null as HomePayload | null, stale: false, error: res.status, wrappedCard };
-	return { home: (await res.json()) as HomePayload, stale: res.headers.get('x-rotor-stale') === '1', error: null, wrappedCard };
+	// v0.92: through the app's SWR cache: a revisit shows the last Home at once, then refreshes in place.
+	const r = await swrLoad<HomePayload>(fetch, '/api/home');
+	return { r, home: r.data, stale: false, error: r.data ? null : r.status || 0, wrappedCard };
 };

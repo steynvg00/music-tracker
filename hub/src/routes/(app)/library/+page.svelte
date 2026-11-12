@@ -69,6 +69,7 @@
 		const qs = page.url.searchParams.get('source') as LibSource | null;
 		if (qs && LIB_SOURCES.some((s) => s.key === qs)) source = qs === 'spotify' ? null : qs;
 		ready = true;
+		library.seed(data.lib?.data ?? null, data.org?.data ?? null);
 		void library.load();
 	});
 	function persist() {
@@ -119,8 +120,24 @@
 	}
 
 	// ── what's shown ──
-	const model = $derived(libraryView({ rows: library.rows, org: library.org, kind, sort, folderId, q, categories: library.categories }));
+	// v0.92: render the page's own answer (server-rendered / cached) until the store has taken over.
+	const loaded = $derived(library.loaded || !!data.lib?.data);
+	const srcRows = $derived(library.loaded ? library.rows : (data.lib?.data?.rows ?? []));
+	const srcCats = $derived(library.loaded ? library.categories : (data.lib?.data?.categories ?? []));
+	const srcOrg = $derived(library.loaded ? library.org : (data.org?.data ?? library.org));
+	const model = $derived(libraryView({ rows: srcRows, org: srcOrg, kind, sort, folderId, q, categories: srcCats }));
 	const total = $derived(model.pinned.length + model.entries.length);
+	// v0.92: 480 rows at once cost ~0.4 s to render on a phone. The first screenfuls come at once,
+	// the rest in idle chunks (appended below the fold: no layout shift).
+	const FIRST = 40;
+	let limit = $state(FIRST);
+	$effect(() => {
+		const n = model.entries.length;
+		if (limit >= n) return;
+		const grow = () => (limit = Math.min(n, limit + 120));
+		const id = 'requestIdleCallback' in window ? requestIdleCallback(grow, { timeout: 200 }) : setTimeout(grow, 50);
+		return () => ('cancelIdleCallback' in window ? cancelIdleCallback(id as number) : clearTimeout(id as ReturnType<typeof setTimeout>));
+	});
 	const pinDrag = $derived(!kind && !q && !folderId && !manage);
 	const orderDrag = $derived(sort === 'custom' && !kind && !q && !manage && !library.orgError);
 
@@ -299,11 +316,11 @@
 		{#if manage}
 			<p class="note" role="note" data-testid="rotor-only">Pins and folders live in Rotor only: nothing changes in Spotify. Extend, keep and delete work on your Custom 🎧 playlists only.</p>
 		{/if}
-		{#if library.orgError && ready && library.loaded}<p class="cap muted">{library.orgError}</p>{/if}
+		{#if library.orgError && ready && loaded}<p class="cap muted">{library.orgError}</p>{/if}
 
-		{#if library.error}
+		{#if library.error && !loaded}
 			<p class="notice">{library.error}</p>
-		{:else if !library.loaded}
+		{:else if !loaded}
 			<!-- R8: skeleton rows from the first (server) render until the list arrives: no "Nothing here" flash, no jump. -->
 			<div class="list" data-testid="skeleton" aria-busy="true" aria-label="Loading playlists">
 				{#each [1, 2, 3, 4, 5, 6, 7, 8] as i (i)}<div class="skelrow"><div class="skel" style="width:56px;height:56px;flex:none"></div><div class="skelt"><div class="skel" style="height:14px;width:55%"></div><div class="skel" style="height:12px;width:35%"></div></div></div>{/each}
@@ -347,7 +364,7 @@
 			{:else}
 				{#if model.pinned.length && model.entries.length}<div class="ghead rest"><h2>{model.folder ? 'In this folder' : 'Your Library'}</h2><span class="cap muted">{model.entries.length}</span></div>{/if}
 				<div class={view === 'grid' ? 'grid' : 'list'} use:sortable={{ onreorder: reorderLevel, disabled: !orderDrag || view === 'grid' }} data-testid="entries">
-					{#each model.entries as e, i (e.key)}
+					{#each model.entries.slice(0, limit) as e, i (e.key)}
 						<div class="slot" data-sort-index={i}><EntryRow {e} {view} {manage} selected={selected.has(e.key)} handle={orderDrag} {likedUri} ontoggle={toggle} /></div>
 					{/each}
 				</div>

@@ -46,6 +46,28 @@ class LibraryStore {
 		}
 	}
 
+	/** v0.92: take over the page's (server-rendered / cached) answer, then refresh as load() would. */
+	seed(r: LibraryResponse | null, org: Organiser | null): void {
+		if (this.loaded || !r) return;
+		this.rows = r.rows;
+		this.categories = r.categories;
+		if (org) this.org = org;
+		this.loaded = true;
+		if (!this.#synced && (r.mirrorAgeMin === null || r.mirrorAgeMin > 60)) {
+			this.#synced = true;
+			void apiPost<{ skipped: boolean }>('/api/playlists/sync')
+				.then(async (s) => {
+					if (!s.skipped) {
+						const again = await apiGet<LibraryResponse>('/api/playlists');
+						this.rows = again.rows;
+						this.categories = again.categories;
+					}
+				})
+				.catch(() => undefined);
+		}
+		if (!org) void this.loadOrg();
+	}
+
 	async loadOrg(): Promise<void> {
 		try {
 			this.org = await apiGet<Organiser>('/api/library');

@@ -226,6 +226,12 @@ export function createMock(stateFile) {
 			const c = catalogApi(method, p, query);
 			if (c) return c;
 		}
+		// v0.92: state.failNext = { path, status, count } makes the next `count` calls to `path` fail (player rollback tests).
+		const fn = state.failNext;
+		if (fn && fn.count > 0 && p === fn.path) {
+			fn.count--;
+			return err(fn.status ?? 502, 'E2E: injected failure');
+		}
 		if (method === 'GET' && p === '/me') return ok({ id: state.loginUser ?? state.owner, display_name: 'E2E', product: 'premium', country: 'NL', email: 'e2e@example.invalid' });
 		// ── player ──
 		if (method === 'GET' && p === '/me/player') return state.playback ? ok(playbackBody()) : none();

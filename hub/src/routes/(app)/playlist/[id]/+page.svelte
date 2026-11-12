@@ -22,7 +22,7 @@
 	import type { JobRow } from '$lib/shared/jobs';
 
 	let { data } = $props();
-	const d = $derived(data.detail);
+	const d = $derived(data.r?.data ?? data.detail);
 	const p = $derived(d.playlist);
 	const canEdit = $derived(editable(p));
 	const playing = $derived(player.view.context?.uri === p.uri && player.view.isPlaying);

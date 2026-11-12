@@ -180,12 +180,12 @@ export async function artistDetail(sql: Queryable, id: string): Promise<ArtistDe
 		sql<{ m: string; plays: number }[]>`
 			SELECT to_char(sp.played_at AT TIME ZONE 'Europe/Amsterdam', 'YYYY-MM') AS m, count(*)::int AS plays
 			FROM spotify_plays sp JOIN track_metadata tm ON tm.track_uri = sp.track_uri
-			WHERE ${id} = ANY(tm.artist_ids) AND sp.track_uri IS NOT NULL GROUP BY 1 ORDER BY 1`,
+			WHERE tm.artist_ids @> ARRAY[${id}]::text[] AND sp.track_uri IS NOT NULL GROUP BY 1 ORDER BY 1`,
 		sql<{ uri: string; name: string | null; plays: number }[]>`
 			WITH c AS (
 				SELECT coalesce(tm.canonical_track_uri, tm.track_uri) AS uri, sum(ts.plays)::int AS plays
 				FROM track_metadata tm JOIN hub.mv_track_stats ts ON ts.track_uri = tm.track_uri
-				WHERE ${id} = ANY(tm.artist_ids) GROUP BY 1
+				WHERE tm.artist_ids @> ARRAY[${id}]::text[] GROUP BY 1
 			)
 			SELECT c.uri, ts.track_name AS name, c.plays FROM c LEFT JOIN hub.mv_track_stats ts ON ts.track_uri = c.uri
 			ORDER BY c.plays DESC, c.uri LIMIT 20`,

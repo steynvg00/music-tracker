@@ -18,6 +18,8 @@ function resetOrganiser() {
 async function openLibrary(page: Page) {
 	await page.goto('/library');
 	await expect(page.locator('[data-testid=entries] [data-testid=entry]').first()).toBeVisible();
+	// v0.92: the list is server-rendered; the pills only appear once the page is hydrated (interactive).
+	await expect(page.getByTestId('lib-pills').locator('[data-testid=pill]').first()).toBeVisible();
 }
 async function select(page: Page, keys: string[]) {
 	for (const k of keys) await entry(page, k).getByRole('checkbox').click();
@@ -203,6 +205,7 @@ test.describe('v0.91 pins, folders, Manage', () => {
 			{ k: keys[2]!, x: from.x + from.width / 2, y0: from.y + from.height / 2, y1: to.y + 4 }
 		);
 		await expect.poll(() => pinnedKeys(page)).toEqual([keys[2], keys[0], keys[1]]);
+		await expect.poll(() => sql(`SELECT string_agg(item_key, ',' ORDER BY pin_pos) FROM library_items WHERE pin_pos IS NOT NULL`)).toBe([keys[2], keys[0], keys[1]].join(','));
 		await page.reload();
 		await expect.poll(() => pinnedKeys(page)).toEqual([keys[2], keys[0], keys[1]]);
 		await expect(page).toHaveURL(/\/library$/); // the long-press didn't open the playlist

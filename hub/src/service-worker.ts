@@ -108,7 +108,8 @@ sw.addEventListener('fetch', (event) => {
 		);
 		return;
 	}
-	if (url.pathname === '/api/home') {
+	// v0.92: the app's own cache (lib/swr.svelte.ts) asks for the network answer with X-Rotor-Fresh.
+	if (url.pathname === '/api/home' && request.headers.get('x-rotor-fresh') !== '1') {
 		event.respondWith(
 			caches.open(CACHES.data).then((cache) => staleWhileRevalidate(request, { fetch, cache, waitUntil: (p) => event.waitUntil(p) }))
 		);

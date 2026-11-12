@@ -49,6 +49,8 @@ def main() -> int:
     ap.add_argument("--db", required=True)
     ap.add_argument("--state", required=True)
     ap.add_argument("--plays", type=int, default=30000)
+    ap.add_argument("--scale", choices=["e2e", "prod"], default="e2e",
+                    help="prod: add a production-sized library on top (7k artists, 30k tracks, ≥450k plays, 480 playlists)")
     args = ap.parse_args()
     if not any(h in args.db for h in ("@localhost", "@127.0.0.1", "://localhost", "://127.0.0.1", "host=/")):
         sys.exit("refusing: --db is not a local database")
@@ -278,6 +280,9 @@ def main() -> int:
         scantraxx[key] = (f"<!doctype html><html><head><title>Releases Scantraxx | {key}</title></head><body><nav><a href='/'>Home</a></nav>"
                           f"<main><h1 class='subTitle'>Week 1</h1>{body}</main><footer>© Scantraxx</footer></body></html>")
 
+    if args.scale == "prod":
+        bulk_prod(conn, pls, today, len(rows))
+
     # ── v0.90 Artist pages (beta): the Spotify catalog mock. No rng here (keeps every fixture above stable). ──
     catalog = build_catalog(artists[0], tracks, variants)
 
@@ -321,6 +326,64 @@ def main() -> int:
     conn.close()
     print(f"[seed] state → {args.state}")
     return 0
+
+
+def bulk_prod(conn, pls: dict, today: date, base_plays: int) -> None:
+    """v0.92: a production-sized library on top of the E2E fixtures, for measuring speed and bloat.
+    Own Random (the fixtures above stay identical). Zipf-ish popularity like a real history."""
+    import string as _s
+    r = random.Random(4242)
+    b62 = _s.ascii_letters + _s.digits
+    rid = lambda: "".join(r.choice(b62) for _ in range(22))  # noqa: E731
+    artists = [{"id": rid(), "name": f"Prod Artist {i:04d}"} for i in range(7000)]
+    tracks = []
+    for i in range(30000):
+        a = artists[min(int(r.paretovariate(1.1)) - 1, 6999) if r.random() < 0.7 else r.randrange(7000)]
+        tracks.append({"uri": f"spotify:track:{rid()}", "name": f"Prod Track {i:05d}", "artist": a, "album": rid(),
+                       "year": r.randint(2000, today.year), "dur": r.randint(150_000, 330_000)})
+    cur = conn.cursor()
+    with cur.copy("COPY track_metadata (track_uri, release_date, release_year, release_date_precision, duration_ms, popularity, explicit, album_id, artist_ids, artist_names, isrc, album_type, canonical_track_uri) FROM STDIN") as cp:
+        for t in tracks:
+            cp.write_row((t["uri"], f"{t['year']}-01-01", t["year"], "day", t["dur"], 50, False, t["album"], [t["artist"]["id"]], [t["artist"]["name"]],
+                          None, "album", t["uri"]))
+    weights = [1 / (k + 1) ** 1.05 for k in range(len(tracks))]
+    target = max(0, 450_000 - base_plays) + 5_000
+    start = datetime(2017, 1, 1, tzinfo=timezone.utc)
+    span = int((datetime.now(timezone.utc) - start).total_seconds())
+    platforms = ["iOS 17.1 (iPhone15,2)", "OS X 14.1.0 [x86 8]", "Android OS 13 API 33", None]
+    picks = r.choices(tracks, weights, k=target)
+    seen = set()
+    with cur.copy("COPY spotify_plays (played_at, ms_played, platform, country, track_uri, track_name, artist_name, album_name, reason_end, shuffle, skipped, offline) FROM STDIN") as cp:
+        for t in picks:
+            at = start + timedelta(seconds=r.randrange(span))
+            if (at, t["uri"]) in seen:
+                continue
+            seen.add((at, t["uri"]))
+            cp.write_row((at, r.randint(30_000, t["dur"]), r.choice(platforms), "NL", t["uri"], t["name"], t["artist"]["name"],
+                          f"Album {t['album'][:6]}", r.choice(["trackdone", "trackdone", "trackdone", "fwdbtn", "endplay"]), r.random() < 0.4, None, False))
+    for t in r.sample(tracks, 2500):
+        cur.execute("INSERT INTO liked_songs (track_uri, liked_at, track_name, artist_name, album_name) VALUES (%s, now() - interval '100 days', %s, %s, '') ON CONFLICT DO NOTHING",
+                    (t["uri"], t["name"], t["artist"]["name"]))
+    n0 = len(pls)
+    for i in range(480 - n0):
+        pid = rid()
+        owned = i % 4 != 0
+        kind = ["auto_updating", "auto_snapshot", None, None][i % 4] if owned else None
+        items = [t["uri"] for t in r.sample(tracks[:5000], 25)]
+        pls[pid] = {"id": pid, "name": f"Prod playlist {i:03d}" + (" · Auto 🤖🔄" if kind == "auto_updating" else " · Auto 🤖📸" if kind == "auto_snapshot" else ""),
+                    "owner": OWNER if owned else OTHER, "collaborative": False, "public": False, "items": items, "snapshot_id": f"snap-{pid[:4]}-1"}
+        cur.execute(
+            """INSERT INTO spotify_playlists (playlist_id, name, owner_id, owner_name, is_owned, is_collab, is_public, managed_kind,
+                   snapshot_id, track_count, image_url, first_seen_at, last_seen_at, synced_by, items_snapshot_id, items_synced_at)
+               VALUES (%s,%s,%s,%s,%s,false,false,%s,%s,25,NULL,now() - %s * interval '1 day',now(),'python',%s,now())""",
+            (pid, pls[pid]["name"], pls[pid]["owner"], "E2E Owner" if owned else "Someone else", owned, kind, pls[pid]["snapshot_id"], i, pls[pid]["snapshot_id"]))
+        if owned:
+            with cur.copy("COPY spotify_playlist_items (playlist_id, position, track_uri, track_name, artist_name, duration_ms, added_at) FROM STDIN") as cp:
+                for pos, u in enumerate(items):
+                    cp.write_row((pid, pos, u, "Prod", "Prod", 200000, datetime.now(timezone.utc)))
+    conn.commit()
+    cur.execute("SELECT count(*) FROM spotify_plays")
+    print(f"[seed] prod scale: {cur.fetchone()[0]} plays, {len(tracks)} + fixture tracks, {len(artists)} artists, {len(pls)} playlists")
 
 
 SYNTH = {  # id → (name, releases per include_groups value): the small / medium / very large mock artists

@@ -80,6 +80,43 @@ export interface CronHealth {
 	checkedAt: string;
 }
 
+/** v0.92: per large table: size, dead tuples (bloat until vacuum reuses them) and growth over ~a week. */
+export interface TableHealth {
+	name: string;
+	bytes: number;
+	liveTuples: number | null;
+	deadTuples: number | null;
+	/** dead / (live + dead), % */
+	deadPct: number | null;
+	lastVacuumAt: string | null;
+	/** vs the size snapshot closest to 7 days ago (hub.rollup_state.detail->sizes, 0035); null without history */
+	weekGrowthPct: number | null;
+	weekBaseDate: string | null;
+	tone: Tone;
+}
+
+export const GROWTH_WARN_PCT = 10;
+export const DEAD_WARN_PCT = 20;
+
+export interface SizeSnapshot {
+	d: string;
+	t: Record<string, number>;
+}
+
+/** Growth of `name` vs the newest snapshot that is at least 6 days old (≈ a week). */
+export function weekGrowth(name: string, bytesNow: number, history: SizeSnapshot[], today: string): { pct: number | null; base: string | null } {
+	const cutoff = new Date(Date.parse(today + 'T00:00:00Z') - 6 * 86_400_000).toISOString().slice(0, 10);
+	const old = [...history].filter((h) => h.d <= cutoff && typeof h.t?.[name] === 'number').sort((a, b) => b.d.localeCompare(a.d))[0];
+	if (!old || !old.t[name]) return { pct: null, base: null };
+	return { pct: Math.round(((bytesNow - old.t[name]!) / old.t[name]!) * 1000) / 10, base: old.d };
+}
+
+export function tableTone(deadPct: number | null, growthPct: number | null): Tone {
+	if (growthPct !== null && growthPct > GROWTH_WARN_PCT) return 'warn';
+	if (deadPct !== null && deadPct > DEAD_WARN_PCT) return 'warn';
+	return 'ok';
+}
+
 export interface TokenLine {
 	client: 'hub' | 'cron';
 	connected: boolean;
@@ -106,7 +143,7 @@ export interface DataHealth {
 		tone: Tone;
 	};
 	rollups: { refreshedAt: string | null; tookMs: number | null; fullRebuiltAt: string | null; ingestedMark: string | null; lastIngestAt: string | null; tone: Tone } | null;
-	database: { bytes: number; capBytes: number; pct: number; tables: { name: string; bytes: number }[]; tone: Tone; warnBytes: number; overWarn: boolean };
+	database: { bytes: number; capBytes: number; pct: number; tables: TableHealth[]; tone: Tone; warnBytes: number; overWarn: boolean };
 	/** v0.90 Artist pages (beta) cache (0031); null when the migration isn't applied. */
 	catalogCache: CatalogCacheHealth | null;
 	tokens: TokenLine[];

@@ -111,9 +111,22 @@
 			{#if h.database.overWarn}
 				<p class="dbwarn" role="alert" data-testid="health-db-warn">Above {fmtBytes(h.database.warnBytes)}: Supabase stops accepting writes at {fmtBytes(h.database.capBytes)} (ingest, playlists, badges). Free space first: the index diet (0032) and archiving the last.fm scrobbles (scripts/archive_scrobbles.py, then 0033).</p>
 			{/if}
-			<ul class="tables cap muted">
-				{#each h.database.tables as t (t.name)}<li><span>{t.name}</span><span class="tab-num">{fmtBytes(t.bytes)}</span></li>{/each}
-			</ul>
+			{#if h.database.tables.some((t) => t.weekGrowthPct !== null && t.weekGrowthPct > 10)}
+				<p class="dbwarn" role="alert" data-testid="health-growth-warn">Grew more than 10% in a week: {h.database.tables.filter((t) => t.weekGrowthPct !== null && t.weekGrowthPct > 10).map((t) => `${t.name} +${t.weekGrowthPct}%`).join(', ')}. Check the dead tuples below; a rollup table that keeps growing points at bloat.</p>
+			{/if}
+			<table class="tbl cap" data-testid="health-tables">
+				<thead><tr><th scope="col">Table</th><th scope="col">Size</th><th scope="col" title="Dead tuples: rows deleted or updated that vacuum hasn't reclaimed yet (bloat)">Dead</th><th scope="col">7 days</th></tr></thead>
+				<tbody>
+					{#each h.database.tables as t (t.name)}
+						<tr data-table={t.name} data-tone={t.tone}>
+							<td>{@render dot(t.tone)} {t.name}</td>
+							<td class="tab-num">{fmtBytes(t.bytes)}</td>
+							<td class="tab-num" title={t.lastVacuumAt ? `last vacuum ${fmtDate(t.lastVacuumAt)}` : 'never vacuumed'}>{t.deadPct === null ? '—' : `${t.deadPct}%`}{#if t.deadTuples}<span class="muted"> ({fmtInt(t.deadTuples)})</span>{/if}</td>
+							<td class="tab-num" title={t.weekBaseDate ? `vs ${t.weekBaseDate}` : 'no snapshot from a week ago yet (0035 keeps one per day)'}>{t.weekGrowthPct === null ? '—' : `${t.weekGrowthPct > 0 ? '+' : ''}${t.weekGrowthPct}%`}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		</section>
 
 		<section class="section" aria-labelledby="h-cat">
@@ -266,17 +279,25 @@
 		display: block;
 		height: 100%;
 	}
-	.tables {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-		display: grid;
-		gap: 2px;
-		max-width: 360px;
+	.tbl {
+		width: 100%;
+		border-collapse: collapse;
+		margin-top: 8px;
 	}
-	.tables li {
-		display: flex;
-		justify-content: space-between;
+	.tbl th,
+	.tbl td {
+		text-align: left;
+		padding: 5px 6px 5px 0;
+		border-bottom: 1px solid var(--border);
+		white-space: nowrap;
+	}
+	.tbl th {
+		color: var(--text-3);
+		font-weight: 700;
+	}
+	.tbl td:first-child {
+		white-space: normal;
+		word-break: break-all;
 	}
 	.more {
 		font-size: 13px;

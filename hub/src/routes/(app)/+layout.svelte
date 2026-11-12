@@ -18,6 +18,11 @@
 	import { daily } from '$lib/stores/daily.svelte';
 	import { player } from '$lib/stores/player.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
+	import { goto } from '$app/navigation';
+	import { swrPrefetch } from '$lib/swr.svelte';
+	import { tick } from 'svelte';
+	import { library } from '$lib/stores/library.svelte';
+	import { RESUME_KEY, parseSaved, resumable, resumeTarget } from '$lib/resume';
 
 	let { data, children } = $props();
 	const hub = $derived(data.connections.hub);
@@ -37,7 +42,58 @@
 		} catch {
 			/* private mode */
 		}
-		return () => player.stop();
+		// v0.92: reopen the installed app where you left it (page + scroll position). The page may still be
+		// growing (data, progressive rows): keep trying for up to ~1.5 s until the position is reachable.
+		// The app scrolls its <main id="main">, not the window.
+		const scroller = () => document.getElementById('main');
+		const restoreScroll = (y: number, tries = 90) => {
+			const m = scroller();
+			if (!m) return;
+			m.scrollTop = y;
+			if (Math.abs(m.scrollTop - y) > 4 && tries > 0) requestAnimationFrame(() => restoreScroll(y, tries - 1));
+		};
+		const save = () => {
+			const path = location.pathname + location.search;
+			if (!resumable(path)) return;
+			try {
+				localStorage.setItem(RESUME_KEY, JSON.stringify({ path, scrollY: Math.round(document.getElementById('main')?.scrollTop ?? 0), at: Date.now() }));
+			} catch {
+				/* private mode */
+			}
+		};
+		const onHide = () => document.visibilityState === 'hidden' && save();
+		document.addEventListener('visibilitychange', onHide);
+		addEventListener('pagehide', save);
+		let saved = null;
+		try {
+			saved = parseSaved(localStorage.getItem(RESUME_KEY));
+		} catch {
+			/* private mode */
+		}
+		const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+		const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+		const target = resumeTarget({ standalone, path: location.pathname, saved, now: Date.now(), firstLoad: !nav || nav.type === 'navigate' });
+		if (target) {
+			void goto(target.path, { replaceState: true, noScroll: true }).then(async () => {
+				await tick();
+				restoreScroll(target.scrollY);
+			});
+		} else if (saved && saved.path === location.pathname + location.search && standalone) {
+			void tick().then(() => restoreScroll(saved!.scrollY));
+		}
+		// v0.92: warm the likely next tabs once the app is idle (their data lands in the SWR cache).
+		const idle = (cb: () => void) => ('requestIdleCallback' in window ? requestIdleCallback(cb, { timeout: 3000 }) : setTimeout(cb, 1500));
+		idle(() => {
+			void library.load().catch(() => undefined);
+			// Data only (the SWR cache), never preloadData(): a preloaded ROUTE would let the next click run
+			// client-side on this build even after a newer one took over (HF-7's full-load rule).
+			swrPrefetch(['/api/stats/overview', '/api/home', '/api/playlists', '/api/library'].filter((p) => !p.endsWith(location.pathname)));
+		});
+		return () => {
+			player.stop();
+			document.removeEventListener('visibilitychange', onHide);
+			removeEventListener('pagehide', save);
+		};
 	});
 
 	// R8: a skeleton of the target page while its data loads (client navigation to another route).
