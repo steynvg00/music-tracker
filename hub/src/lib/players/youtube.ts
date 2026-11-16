@@ -21,6 +21,9 @@ interface YtPlayer {
 	pauseVideo(): void;
 	stopVideo(): void;
 	destroy(): void;
+	seekTo(seconds: number, allowSeekAhead: boolean): void;
+	getCurrentTime(): number;
+	getDuration(): number;
 }
 interface YtNamespace {
 	Player: new (el: HTMLElement, opts: Record<string, unknown>) => YtPlayer;
@@ -59,6 +62,10 @@ export interface YtController {
 	play(): void;
 	pause(): void;
 	destroy(): void;
+	/** v0.94 (sets): seek / position / duration in ms through the official API. */
+	seek(ms: number): void;
+	position(): number;
+	duration(): number;
 }
 
 export async function createYouTubePlayer(
@@ -89,6 +96,9 @@ export async function createYouTubePlayer(
 		load: (id, autoplay) => (autoplay ? player.loadVideoById(id) : player.cueVideoById(id)),
 		play: () => player.playVideo(),
 		pause: () => player.pauseVideo(),
-		destroy: () => player.destroy()
+		destroy: () => player.destroy(),
+		seek: (ms) => player.seekTo(Math.max(0, ms) / 1000, true),
+		position: () => Math.round((player.getCurrentTime?.() ?? 0) * 1000),
+		duration: () => Math.round((player.getDuration?.() ?? 0) * 1000)
 	};
 }

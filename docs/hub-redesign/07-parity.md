@@ -130,3 +130,14 @@ No row is missing or partial after R9.
 | E19. Feature coverage test (`scripts/feature_coverage.py`, only on the unmerged `v0.75-feature-coverage` branch) | Nothing you use today: a manual one-off API probe that never reached `main` or the UI. |
 
 The inventory's sixth cut item, Phantom plays (B22), was ported in R8 instead.
+
+## Beyond parity: v0.94 (own tracks, sets, storage)
+
+New in Rotor, no Streamlit counterpart:
+
+| Area | Where | Notes |
+|---|---|---|
+| Own tracks (unreleased / IDs) | Library › Own & IDs, `/own`, artist pages ("Unreleased & IDs"), Search | Rotor only, never in a Spotify playlist; Rotor-only lists |
+| DJ / live sets | Sidebar › Sets, Library › Sets, `/sets` | YouTube / SoundCloud official players; uploads in Rotor's player; tap-to-seek tracklists |
+| Uploads | Own-track and set forms | Direct to a private bucket (signed URLs, resumable); Settings › Storage, Data health › File storage |
+| Rotor plays of own tracks | Stats › Overview (separate card) | `own_plays`, source 'rotor'; never in Spotify stats, rollups or Wrapped |

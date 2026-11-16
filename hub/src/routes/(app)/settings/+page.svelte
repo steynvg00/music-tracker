@@ -7,6 +7,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import JobStatus from '$lib/components/JobStatus.svelte';
 	import NotificationTypes from '$lib/components/settings/NotificationTypes.svelte';
+	import StorageSection from '$lib/components/own/StorageSection.svelte';
 	import { JobTracker } from '$lib/stores/jobs.svelte';
 	import { toasts } from '$lib/stores/toasts.svelte';
 	import { apiPost, describeFailure } from '$lib/player/api-client';
@@ -128,6 +129,7 @@
 		<p class="cap"><b>SoundCloud:</b> no key needed (oEmbed + the official widget).</p>
 	</section>
 
+	<StorageSection />
 	<section class="section">
 		<div class="sec-h"><h2>Notifications</h2></div>
 		<p class="cap">Everything Rotor and the crons tell you arrives as a notification on the devices you turn on here: today's pick, the weekly digest, badges, snapshots, alerts and more. There is no e-mail any more (since v0.89).</p>

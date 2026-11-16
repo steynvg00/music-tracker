@@ -128,7 +128,8 @@ describe('bypass scan covers R7 modules', () => {
 					const text = readFileSync(p, 'utf8');
 					if (rel !== 'lib/server/spotify/write-guard.ts' && rel !== 'lib/server/spotify/api.ts' && text.includes('_sendPlaylistWrite')) offenders.push(rel);
 					if (!['lib/server/spotify/api.ts', 'lib/server/spotify/oauth.ts'].includes(rel) && /api\.spotify\.com/.test(text)) offenders.push(rel);
-					if (/musicbrainz\.org|scantraxx\.com/.test(text) && rel.startsWith('lib/server')) offenders.push(`${rel} (radar sources are Python-only)`);
+					// v0.94: own-track prefill is the one hub-side MusicBrainz call (one recording search per tap, never radar).
+					if (/musicbrainz\.org|scantraxx\.com/.test(text) && rel.startsWith('lib/server') && !(rel === 'lib/server/prefill.ts' && !/scantraxx/.test(text))) offenders.push(`${rel} (radar sources are Python-only)`);
 				}
 			}
 		};

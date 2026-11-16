@@ -57,7 +57,7 @@ test.describe('v0.91 one filter bar', () => {
 		await openLibrary(page);
 		const bar = page.getByTestId('lib-pills');
 		expect((await bar.boundingBox())!.height).toBeLessThanOrEqual(46); // one row
-		await expect(bar.locator('[data-testid=pill]')).toHaveText(['Spotify', 'YouTube', 'SoundCloud', 'Managed 🔄', 'Snapshots 📸', 'Custom 🎧', 'Rules-based', 'Followed', 'Pinned', 'Folders']);
+		await expect(bar.locator('[data-testid=pill]')).toHaveText(['Spotify', 'YouTube', 'SoundCloud', 'Own & IDs', 'Sets', 'Managed 🔄', 'Snapshots 📸', 'Custom 🎧', 'Rules-based', 'Followed', 'Pinned', 'Folders']);
 		await expect(bar).toHaveCSS('overflow-x', 'visible'); // the inner row scrolls, not the page
 		await expect(bar.locator('.scroll')).toHaveCSS('overflow-x', 'auto');
 		// The old stacked rows are gone from the Library.

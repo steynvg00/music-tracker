@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Header from '$lib/components/Header.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
+	import StorageSection from '$lib/components/own/StorageSection.svelte';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
 	import { ago, fmtBytes, TONE_COLOR, type DataHealth, type Tone } from '$lib/shared/health';
 
@@ -102,6 +103,7 @@
 			{/if}
 		</section>
 
+		<StorageSection compact />
 		<section class="section" aria-labelledby="h-db">
 			<div class="sec-h"><h2 id="h-db">Database size</h2></div>
 			<p class="cap" data-testid="health-db">{@render dot(h.database.tone)} <b class="tab-num">{fmtBytes(h.database.bytes)}</b> of {fmtBytes(h.database.capBytes)} (Supabase free tier) · {h.database.pct}%</p>

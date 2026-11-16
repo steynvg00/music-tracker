@@ -72,6 +72,11 @@ export interface ApiError {
 	reason?: string | null;
 	retryAfter?: number | null;
 	message?: string;
+	/** v0.94: per-field validation errors (own tracks, sets). */
+	fields?: Record<string, string>;
+	/** v0.94: possible duplicates (own tracks). */
+	matches?: unknown[];
+	detail?: Record<string, unknown>;
 }
 
 export const PLAYER_COMMANDS = [

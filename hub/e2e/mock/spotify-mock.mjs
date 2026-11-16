@@ -418,6 +418,8 @@ export function createMock(stateFile) {
 			return hit ? ok({ resource: q.get('resource'), relations: [{ type: 'free streaming', artist: { id: hit.mbid, name: hit.name } }] }) : err(404, 'Not Found');
 		}
 		if (name === 'artist') return ok({ count: 0, offset: 0, artists: [] });
+		// v0.94: own-track prefill (recording search).
+		if (name === 'recording') return ok({ count: (mb.recordings ?? []).length, offset: 0, recordings: mb.recordings ?? [] });
 		if (name === 'release') {
 			const arid = /arid:([\w-]+)/.exec(q.get('query') ?? '')?.[1];
 			return ok({ count: 0, offset: 0, releases: mb.releases[arid] ?? [] });
@@ -467,6 +469,11 @@ export function createMock(stateFile) {
 			res = youtubeApi(u.pathname, u.searchParams);
 		} else if (u.host === 'soundcloud.com' && u.pathname === '/oembed') {
 			res = soundcloudOembed(u.searchParams);
+		} else if (u.host === 'www.youtube.com' && u.pathname === '/oembed') {
+			// v0.94: own-track / set prefill from the YouTube embed title (no key).
+			const v = /[?&]v=([\w-]{11})/.exec(u.searchParams.get('url') ?? '')?.[1];
+			const o = (state.youtube?.oembed ?? {})[v];
+			res = o ? ok({ type: 'video', version: '1.0', title: o.title, author_name: o.author, thumbnail_url: `https://i.ytimg.com/vi/${v}/hqdefault.jpg` }) : err(404, 'Not Found');
 		} else if (u.host === 'musicbrainz.org' && u.pathname.startsWith('/ws/2/')) {
 			res = musicbrainzApi(u.pathname, u.searchParams);
 		} else if (u.host === 'scantraxx.com' && u.pathname.startsWith('/news/')) {
