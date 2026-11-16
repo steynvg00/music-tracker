@@ -115,6 +115,16 @@ try {
 		RADAR_SCANTRAXX_BASE: 'http://127.0.0.1:55433/scantraxx',
 		RADAR_GAP_SCALE: '0.01',
 		RADAR_SCANTRAXX: 'on', // the default since the parser was verified on a real page (2026-11-07)
+		// v0.94 uploads: the in-process fake S3 (e2e/mock/fake-s3.mjs, started by preload.mjs). Never a real bucket.
+		MEDIA_STORAGE_BACKEND: 'supabase',
+		MEDIA_S3_ENDPOINT: 'http://127.0.0.1:55436/storage/v1/s3',
+		MEDIA_S3_REGION: 'eu-central-1',
+		MEDIA_S3_BUCKET: 'rotor-media',
+		MEDIA_S3_ACCESS_KEY_ID: 'fake-access',
+		MEDIA_S3_SECRET_ACCESS_KEY: 'fake-secret',
+		MEDIA_PART_MB: '5',
+		MEDIA_PLAYBACK_URL_TTL_S: '4',
+		E2E_S3_PORT: '55436',
 		E2E_SPOTIFY_STATE: join(OUT, 'spotify-state.json'),
 		E2E_MOCK_PORT: '55433',
 		E2E_REPO_ROOT: REPO,

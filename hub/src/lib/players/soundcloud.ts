@@ -28,6 +28,9 @@ interface ScWidget {
 	getCurrentSound(cb: (s: ScSound | null) => void): void;
 	getCurrentSoundIndex(cb: (i: number) => void): void;
 	getSounds(cb: (s: ScSound[]) => void): void;
+	seekTo(ms: number): void;
+	getPosition(cb: (ms: number) => void): void;
+	getDuration(cb: (ms: number) => void): void;
 }
 interface ScNamespace {
 	Widget: ((el: HTMLIFrameElement) => ScWidget) & { Events: Record<'READY' | 'PLAY' | 'PAUSE' | 'FINISH' | 'ERROR', string> };
@@ -68,6 +71,10 @@ export interface ScController {
 	next(): void;
 	prev(): void;
 	current(): Promise<ScSound | null>;
+	/** v0.94 (sets): seek within the current sound, position and duration in ms. */
+	seek(ms: number): void;
+	position(): Promise<number>;
+	duration(): Promise<number>;
 }
 
 export async function createSoundCloudWidget(
@@ -91,6 +98,9 @@ export async function createSoundCloudWidget(
 		pause: () => w.pause(),
 		next: () => w.next(),
 		prev: () => w.prev(),
-		current: () => new Promise((r) => w.getCurrentSound((s) => r(s)))
+		current: () => new Promise((r) => w.getCurrentSound((s) => r(s))),
+		seek: (ms) => w.seekTo(Math.max(0, Math.round(ms))),
+		position: () => new Promise((r) => w.getPosition((ms) => r(Number(ms) || 0))),
+		duration: () => new Promise((r) => w.getDuration((ms) => r(Number(ms) || 0)))
 	};
 }

@@ -30,6 +30,9 @@
 		{ href: '/stats', icon: 'stats', label: 'Stats', match: /^\/stats/ },
 		{ href: '/library', icon: 'lib', label: 'Library', match: /^\/library/ },
 		{ href: '/elsewhere', icon: 'devices', label: 'Elsewhere', match: /^\/elsewhere/ },
+		// v0.94: DJ / live sets (also Library › Sets on mobile) and your own tracks.
+		{ href: '/sets', icon: 'disc', label: 'Sets', match: /^\/sets/ },
+		{ href: '/own', icon: 'note', label: 'Own & IDs', match: /^\/own/ },
 		{ href: '/settings', icon: 'gear', label: 'Settings', match: /^\/settings/ }
 	];
 </script>

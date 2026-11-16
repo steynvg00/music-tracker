@@ -4,6 +4,7 @@
 	import BarChart from '$lib/components/stats/BarChart.svelte';
 	import StatsBar from '$lib/components/stats/StatsBar.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
+	import OwnStatsCard from '$lib/components/own/OwnStatsCard.svelte';
 	import { fmtDate, fmtInt } from '$lib/shared/format';
 	import { WEEKDAYS_SUN } from '$lib/shared/stats';
 	import { shortPeriod } from '$lib/stats-client';
@@ -65,6 +66,8 @@
 		</section>
 		<p class="cap muted foot">Updated {fmtDate(o.refreshedAt, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · refreshed after every ingest.</p>
 	{/if}
+	<!-- v0.94: Rotor plays of own tracks, never mixed into the Spotify numbers above. -->
+	<OwnStatsCard />
 </div>
 
 <style>

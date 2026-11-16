@@ -3,6 +3,7 @@
 	import StatTile from '$lib/components/StatTile.svelte';
 	import BadgeGrid from '$lib/components/stats/BadgeGrid.svelte';
 	import BarChart from '$lib/components/stats/BarChart.svelte';
+	import OwnResults from '$lib/components/own/OwnResults.svelte';
 	import RankList from '$lib/components/stats/RankList.svelte';
 	import StatsError from '$lib/components/stats/StatsError.svelte';
 	import { fmtDate, fmtInt, openInSpotify } from '$lib/shared/format';
@@ -93,6 +94,7 @@
 				rows={a.topTracks.map((t, i) => ({ key: t.uri, rank: i + 1, title: t.name, href: trackHref(t.uri), value: `${fmtInt(t.plays)} plays`, uri: t.uri }))}
 			/>
 		</section>
+		<OwnResults artist={a.id} title="Unreleased & IDs" />
 		<section class="section">
 			<div class="sec-h"><h2>Badges</h2></div>
 			<BadgeGrid categories={a.badges} />

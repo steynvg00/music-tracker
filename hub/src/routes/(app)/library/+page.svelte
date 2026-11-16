@@ -7,6 +7,8 @@
 	import Sheet from '$lib/components/Sheet.svelte';
 	import EntryRow from '$lib/components/library/EntryRow.svelte';
 	import Collections from '$lib/components/elsewhere/Collections.svelte';
+	import OwnLibrary from '$lib/components/own/OwnLibrary.svelte';
+	import SetsList from '$lib/components/own/SetsList.svelte';
 	import { customSheet } from '$lib/components/custom-playlist-sheet/store.svelte';
 	import { sortable } from '$lib/actions/sortable';
 	import { library } from '$lib/stores/library.svelte';
@@ -310,7 +312,11 @@
 		testid="lib-pills"
 	/>
 
-	{#if src !== 'spotify'}
+	{#if src === 'own'}
+		<OwnLibrary />
+	{:else if src === 'sets'}
+		<SetsList />
+	{:else if src !== 'spotify'}
 		{#key src}<Collections source={src} />{/key}
 	{:else}
 		{#if manage}

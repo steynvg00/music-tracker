@@ -32,7 +32,7 @@ test.describe('R4', () => {
 		await page.goto('/library');
 		// v0.91: the source is a pill group in the one filter bar.
 		const sources = page.getByTestId('lib-pills').locator('[data-group=source]');
-		await expect(sources).toHaveText(['Spotify', 'YouTube', 'SoundCloud']);
+		await expect(sources).toHaveText(['Spotify', 'YouTube', 'SoundCloud', 'Own & IDs', 'Sets']); // v0.94 added Own & IDs and Sets
 		await expect(page.getByText('Top 30 last 30 days · Auto 🤖🔄').filter({ visible: true }).first()).toBeVisible();
 		await sources.filter({ hasText: 'YouTube' }).click();
 		await expect(page.getByLabel('YouTube link')).toBeVisible();

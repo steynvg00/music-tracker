@@ -38,11 +38,14 @@ export const KIND_LABEL: Record<LibKind, string> = {
 	folders: 'Folders'
 };
 
-export type LibSource = 'spotify' | 'youtube' | 'soundcloud';
+export type LibSource = 'spotify' | 'youtube' | 'soundcloud' | 'own' | 'sets';
 export const LIB_SOURCES: { key: LibSource; label: string }[] = [
 	{ key: 'spotify', label: 'Spotify' },
 	{ key: 'youtube', label: 'YouTube' },
-	{ key: 'soundcloud', label: 'SoundCloud' }
+	{ key: 'soundcloud', label: 'SoundCloud' },
+	// v0.94: your own tracks (unreleased / IDs) + Rotor lists, and DJ / live sets. Rotor only.
+	{ key: 'own', label: 'Own & IDs' },
+	{ key: 'sets', label: 'Sets' }
 ];
 
 /** Does a playlist belong to a playlist kind? (pinned / folders are organiser views, see libraryView) */
@@ -120,7 +123,8 @@ export function editable(r: Pick<LibraryRow, 'kind' | 'isOwned'>): boolean {
 export const LIKED_KEY = 'rotor:liked';
 export const playlistKey = (id: string) => `spotify:playlist:${id}`;
 export const collectionKey = (id: string) => `rotor:collection:${id}`;
-export const ITEM_KEY = /^(spotify:playlist:[A-Za-z0-9]{22}|rotor:liked|rotor:collection:[0-9a-f-]{36})$/;
+/** v0.94 (0036): also own tracks, Rotor lists and sets (rotor:own|list|set:<uuid>). */
+export const ITEM_KEY = /^(spotify:playlist:[A-Za-z0-9]{22}|rotor:liked|rotor:collection:[0-9a-f-]{36}|rotor:(own|list|set):[0-9a-f-]{36})$/;
 export const MAX_FOLDER_NAME = 100;
 
 export interface LibFolder {

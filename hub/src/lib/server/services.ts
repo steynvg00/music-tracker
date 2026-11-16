@@ -44,3 +44,24 @@ export async function catalog(): Promise<import('$lib/server/catalog/spotify').C
 	const { CatalogClient } = await import('$lib/server/catalog/spotify');
 	return (catalogClient = new CatalogClient(spotify()));
 }
+
+// ── v0.94: uploads, own tracks, sets ──
+import { mediaStorage, storageConfig } from '$lib/server/storage/config';
+import type { MediaDeps } from '$lib/server/media';
+import type { OwnDeps } from '$lib/server/own';
+
+/** Uploads need storage; throws StorageUnavailable (503 with the missing variables) when it isn't set up. */
+export function requireMedia(): MediaDeps {
+	const c = storageConfig();
+	return { sql: db(), store: mediaStorage(), limits: c.limits, uploadTtlS: c.uploadTtlS, playbackTtlS: c.playbackTtlS };
+}
+/** Own tracks / sets work without storage (YouTube / SoundCloud sources); file clean-up then waits. */
+export function ownDeps(): OwnDeps {
+	let media: MediaDeps | null = null;
+	try {
+		media = requireMedia();
+	} catch {
+		media = null;
+	}
+	return { sql: db(), media };
+}

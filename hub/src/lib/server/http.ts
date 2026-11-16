@@ -7,6 +7,10 @@ import { BadInput } from '$lib/shared/custom';
 import { JobsUnavailable, RetryRefused } from '$lib/server/jobs';
 import { ElsewhereUnavailable } from '$lib/server/elsewhere';
 import type { ApiError } from '$lib/shared/player-types';
+import { Conflict, QuotaExceeded } from '$lib/server/media';
+import { DuplicateFound, Invalid } from '$lib/server/own';
+import { StorageUnavailable } from '$lib/server/storage/config';
+import { StorageError } from '$lib/server/storage/s3';
 
 export function apiError(status: number, body: ApiError, headers: Record<string, string> = {}): Response {
 	return json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
@@ -20,6 +24,13 @@ export function toResponse(e: unknown): Response {
 	if (e instanceof BadCommand || e instanceof BadInput) return apiError(400, { error: 'bad_request', message: e.message });
 	if (e instanceof JobsUnavailable) return apiError(409, { error: 'jobs_unavailable', message: e.message });
 	if (e instanceof ElsewhereUnavailable) return apiError(503, { error: 'source_unavailable', message: e.message });
+	// v0.94: own tracks, sets, uploads.
+	if (e instanceof Invalid) return apiError(400, { error: 'invalid', message: e.message, fields: e.errors as Record<string, string> });
+	if (e instanceof DuplicateFound) return apiError(409, { error: 'duplicate', message: e.message, matches: e.matches });
+	if (e instanceof Conflict) return apiError(409, { error: 'conflict', message: e.message, detail: e.detail });
+	if (e instanceof QuotaExceeded) return apiError(413, { error: 'quota', message: e.message });
+	if (e instanceof StorageUnavailable) return apiError(503, { error: 'storage_unavailable', message: e.message });
+	if (e instanceof StorageError) return apiError(502, { error: 'storage_error', message: e.message });
 	if (e instanceof RetryRefused) return apiError(409, { error: 'retry_refused', reason: e.reason });
 	if (e instanceof SpotifyError) {
 		const headers: Record<string, string> = {};

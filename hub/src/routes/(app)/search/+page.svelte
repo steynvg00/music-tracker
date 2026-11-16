@@ -8,6 +8,7 @@
 	import { albumHref, artistHref, trackHref } from '$lib/shared/stats';
 	import { onMount } from 'svelte';
 	import CatalogSearch from '$lib/components/catalog/CatalogSearch.svelte';
+	import OwnResults from '$lib/components/own/OwnResults.svelte';
 	import { flags } from '$lib/stores/flags.svelte';
 
 	let { data } = $props();
@@ -78,6 +79,7 @@
 			</section>
 		{/if}
 	{/if}
+	<OwnResults q={data.q} title="Own tracks & sets" />
 	{/if}
 </div>
 

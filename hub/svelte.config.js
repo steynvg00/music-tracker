@@ -5,6 +5,21 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 // Web Playback SDK (sdk.scdn.co), which runs its player inside its own iframe.
 const SPOTIFY_IMG = ['https://i.scdn.co', 'https://mosaic.scdn.co', 'https://*.scdn.co', 'https://*.spotifycdn.com'];
 
+// v0.94: the object storage the browser uploads to and plays from (signed URLs). Its origin comes from
+// MEDIA_S3_ENDPOINT at BUILD time (Vercel exposes env vars to the build; switching storage = new env +
+// redeploy anyway). Virtual-hosted backends (MEDIA_S3_PATH_STYLE=false) use <bucket>.<host>.
+function mediaOrigins() {
+	const raw = process.env.MEDIA_S3_ENDPOINT?.trim();
+	if (!raw) return [];
+	try {
+		const u = new URL(raw);
+		return [u.origin, `${u.protocol}//*.${u.host}`];
+	} catch {
+		return [];
+	}
+}
+const MEDIA = mediaOrigins();
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	preprocess: vitePreprocess(),
@@ -19,11 +34,11 @@ const config = {
 				'script-src': ['self', 'https://sdk.scdn.co', 'https://www.youtube.com', 'https://s.ytimg.com', 'https://w.soundcloud.com'],
 				// Svelte's style="" attributes need unsafe-inline; no inline scripts are allowed.
 				'style-src': ['self', 'unsafe-inline'],
-				'img-src': ['self', 'data:', ...SPOTIFY_IMG, 'https://i.ytimg.com', 'https://*.sndcdn.com'],
+				'img-src': ['self', 'data:', ...SPOTIFY_IMG, 'https://i.ytimg.com', 'https://*.sndcdn.com', ...MEDIA],
 				'font-src': ['self'],
-				'connect-src': ['self', 'https://api.spotify.com', 'https://*.spotify.com', 'wss://*.spotify.com', 'https://*.scdn.co'],
+				'connect-src': ['self', 'https://api.spotify.com', 'https://*.spotify.com', 'wss://*.spotify.com', 'https://*.scdn.co', ...MEDIA],
 				'frame-src': ['https://sdk.scdn.co', 'https://www.youtube.com', 'https://www.youtube-nocookie.com', 'https://w.soundcloud.com'],
-				'media-src': ['self', 'blob:', 'https://*.scdn.co'],
+				'media-src': ['self', 'blob:', 'https://*.scdn.co', ...MEDIA],
 				'worker-src': ['self'],
 				'manifest-src': ['self'],
 				'object-src': ['none'],

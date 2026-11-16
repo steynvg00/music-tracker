@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createMock } from './spotify-mock.mjs';
+import { createFakeS3 } from './fake-s3.mjs';
 
 const STATE = process.env.E2E_SPOTIFY_STATE;
 const PORT = Number(process.env.E2E_MOCK_PORT ?? 55433);
@@ -20,8 +21,14 @@ const JOB_LOG = process.env.E2E_JOB_LOG;
 if (!STATE || !REPO) throw new Error('E2E preload needs E2E_SPOTIFY_STATE and E2E_REPO_ROOT');
 
 const mock = createMock(STATE);
+
+// v0.94: object storage, never a real bucket. Two in-process fake S3 backends: the hub's (Supabase-style
+// path prefix) and a second one as the destination of the storage-migration check.
+const S3_PORT = Number(process.env.E2E_S3_PORT ?? 55436);
+void createFakeS3({ prefix: '/storage/v1/s3', bucket: 'rotor-media' }).listen(S3_PORT);
+void createFakeS3({ prefix: '/s3', bucket: 'rotor-media-new', accessKeyId: 'dest-access', secretAccessKey: 'dest-secret' }).listen(S3_PORT + 1);
 const realFetch = globalThis.fetch;
-const MOCKED = new Set(['api.spotify.com', 'accounts.spotify.com', 'api.github.com', 'www.googleapis.com', 'soundcloud.com']);
+const MOCKED = new Set(['api.spotify.com', 'accounts.spotify.com', 'api.github.com', 'www.googleapis.com', 'soundcloud.com', 'www.youtube.com', 'musicbrainz.org']);
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function parseBody(raw) {

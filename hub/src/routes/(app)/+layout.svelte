@@ -13,6 +13,7 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toasts from '$lib/components/Toasts.svelte';
 	import CustomPlaylistSheet from '$lib/components/custom-playlist-sheet/CustomPlaylistSheet.svelte';
+	import OwnPlayerBar from '$lib/components/own/OwnPlayerBar.svelte';
 	import { apiGet, apiPost } from '$lib/player/api-client';
 	import type { DailyDeck } from '$lib/shared/daily-types';
 	import { daily } from '$lib/stores/daily.svelte';
@@ -152,6 +153,7 @@
 		{#if player.quotaLimited}
 			<div class="bwrap"><Banner kind="warning"><span>Spotify is rate-limiting Rotor. Updates slowed down.</span></Banner></div>
 		{/if}
+		<OwnPlayerBar />
 		{#if skeleton}<RouteSkeleton kind={skeleton} />{:else}{@render children()}{/if}
 	</main>
 	{#if ui.rightPanel}<NowPlayingPanel />{/if}

@@ -110,6 +110,9 @@ const YT_STUB = `(() => {
     pauseVideo() { log.push('pause'); this._state(2); }
     stopVideo() { log.push('stop'); }
     destroy() { log.push('destroy'); }
+    seekTo(s) { this.t = s; log.push('seek:' + Math.round(s)); }
+    getCurrentTime() { return this.t || 0; }
+    getDuration() { return (window.__ytDuration || {})[this.id] || 0; }
     ended() { this._state(0); }
   }
   window.YT = { Player };
@@ -137,7 +140,10 @@ const SC_STUB = `(() => {
       skip: (i) => { st.index = i; fire(Events.PLAY); },
       getCurrentSound: (cb) => cb(st.sounds[st.index] || null),
       getCurrentSoundIndex: (cb) => cb(st.index),
-      getSounds: (cb) => cb(st.sounds)
+      getSounds: (cb) => cb(st.sounds),
+      seekTo: (ms) => { st.pos = ms; log.push('seek:' + Math.round(ms)); },
+      getPosition: (cb) => cb(st.pos || 0),
+      getDuration: (cb) => cb((st.sounds[st.index] || {}).duration || 0)
     };
   }
   Widget.Events = Events;

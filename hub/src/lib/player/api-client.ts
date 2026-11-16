@@ -64,6 +64,14 @@ export function describeFailure(e: unknown): string {
 			return 'Spotify is rate-limiting Rotor. Try again in a moment.';
 		case 'read_only_playlist':
 			return 'That playlist is read + play only.';
+		case 'bad_request':
+		case 'invalid':
+		case 'duplicate':
+		case 'conflict':
+		case 'quota':
+		case 'storage_unavailable':
+		case 'storage_error':
+			return e.body.message ?? 'Something went wrong. Try again.';
 		case 'spotify_error':
 			return e.status === 403 ? 'Spotify doesn’t allow that right now.' : 'Spotify refused that command.';
 		default:
@@ -74,6 +82,10 @@ export function describeFailure(e: unknown): string {
 /** R7: PUT / DELETE JSON (same handling as apiPost). */
 export async function apiPut<T>(path: string, body: unknown = {}): Promise<T> {
 	return write<T>(await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' }));
+}
+/** v0.94: PATCH JSON (same handling as apiPost). */
+export async function apiPatch<T>(path: string, body: unknown = {}): Promise<T> {
+	return write<T>(await fetch(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' }));
 }
 export async function apiDelete<T>(path: string): Promise<T> {
 	return write<T>(await fetch(path, { method: 'DELETE', headers: { Accept: 'application/json' }, credentials: 'same-origin' }));

@@ -149,6 +149,18 @@
 | Measure | `hub/e2e/tests/perf.spec.ts` (E2E_PERF=1, production-sized seed via E2E_SCALE=prod, Fast 4G on the iPhone project), `Server-Timing` on every response (db / spotify / total), `hub/scripts/bundle-report.mjs`. |
 | Instant | Client SWR cache for GET API data (memory + IndexedDB, per build), Library server-rendered + progressive rows, hover/touchstart preload + idle prefetch of the next tabs, optimistic player changes on the tap itself, reopen where you left it, artist detail on the GIN index. |
 
+## v0.94 — Own tracks, DJ / live sets, swappable storage
+
+`v0.94-own-tracks-and-sets` · after v0.92 (no v0.93 branch existed when this was built, so it is based on `main` and the "expanded nav" it mentions is the laptop sidebar + a Library pill) · independent of R5 (#90)
+
+| | |
+|---|---|
+| Own tracks | Unreleased songs and IDs with complete metadata: title, linked primary artist(s) (an artist from your Spotify history or a Rotor artist created explicitly; never free text), duration, status (unreleased / ID / released elsewhere), ≥ 1 source (YouTube, SoundCloud, uploaded file); optional featuring, remixer, version, producer, label, release / first-heard date, where heard (set + timestamp or a note), notes, cover. Placeholders ("unknown", "?", "ID - ID", …) are refused in the form, the API and by CHECKs. Duration read from the file or the embed. Prefill from the embed title, MusicBrainz and the Spotify catalog search, each field confirmed with its own "Use". Duplicate check against own tracks and your played catalog. Shown on artist pages ("Unreleased & IDs"), in Search, pinnable/foldered, in Rotor-only lists. Never in a Spotify playlist. |
+| Sets | New Sets destination (sidebar + Library pill). YouTube / SoundCloud in their official visible players (R4 rules), uploads in Rotor's player. Linked DJs, event, date, duration, cover; tracklist with timestamps (catalog track, own track or "ID" free text), paste-a-tracklist parser, tap to seek (official seek API / `currentTime`). |
+| Storage | One S3-compatible interface (`hub/src/lib/server/storage/`, dependency-free SigV4), a PRIVATE Supabase bucket first, switchable by env vars; `scripts/migrate_media_storage.py` copies + verifies SHA-256 (dry run by default). Direct browser→storage uploads with short-lived signed URLs (single PUT ≤ one part, multipart above, resumable, progress, cancel). Limits mp3/m4a/aac/flac/wav, 50 MB per track, 400 MB per set (configurable), usage in Data health against 1 GB with a warning at 80 %. Guarded delete (storage + DB). |
+| Playback | Rotor's own `<audio>` player with Media Session; playing an own file pauses Spotify first. Not a mixed queue (#90 stays separate). Plays → `own_plays` (source 'rotor'), shown apart from Spotify stats. |
+| Migration | `0036_own_tracks_and_sets.sql`: additive, metadata only, plus one widening (0034's `library_items.item_key` accepts `rotor:own|list|set:<uuid>`). ≈ 256 kB empty. |
+
 ## Timeline view
 
 ```
